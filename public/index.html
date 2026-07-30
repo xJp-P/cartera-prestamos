@@ -2645,11 +2645,27 @@ function DashView(props){
   // Transacciones del mes: TODOS los pagos Pagados (cuotas regulares + abonos) cuya fecha de recaudo
   // cae en el mes actual, ordenados por paidAt (hora real) desc. La card tiene scroll interno.
   var thisMonthTx=nowStr().slice(0,7);
-  var monthTxs=pays.filter(function(p){return p.estadoPago==='Pagado'&&(p.fechaRecaudo||p.fechaPago||'').slice(0,7)===thisMonthTx;})
-    .slice().sort(function(a,b){
-      var fa=a.paidAt||a.fechaRecaudo||a.fechaPago,fb=b.paidAt||b.fechaRecaudo||b.fechaPago;
-      return fb.localeCompare(fa);
+  // v2.1 FIX — la tarjeta lista EVENTOS DE CAJA reales (ledger `recibos`, via cobrosDe), no
+  // cuotas marcadas 'Pagado'. Antes exigia `estadoPago==='Pagado'` y, sin fechaRecaudo, caia a
+  // `fechaPago` (que es la fecha de VENCIMIENTO, no la de recaudo). Consecuencia: un PAGO PARCIAL
+  // en curso —que NO cambia estadoPago ni escribe fechaRecaudo/paidAt— jamas aparecia, pese a ser
+  // dinero realmente recibido; y cualquier fila sin fechaRecaudo se ubicaba por su vencimiento.
+  // Ahora comparte fuente con el KPI "Cobros del Mes" y con sparkCobros: los tres iteran cobrosDe,
+  // asi que cuadran POR CONSTRUCCION. Cada evento del ledger es su propia fila, en la fecha REAL
+  // en que entro el dinero (un parcial hoy + el remanente manana = dos transacciones distintas).
+  var monthTxs=[];
+  pays.forEach(function(p){
+    var evs=cobrosDe(p);
+    evs.forEach(function(ev,k){
+      if(String(ev.fecha).slice(0,7)!==thisMonthTx) return;
+      monthTxs.push({pay:p,fecha:ev.fecha,cop:ev.cop,k:k,nEv:evs.length});
     });
+  });
+  monthTxs.sort(function(a,b){
+    var c=String(b.fecha).localeCompare(String(a.fecha));            // fecha real del movimiento
+    if(c!==0) return c;
+    return String(b.pay.paidAt||'').localeCompare(String(a.pay.paidAt||'')); // hora real (v1.11.1)
+  });
   // Sparkline "Ganancias": ganancia recibida por mes (ultimos 12 meses), agrupada por fechaRecaudo.
   // Misma definicion de ganancia que el KPI total: USD -> montoCOPRecibido - (cuotaTotal - interesPeriodo); COP -> interesPeriodo. Excluye abonos.
   var sparkGanancias=useMemo(function(){
@@ -2892,21 +2908,29 @@ function DashView(props){
         h('div',{className:'dash-list-body'},
           monthTxs.length===0
             ? emptyMsg('Sin transacciones este mes.')
-            : monthTxs.map(function(p,i){
+            : monthTxs.map(function(t,i){
+                var p=t.pay;
                 var pl=loanMap[p.prestamoId];var isU=pl&&pl.moneda==='USD';
                 var esAbono=p.id&&p.id.indexOf('-ab-')!==-1;
-                var monto=p.montoCOPRecibido||p.cuotaTotal;
-                var fecha=p.fechaRecaudo||p.fechaPago;
-                var iconAccent=esAbono?'blue':'green';
-                return h('div',{key:p.id,style:{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderTop:i>0?'1px solid var(--border)':'none'}},
+                // Parcial EN CURSO: hubo caja pero la cuota sigue sin saldarse -> se marca en ambar
+                // para no leerse como una cuota ya cubierta.
+                var esParcial=!esAbono&&p.estadoPago!=='Pagado';
+                var monto=t.cop;      // monto del EVENTO, no el acumulado de la cuota
+                var fecha=t.fecha;    // fecha REAL en que entro el dinero
+                var iconAccent=esAbono?'blue':(esParcial?'yellow':'green');
+                // USD: si la cuota tiene un solo evento se muestra el USD realmente recibido
+                // (doctrina del Bug #23); con varios eventos se convierte el monto de ESTE evento
+                // para no repetir el total en cada fila.
+                var usdTxt=(t.nEv===1&&+p.montoUSDRecibido>0)?fmtUSD(p.montoUSDRecibido):copToUsd(monto,pl&&pl.trmAcordada);
+                return h('div',{key:p.id+'|'+t.fecha+'|'+t.k,style:{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderTop:i>0?'1px solid var(--border)':'none'}},
                   h('div',{style:{width:24,height:24,borderRadius:6,background:'var(--'+iconAccent+'-bg)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}},
                     h(Ico,{name:esAbono?'dollar':'check',size:11,color:'var(--'+iconAccent+')',sw:2.4})),
                   h('div',{style:{flex:1,minWidth:0}},
                     h('div',{style:{fontSize:13,fontWeight:600,color:'var(--text)',cursor:'pointer',textOverflow:'ellipsis',overflow:'hidden',whiteSpace:'nowrap'},onClick:function(){onNameClick(p.nombreCliente);}},p.nombreCliente),
-                    h('div',{style:{fontSize:11,color:'var(--text3)',marginTop:2}},tipoTx(p,pl)+' · '+fmtD(fecha))),
+                    h('div',{style:{fontSize:11,color:'var(--text3)',marginTop:2}},tipoTx(p,pl)+(esParcial?' · abono parcial':'')+' · '+fmtD(fecha))),
                   h('div',{style:{textAlign:'right',flexShrink:0}},
                     h('div',{className:'mono',style:{fontSize:15,fontWeight:700,color:'var(--text)'}},fmt(monto)),
-                    isU&&h('div',{className:'mono',style:{fontSize:10,color:'var(--blue)',marginTop:1}},(+p.montoUSDRecibido>0?fmtUSD(p.montoUSDRecibido):copToUsd(monto,pl.trmAcordada)))));
+                    isU&&h('div',{className:'mono',style:{fontSize:10,color:'var(--blue)',marginTop:1}},usdTxt)));
               })))),
     // ── EMPTY STATE ─────────────────────────────────────────────────────
     isEmpty&&h('div',{style:{textAlign:'center',padding:'44px 0',color:'var(--text3)'}},
