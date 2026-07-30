@@ -465,11 +465,19 @@ module.exports = function createApp(dbPath) {
       estado       TEXT NOT NULL DEFAULT 'disponible',
       undone_at    TEXT,
       app_version  TEXT NOT NULL DEFAULT '',
-      schema_ver   INTEGER NOT NULL DEFAULT 1
+      schema_ver   INTEGER NOT NULL DEFAULT 1,
+      afecta_caja  INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_uj_scope  ON undo_journal(scope_tipo, scope_id);
     CREATE INDEX IF NOT EXISTS idx_uj_estado ON undo_journal(estado);
   `);
+  // afecta_caja: la operacion movio dinero real (pago, parcial o abono) -> deshacerla puede
+  // invalidar un recibo PDF que el deudor YA tiene en la mano. Alimenta la alerta severa de la UI.
+  // ALTER idempotente por si la tabla se creo antes de existir esta columna.
+  try { db.exec('ALTER TABLE undo_journal ADD COLUMN afecta_caja INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+  // Enlace 1:1 entre la entrada del historial y su entrada de undo. Sin esta columna habria que
+  // aparear por (tipo, mensaje, timestamp), que colisiona ante dos operaciones identicas.
+  try { db.exec('ALTER TABLE activity_log ADD COLUMN undo_id TEXT'); } catch (_) {}
 
   let APP_VERSION = 'desconocida';
   try { APP_VERSION = require('../package.json').version; } catch (_) {}
@@ -545,9 +553,12 @@ module.exports = function createApp(dbPath) {
   }
 
   const insUndo = db.prepare(`
-    INSERT INTO undo_journal(id, accion, endpoint, descripcion, scope_tipo, scope_id, snapshot, pre_hash, post_hash, app_version)
-    VALUES (@id, @accion, @endpoint, @descripcion, @scope_tipo, @scope_id, @snapshot, @pre_hash, @post_hash, @app_version)
+    INSERT INTO undo_journal(id, accion, endpoint, descripcion, scope_tipo, scope_id, snapshot, pre_hash, post_hash, app_version, afecta_caja)
+    VALUES (@id, @accion, @endpoint, @descripcion, @scope_tipo, @scope_id, @snapshot, @pre_hash, @post_hash, @app_version, @afecta_caja)
   `);
+  // El log se escribe con el id de su entrada de undo para que el Historial sepa que fila es
+  // reversible (enlace 1:1, no apareo por texto).
+  const logActionUndo = db.prepare('INSERT INTO activity_log(tipo, mensaje, undo_id) VALUES (?, ?, ?)');
 
   // Retencion: conservar las 200 mas recientes y descartar > 90 dias (lo que ocurra
   // primero). Borra el TAIL (mas viejo), nunca el head, asi que no rompe el LIFO.
@@ -590,12 +601,16 @@ module.exports = function createApp(dbPath) {
       const desc = typeof computed.descripcion === 'function' ? computed.descripcion() : computed.descripcion;
       const postHash = hashSnapshot(snapshotScope(meta.scopeTipo, meta.scopeId));
       const ujId = 'uj-' + genId();
+      // afectaCaja lo declara compute() (puede depender de los datos: PUT /payments solo mueve
+      // dinero cuando se marca Pagado, no al revertir a Pendiente / marcar En Mora).
+      const afectaCaja = computed.afectaCaja ? 1 : 0;
       insUndo.run({
         id: ujId, accion: meta.accion, endpoint: meta.endpoint,
         descripcion: desc, scope_tipo: meta.scopeTipo, scope_id: meta.scopeId,
-        snapshot: JSON.stringify(pre), pre_hash: preHash, post_hash: postHash, app_version: APP_VERSION
+        snapshot: JSON.stringify(pre), pre_hash: preHash, post_hash: postHash,
+        app_version: APP_VERSION, afecta_caja: afectaCaja
       });
-      logAction.run(meta.logTipo || meta.accion, desc);
+      logActionUndo.run(meta.logTipo || meta.accion, desc, ujId);
       podarJournal();
       return ujId;
     });
@@ -642,7 +657,7 @@ module.exports = function createApp(dbPath) {
   // ── API: Historial de undo (para la UI y diagnostico) ────────────────────────
   app.get('/api/undo', (req, res) => {
     const { scopeTipo, scopeId } = req.query;
-    const cols = 'id, created_at, accion, descripcion, scope_tipo, scope_id, estado, undone_at';
+    const cols = 'id, created_at, accion, descripcion, scope_tipo, scope_id, estado, undone_at, afecta_caja';
     const rows = (scopeTipo && scopeId)
       ? db.prepare('SELECT ' + cols + " FROM undo_journal WHERE scope_tipo=? AND scope_id=? ORDER BY rowid DESC LIMIT 50").all(scopeTipo, scopeId)
       : db.prepare('SELECT ' + cols + ' FROM undo_journal ORDER BY rowid DESC LIMIT 50').all();
@@ -1014,6 +1029,8 @@ module.exports = function createApp(dbPath) {
     const label = estadoPago === 'Pagado' ? 'Registraste pago' : estadoPago === 'En Mora' ? 'Marcaste en mora' : 'Revertiste a pendiente';
     return {
       descripcion: label + ': ' + payBefore.nombreCliente + ' cuota #' + payBefore.cuotaN + ' por $' + Math.round(payBefore.cuotaTotal).toLocaleString(),
+      // Solo marcar Pagado mueve caja (y genera recibo); revertir o marcar mora, no.
+      afectaCaja: estadoPago === 'Pagado',
       payload: { ok: true },
       aplicar: () => {
     db.prepare('UPDATE payments SET estadoPago=?, fechaRecaudo=?, observaciones=?, montoCOPRecibido=?, montoUSDRecibido=?, partialPaid=?, recibos=?, paidAt=? WHERE id=?')
@@ -1102,6 +1119,7 @@ module.exports = function createApp(dbPath) {
 
     return {
       descripcion: descPartial,
+      afectaCaja: true,   // un parcial SIEMPRE es dinero recibido (y suele llevar recibo)
       payload: { ok: true, completa, partialPaid: nuevoPartial, restante: Math.max(0, pay.cuotaTotal - nuevoPartial) },
       aplicar: () => {
     if (completa) {
@@ -1261,6 +1279,8 @@ module.exports = function createApp(dbPath) {
     if (recalcMode === 'modificarPlazo' || recalcMode === 'fijarCuota') logBase += ' [recalc: ' + recalcMode + ']';
     return {
       descripcion: logBase,
+      // El abono (y la liquidacion) generan Recibo de Abono / Paz y Salvo automaticamente.
+      afectaCaja: true,
       payload: { ok: true, nuevoSaldo: Math.max(0, nuevoSaldo) },
       aplicar: () => {
       const abonoId = req.params.id + '-ab-' + Date.now();
@@ -1708,6 +1728,9 @@ module.exports = function createApp(dbPath) {
       return {
         descripcion: () => (tipo === 'cargo' ? 'Cargo' : 'Abono') + ' a deuda con ' + deuda.acreedor + ': $' + monto.toLocaleString('es-CO')
           + ' — saldo: $' + Math.round(actualizada.saldo_pendiente).toLocaleString('es-CO') + (actualizada.estado === 'Pagada' ? ' (PAGADA)' : ''),
+        // Movimiento de caja propio (deuda mia). No hay recibo entregado a un tercero, pero si
+        // es dinero real: la UI lo advierte con menor severidad que un cobro a un deudor.
+        afectaCaja: tipo === 'abono',
         aplicar: () => {
           db.prepare('INSERT INTO pagos_deudas(id, deuda_id, monto_pagado, fecha_pago, notas, tipo) VALUES (?, ?, ?, ?, ?, ?)')
             .run(pagoId, deuda.id, monto, fecha, notas, tipo);

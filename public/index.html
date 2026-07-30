@@ -13,6 +13,7 @@
     --blue:#58a6ff;--blue-bg:#0d2040;--blue-bd:#1d3a6e;
     --red:#f85149;--red-bg:#2d1117;--red-bd:#5c1b18;
     --yellow:#d29922;--yellow-bg:#2b2005;--gold:#e3b341;
+    --purple:#a371f7;--purple-bg:#1d1229;--purple-bd:#3c2a5d;
     --shadow:0 1px 6px rgba(0,0,0,.5);
   }
   [data-theme="light"]{
@@ -23,6 +24,7 @@
     --blue:#0969da;--blue-bg:#ddf4ff;--blue-bd:#b6e3ff;
     --red:#cf222e;--red-bg:#ffebe9;--red-bd:#ffcecb;
     --yellow:#9a6700;--yellow-bg:#fff8c5;--gold:#bf8700;
+    --purple:#8250df;--purple-bg:#fbefff;--purple-bd:#e6ccff;
     --shadow:0 1px 6px rgba(0,0,0,.1);
   }
   .tooltip-wrap{position:relative}
@@ -1325,6 +1327,10 @@ function App(){
   var s18=useState(false); var needsRestart=s18[0]; var setNeedsRestart=s18[1];
   var s19=useState(function(){return localStorage.getItem('theme')||'dark';}); var theme=s19[0]; var setTheme=s19[1];
   var s20=useState([]); var actLog=s20[0]; var setActLog=s20[1];
+  // "La Bestia" Fase 2 — journal de operaciones reversibles (GET /api/undo). El Historial lo
+  // cruza con activity_log por `undo_id` (enlace 1:1 escrito por mutacionAtomica).
+  var s24=useState([]); var undoLog=s24[0]; var setUndoLog=s24[1];
+  var s25=useState(null); var undoDlg=s25[0]; var setUndoDlg=s25[1];
   var sDebts=useState([]); var debts=sDebts[0]; var setDebts=sDebts[1];
   var sDebtModal=useState(null); var debtModal=sDebtModal[0]; var setDebtModal=sDebtModal[1];
   var sDebtPay=useState(null); var debtPayModal=sDebtPay[0]; var setDebtPayModal=sDebtPay[1];
@@ -1865,6 +1871,15 @@ function App(){
       'La liquidacion ahora se puede abrir desde cualquier parte de la app (antes solo existia dentro del perfil del deudor).',
       'Abonos en dolares con doble entrada: ahora registras por separado los USD del abono (que definen cuanto capital se descuenta, a la TRM pactada) y los COP que realmente recibiste. La app calcula en vivo la TRM implicita y te muestra en verde o rojo la ganancia o perdida por el movimiento del dolar. Antes esa diferencia cambiaria no quedaba registrada en ninguna parte.',
       'Mensajes de error mas claros al abonar: te dicen cual es el maximo, por que lo es, y a que herramienta acudir para cobrar el resto.'
+    ],
+    '2.1.0': [
+      'NUEVO: boton Deshacer en el Historial. Si registras un pago, un abono, una liquidacion, una reestructuracion, un cierre forzoso, un cambio de fecha o cualquier movimiento de Mis Deudas por error, ahora puedes revertirlo y la app restaura el estado EXACTO que tenia antes: las cuotas, el saldo, las fechas y hasta los recibos internos vuelven como estaban.',
+      'Solo se puede deshacer la ultima operacion de cada prestamo o deuda. Las anteriores muestran el boton apagado y te dicen cual tienes que deshacer primero, para que nunca se destape un movimiento sobre el que ya construiste otro.',
+      'Antes de revertir aparece una confirmacion con el detalle de lo que se va a deshacer. Si la operacion tiene mas de 24 horas te lo advierte, y si movio dinero te recuerda que es probable que el cliente ya tenga un recibo PDF en sus manos con esa informacion.',
+      'El historial NO se borra: la operacion queda marcada como revertida y se agrega el registro de que la deshiciste. Siempre queda la huella completa de lo que paso.',
+      'Se guardan las ultimas 200 operaciones (o 90 dias) como puntos de retorno.',
+      'Corregido un error que podia BORRAR el pago de una cuota: si un deudor te pagaba una cuota dejando otras mas viejas en mora y despues le cambiabas el dia de pago, ese pago desaparecia y su deuda subia sola. Ahora las cuotas ya pagadas quedan protegidas.',
+      'La tarjeta "Transacciones del Mes" del Inicio ahora si muestra los abonos parciales, en la fecha real en que recibiste el dinero (antes solo listaba cuotas pagadas por completo, asi que un pago parcial no aparecia en ninguna parte).'
     ]
   };
   var s23=useState(null); var changelogDlg=s23[0]; var setChangelogDlg=s23[1];
@@ -2336,11 +2351,38 @@ function App(){
   // Lista plana derivada (para el lookup de icono+label de la vista actual en el header).
   var nav=navSections.reduce(function(acc,s){return acc.concat(s.items);},[]).concat(navStandalone);
 
+  // Carga el historial y el journal EN PARALELO: la fila del log solo sabe que es reversible
+  // cuando su undo_id existe en el journal y ademas es el head LIFO de su agregado.
+  var loadHistorial=useCallback(function(){
+    return Promise.all([
+      fetch('/api/activity').then(function(r){return r.json();}).catch(function(){return [];}),
+      fetch('/api/undo').then(function(r){return r.json();}).catch(function(){return [];})
+    ]).then(function(res){
+      setActLog(Array.isArray(res[0])?res[0]:[]);
+      setUndoLog(Array.isArray(res[1])?res[1]:[]);
+      return res;
+    });
+  },[]);
+
   function navTo(id){
     setView(id);setMenuOpen(false);
-    if(id==='historial') fetch('/api/activity').then(function(r){return r.json();}).then(setActLog);
+    if(id==='historial') loadHistorial();
     if(id==='deudas') loadDebts();
   }
+
+  // Ejecuta el undo y refresca TODO: el journal cambia de estado, el historial gana su entrada
+  // compensatoria y los datos del prestamo/deuda vuelven al snapshot.
+  var confirmarUndo=useCallback(function(entry){
+    return API.post('/api/undo/'+entry.id,{}).then(function(r){
+      if(!r){showToast('No se pudo deshacer','error');return;}
+      if(r.error){showToast(r.error,'error');return;}
+      setUndoDlg(null);
+      return Promise.all([reload(),loadHistorial(),loadDebts()]).then(function(){
+        // El backend avisa (sin bloquear) cuando el estado habia cambiado desde la operacion.
+        showToast(r.warning?'Deshecho, con advertencias':'Operacion deshecha');
+      });
+    });
+  },[reload,loadHistorial,loadDebts]);
 
   // Acordeon del sidebar: alterna una seccion y persiste el estado en localStorage (sobrevive F5).
   function toggleNavSection(key){
@@ -2426,7 +2468,8 @@ function App(){
       view==='pagos'      && h(PagosView,  {pays:filtPays,allPays:pays,loans:loans,searchQ:searchQ,setSearchQ:setSearchQ,fMonth:fMonth,setFMonth:setFMonth,onSelect:openPayModal,onQuickPay:quickPay,onNameClick:openDebtorByName,datosPago:cfg.datos_pago}),
       view==='rendimiento'&& h(PortfolioView,{loans:loans,pays:pays}),
       view==='calculadora'&& h(CalcView,   {onConfirm:confirmarCalc}),
-      view==='historial'   && h(HistorialView,{actLog:actLog,onRefresh:function(){fetch('/api/activity').then(function(r){return r.json();}).then(function(data){setActLog(data);showToast('Historial actualizado');});}}),
+      view==='historial'   && h(HistorialView,{actLog:actLog,undoLog:undoLog,onUndo:function(entry){setUndoDlg(entry);},
+        onRefresh:function(){loadHistorial().then(function(){showToast('Historial actualizado');});}}),
       view==='deudas'      && h(DebtsView,{debts:debts,onReload:loadDebts,onNew:function(){setDebtModal('new');},onPay:function(d){setDebtPayModal(d);},onEdit:function(d){setDebtModal(d);},onDelete:function(d){setDebtDelete(d);},onHistory:function(d){setDebtHistory(d);}}),
       view==='desarrollador'&& h(DevView,  {showToast:showToast,isMac:isMac,onNeedsRestart:function(){setNeedsRestart(true);},onSync:recalculate,onConfirm:function(cfg){setConfirmDlg(cfg);},loans:loans,pays:pays,datosPago:cfg.datos_pago,onSaveConfig:saveConfig}))
     ), /* end main-area */
@@ -2462,6 +2505,8 @@ function App(){
     restructureModal&&h(RestructureModal,{loan:restructureModal.loan||restructureModal,pays:pays,onSave:reestructurarPrestamo,onClose:function(){if(restructureModal.fromDeudor){setDebtorModal(restructureModal.fromDeudor);} setRestructureModal(null);}}),
     preflightDlg&&h(PreflightMoraModal,{cuotas:preflightDlg.cuotas,loan:preflightDlg.loan,onMarkMora:preflightDlg.onMarkMora,onContinue:preflightDlg.onContinue,onCancel:preflightDlg.onCancel}),
     confirmDlg&&h(ConfirmModal,Object.assign({},confirmDlg,{onCancel:function(){setConfirmDlg(null);}})),
+    // "La Bestia" Fase 2 — confirmacion de deshacer, con los candados C (>24h) y D (recibo).
+    undoDlg&&h(ConfirmUndoModal,{entry:undoDlg,onConfirm:confirmarUndo,onClose:function(){setUndoDlg(null);}}),
     // v1.9.x — Changelog modal con max-height + scroll interno. Header (titulo) y
     // footer (boton Entendido) quedan fijos; solo la lista de items hace scroll.
     changelogDlg&&h('div',{className:'modal-overlay',onClick:function(){setChangelogDlg(null);}},
@@ -5423,10 +5468,14 @@ function LoanModal(props){
 // ── Historial de acciones ─────────────────────────────────────────────────────
 function HistorialView(props){
   var log=props.actLog||[];
+  var undoLog=props.undoLog||[];
+  var onUndo=props.onUndo;
   var onRefresh=props.onRefresh;
-  var tipoIcon={prestamo:'plus',edicion:'edit',eliminacion:'trash',pago:'check',abono:'dollar',reestructuracion:'calc',cierre:'alert'};
-  var tipoColor={prestamo:'var(--green)',edicion:'var(--blue)',eliminacion:'var(--red)',pago:'var(--green)',abono:'var(--yellow)',reestructuracion:'var(--blue)',cierre:'var(--red)'};
-  var tipoLabel={prestamo:'Nuevo prestamo',edicion:'Edicion',eliminacion:'Eliminacion',pago:'Pago',abono:'Abono',reestructuracion:'Reestructuracion',cierre:'Cierre forzoso'};
+  var tipoIcon={prestamo:'plus',edicion:'edit',eliminacion:'trash',pago:'check',abono:'dollar',reestructuracion:'calc',cierre:'alert',deshacer:'refresh','cambio-fecha':'calendar',deuda:'briefcase'};
+  // v2.1 — 'deshacer' en purpura: las acciones compensatorias deben destacar de un vistazo sin
+  // confundirse con un error (rojo) ni con un cobro (verde).
+  var tipoColor={prestamo:'var(--green)',edicion:'var(--blue)',eliminacion:'var(--red)',pago:'var(--green)',abono:'var(--yellow)',reestructuracion:'var(--blue)',cierre:'var(--red)',deshacer:'var(--purple)','cambio-fecha':'var(--blue)',deuda:'var(--text2)'};
+  var tipoLabel={prestamo:'Nuevo prestamo',edicion:'Edicion',eliminacion:'Eliminacion',pago:'Pago',abono:'Abono',reestructuracion:'Reestructuracion',cierre:'Cierre forzoso',deshacer:'Deshecho','cambio-fecha':'Cambio de fecha',deuda:'Mis deudas'};
 
   function fmtFecha(f){
     if(!f)return '';
@@ -5434,6 +5483,20 @@ function HistorialView(props){
     var meses=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
     return d.getDate()+' '+meses[d.getMonth()]+' '+d.getFullYear()+' '+d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');
   }
+
+  // ── CANDADO A (LIFO) EN LA UI ───────────────────────────────────────────────
+  // El backend solo acepta deshacer la entrada 'disponible' MAS RECIENTE de cada agregado
+  // (409 en cualquier otra). La UI refleja exactamente esa regla: se calcula el "head" por
+  // scope y solo esa fila ofrece el boton activo. Las demas lo muestran apagado, explicando
+  // cual hay que deshacer primero — mejor que ocultarlo, que dejaria al usuario sin saber por
+  // que una operacion no se puede revertir.
+  var ujById={}, headByScope={};
+  undoLog.forEach(function(u){
+    ujById[u.id]=u;
+    var k=u.scope_tipo+'|'+u.scope_id;
+    // GET /api/undo llega ordenado por rowid DESC -> la primera 'disponible' de cada scope es el head.
+    if(u.estado==='disponible'&&!headByScope[k]) headByScope[k]=u.id;
+  });
 
   return h('div',{style:{padding:16}},
     h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}},
@@ -5449,14 +5512,40 @@ function HistorialView(props){
           var icon=tipoIcon[item.tipo]||'activity';
           var color=tipoColor[item.tipo]||'var(--text2)';
           var label=tipoLabel[item.tipo]||item.tipo;
-          return h('div',{key:item.id,style:{background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:10,padding:'12px 14px',display:'flex',alignItems:'flex-start',gap:12}},
+          var uj=item.undo_id?ujById[item.undo_id]:null;
+          var esHead=uj&&uj.estado==='disponible'&&headByScope[uj.scope_tipo+'|'+uj.scope_id]===uj.id;
+          var bloqueada=uj&&uj.estado==='disponible'&&!esHead;
+          var yaDeshecha=uj&&uj.estado==='deshecho';
+          // Cual es la operacion que hay que deshacer PRIMERO en este agregado (para el tooltip).
+          var headEntry=uj?ujById[headByScope[uj.scope_tipo+'|'+uj.scope_id]]:null;
+          var motivo=bloqueada&&headEntry
+            ? 'Primero debes deshacer la operacion mas reciente de este '+(uj.scope_tipo==='debt'?'registro':'prestamo')+': "'+headEntry.descripcion+'"'
+            : '';
+          return h('div',{key:item.id,style:{background:'var(--bg2)',border:'1px solid '+(yaDeshecha?'var(--purple-bd)':'var(--border)'),borderRadius:10,padding:'12px 14px',display:'flex',alignItems:'flex-start',gap:12,opacity:yaDeshecha?.72:1}},
             h('div',{style:{background:color+'20',borderRadius:8,padding:8,display:'flex',flexShrink:0}},
               h(Ico,{name:icon,size:16,color:color})),
             h('div',{style:{flex:1,minWidth:0}},
-              h('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:4}},
+              h('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:4,flexWrap:'wrap'}},
                 h('span',{style:{fontSize:11,fontWeight:600,color:color,textTransform:'uppercase',letterSpacing:'.5px'}},label),
-                h('span',{style:{fontSize:11,color:'var(--text3)'}},fmtFecha(item.fecha))),
-              h('div',{style:{fontSize:14,color:'var(--text)',lineHeight:'1.4'}},item.mensaje)));
+                h('span',{style:{fontSize:11,color:'var(--text3)'}},fmtFecha(item.fecha)),
+                yaDeshecha&&h('span',{style:{fontSize:10,fontWeight:700,color:'var(--purple)',background:'var(--purple-bg)',border:'1px solid var(--purple-bd)',borderRadius:5,padding:'1px 6px',letterSpacing:'.3px'}},'REVERTIDA')),
+              h('div',{style:{fontSize:14,color:'var(--text)',lineHeight:'1.4',textDecoration:yaDeshecha?'line-through':'none'}},item.mensaje),
+              // El motivo del bloqueo se muestra tambien inline: el tooltip nativo no existe en tactil.
+              bloqueada&&h('div',{style:{fontSize:11,color:'var(--text3)',marginTop:5,display:'flex',alignItems:'flex-start',gap:5,lineHeight:1.45}},
+                h(Ico,{name:'clock',size:11,color:'var(--text3)',sw:2.2}),
+                h('span',null,motivo))),
+            // ── Accion de deshacer (solo el head LIFO la ofrece activa) ──
+            (esHead||bloqueada)&&h('div',{style:{flexShrink:0}},
+              h('button',{
+                onClick:esHead?function(){onUndo(uj);}:null,
+                disabled:!esHead,
+                title:esHead?'Revertir esta operacion':motivo,
+                style:{display:'flex',alignItems:'center',gap:6,padding:'7px 11px',borderRadius:8,fontSize:12,fontWeight:600,fontFamily:'inherit',
+                  background:esHead?'var(--purple-bg)':'transparent',
+                  border:'1px solid '+(esHead?'var(--purple)':'var(--border)'),
+                  color:esHead?'var(--purple)':'var(--text3)',
+                  cursor:esHead?'pointer':'not-allowed',opacity:esHead?1:.6,transition:'all .15s'}},
+                h(Ico,{name:'refresh',size:13,color:esHead?'var(--purple)':'var(--text3)',sw:2.2}),'Deshacer')));
         })));
 }
 
@@ -6005,6 +6094,71 @@ function ABtn(props){
   var dis=!!props.disabled;
   return h('button',{onClick:dis?undefined:props.onClick,disabled:dis,style:{flex:1,background:dis?'var(--bg3)':props.color,color:dis?'var(--text3)':'white',border:'none',borderRadius:12,padding:'12px 8px',fontSize:13,fontWeight:700,cursor:dis?'not-allowed':'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:6,opacity:dis?.75:1}},h(Ico,{name:props.icon,size:15,color:dis?'var(--text3)':'white',sw:2.2}),props.label);
 }
+// ── ConfirmUndoModal (v2.1 — "La Bestia" Fase 2) ──────────────────────────────
+// Confirmacion de deshacer. NUNCA se revierte con un solo clic: deshacer una operacion
+// financiera puede contradecir un documento que el deudor ya tiene en la mano, asi que el
+// usuario debe ver QUE se va a revertir y con que riesgos antes de decidir.
+// Candado C (tiempo): advierte si la operacion tiene mas de 24 h. No BLOQUEA — el Candado A
+//   (LIFO) ya garantiza que nada se construyo encima, y un error se detecta igual al dia
+//   siguiente; poner un limite duro seria friccion sin seguridad real.
+// Candado D (recibo): si la operacion movio caja (afecta_caja, declarado por el backend en el
+//   journal), avisa que probablemente exista un recibo PDF en manos del cliente.
+function ConfirmUndoModal(props){
+  var e=props.entry||{};
+  var onConfirm=props.onConfirm,onClose=props.onClose;
+  var sS=useState(false); var sending=sS[0]; var setSending=sS[1];   // guarda anti doble-submit
+
+  // created_at viene como 'YYYY-MM-DD HH:MM:SS' en hora LOCAL (datetime('now','localtime')).
+  var creada=e.created_at?new Date(String(e.created_at).replace(' ','T')):null;
+  var horas=creada?Math.floor((Date.now()-creada.getTime())/36e5):0;
+  var esVieja=horas>=24;
+  var antiguedad=!creada?'':(horas<1?'hace menos de una hora':(horas<24?'hace '+horas+' hora'+(horas!==1?'s':''):'hace '+Math.floor(horas/24)+' dia'+(Math.floor(horas/24)!==1?'s':'')));
+  var afectaCaja=!!(+e.afecta_caja);
+  var esDeuda=e.scope_tipo==='debt';
+
+  function aviso(color,bg,bd,icono,titulo,cuerpo){
+    return h('div',{style:{background:bg,border:'1px solid '+bd,borderRadius:10,padding:'10px 12px',marginTop:10,display:'flex',gap:9,alignItems:'flex-start'}},
+      h(Ico,{name:icono,size:14,color:color,sw:2.4}),
+      h('div',{style:{flex:1,minWidth:0}},
+        h('div',{style:{fontSize:11,fontWeight:700,color:color,letterSpacing:'.3px',marginBottom:2}},titulo),
+        h('div',{style:{fontSize:11,color:'var(--text2)',lineHeight:1.5}},cuerpo)));
+  }
+
+  return h(Modal,{onClose:onClose},
+    h('div',{style:{fontWeight:700,fontSize:16,color:'var(--text)',marginBottom:3,display:'flex',alignItems:'center',gap:8}},
+      h(Ico,{name:'refresh',size:16,color:'var(--purple)',sw:2.4}),'Deshacer operacion'),
+    h('div',{style:{fontSize:12,color:'var(--text3)',marginBottom:13}},'Se restaurara el estado exacto anterior a esta operacion.'),
+
+    // Resumen de lo que se revierte
+    h('div',{style:{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:12,padding:'12px 14px'}},
+      h('div',{style:{fontSize:10,fontWeight:700,color:'var(--text3)',letterSpacing:'.5px',marginBottom:6}},'SE VA A REVERTIR'),
+      h('div',{style:{fontSize:13,color:'var(--text)',lineHeight:1.5,fontWeight:500}},e.descripcion||'(sin descripcion)'),
+      creada&&h('div',{style:{fontSize:11,color:'var(--text3)',marginTop:6,display:'flex',alignItems:'center',gap:5}},
+        h(Ico,{name:'clock',size:11,color:'var(--text3)',sw:2.2}),
+        String(e.created_at).slice(0,16)+' · '+antiguedad)),
+
+    // ── CANDADO C — antigüedad ──
+    esVieja&&aviso('var(--yellow)','var(--yellow-bg)','var(--yellow)','alert','OPERACION ANTIGUA',
+      'Se registro '+antiguedad+'. Revisa que no hayas construido nada sobre ella (reportes enviados, cierres de caja o conciliaciones ya hechas).'),
+
+    // ── CANDADO D — recibo probablemente entregado ──
+    afectaCaja&&aviso('var(--red)','var(--red-bg)','var(--red-bd)','receipt','DINERO YA REGISTRADO',
+      esDeuda
+        ? 'Este movimiento registro dinero real. Al revertirlo, el saldo de la deuda volvera a su valor anterior: confirma que el pago efectivamente no ocurrio.'
+        : 'Es probable que el cliente YA tenga en sus manos un recibo PDF con esta informacion. Si lo deshaces, tu sistema dejara de coincidir con ese documento. Asegurate de acordarlo con el deudor.'),
+
+    // Nota permanente: el historial es append-only
+    h('div',{style:{fontSize:11,color:'var(--text3)',lineHeight:1.5,marginTop:12}},
+      'La operacion quedara marcada como revertida en el historial. El registro NO se borra: queda la huella de que ocurrio y de que se deshizo.'),
+
+    h('div',{style:{display:'flex',gap:10,marginTop:16}},
+      h('button',{onClick:function(){_submitGuard(sending,setSending,function(){return onConfirm(e);});},disabled:sending,
+        style:{flex:1,background:sending?'var(--bg3)':'var(--purple-bg)',color:sending?'var(--text3)':'var(--purple)',
+          border:'1px solid '+(sending?'var(--border)':'var(--purple)'),borderRadius:10,padding:'11px 0',fontSize:13,fontWeight:700,
+          cursor:sending?'not-allowed':'pointer',fontFamily:'inherit'}},sending?'Deshaciendo...':'Si, deshacer'),
+      h('button',{onClick:onClose,style:{flex:1,background:'var(--bg3)',color:'var(--text2)',border:'1px solid var(--border)',borderRadius:10,padding:'11px 0',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}},'Cancelar')));
+}
+
 function ConfirmModal(props){
   var title=props.title||'Confirmar';var msg=props.message||'';var detail=props.detail;
   var onOk=props.onConfirm;var onNo=props.onCancel;var okLabel=props.okLabel||'Aceptar';var okColor=props.okColor||'var(--green2)';
