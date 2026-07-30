@@ -1872,7 +1872,8 @@ function App(){
       'Abonos en dolares con doble entrada: ahora registras por separado los USD del abono (que definen cuanto capital se descuenta, a la TRM pactada) y los COP que realmente recibiste. La app calcula en vivo la TRM implicita y te muestra en verde o rojo la ganancia o perdida por el movimiento del dolar. Antes esa diferencia cambiaria no quedaba registrada en ninguna parte.',
       'Mensajes de error mas claros al abonar: te dicen cual es el maximo, por que lo es, y a que herramienta acudir para cobrar el resto.'
     ],
-    '2.1.0': [
+    '2.1.1': [
+      '[HOTFIX v2.1.1] Esta es la version corregida del despliegue 2.1.0, que no alcanzaba a abrir (se quedaba en pantalla negra al iniciar). Ya esta solucionado y todo lo de abajo llega funcionando.',
       'NUEVO: boton Deshacer en el Historial. Si registras un pago, un abono, una liquidacion, una reestructuracion, un cierre forzoso, un cambio de fecha o cualquier movimiento de Mis Deudas por error, ahora puedes revertirlo y la app restaura el estado EXACTO que tenia antes: las cuotas, el saldo, las fechas y hasta los recibos internos vuelven como estaban.',
       'Solo se puede deshacer la ultima operacion de cada prestamo o deuda. Las anteriores muestran el boton apagado y te dicen cual tienes que deshacer primero, para que nunca se destape un movimiento sobre el que ya construiste otro.',
       'Antes de revertir aparece una confirmacion con el detalle de lo que se va a deshacer. Si la operacion tiene mas de 24 horas te lo advierte, y si movio dinero te recuerda que es probable que el cliente ya tenga un recibo PDF en sus manos con esa informacion.',
@@ -1934,6 +1935,42 @@ function App(){
   var loadDebts=useCallback(function(){
     return API.get('/api/debts').then(function(data){ if(data) setDebts(data); });
   },[]);
+
+  // ⚠️ ORDEN DE HOOKS: estos dos useCallback DEBEN vivir aqui, junto al resto de hooks de App y
+  // MUY por encima del `if(loading) return ...` que corta el render mientras cargan los datos.
+  // Estuvieron mas abajo (junto a navTo) y provocaron la pantalla negra de v2.1.0: en el primer
+  // render loading=true, el return temprano se disparaba y estos hooks NO se ejecutaban; al
+  // terminar la carga el render pasaba de largo y aparecian 2 hooks nuevos -> React lanzaba el
+  // error #310 ("rendered more hooks than during the previous render"), desmontaba el arbol y la
+  // pantalla se quedaba con lo ultimo pintado: el fondo var(--bg) del spinner (casi negro).
+  // Regla: NINGUN hook por debajo de un return condicional.
+
+  // Carga el historial y el journal EN PARALELO: la fila del log solo sabe que es reversible
+  // cuando su undo_id existe en el journal y ademas es el head LIFO de su agregado.
+  var loadHistorial=useCallback(function(){
+    return Promise.all([
+      fetch('/api/activity').then(function(r){return r.json();}).catch(function(){return [];}),
+      fetch('/api/undo').then(function(r){return r.json();}).catch(function(){return [];})
+    ]).then(function(res){
+      setActLog(Array.isArray(res[0])?res[0]:[]);
+      setUndoLog(Array.isArray(res[1])?res[1]:[]);
+      return res;
+    });
+  },[]);
+
+  // Ejecuta el undo y refresca TODO: el journal cambia de estado, el historial gana su entrada
+  // compensatoria y los datos del prestamo/deuda vuelven al snapshot.
+  var confirmarUndo=useCallback(function(entry){
+    return API.post('/api/undo/'+entry.id,{}).then(function(r){
+      if(!r){showToast('No se pudo deshacer','error');return;}
+      if(r.error){showToast(r.error,'error');return;}
+      setUndoDlg(null);
+      return Promise.all([reload(),loadHistorial(),loadDebts()]).then(function(){
+        // El backend avisa (sin bloquear) cuando el estado habia cambiado desde la operacion.
+        showToast(r.warning?'Deshecho, con advertencias':'Operacion deshecha');
+      });
+    });
+  },[reload,loadHistorial,loadDebts]);
 
   // Crear o editar deuda. data.id presente -> PUT (editar); ausente -> POST (crear).
   var saveDebt=useCallback(function(data){
@@ -2351,38 +2388,11 @@ function App(){
   // Lista plana derivada (para el lookup de icono+label de la vista actual en el header).
   var nav=navSections.reduce(function(acc,s){return acc.concat(s.items);},[]).concat(navStandalone);
 
-  // Carga el historial y el journal EN PARALELO: la fila del log solo sabe que es reversible
-  // cuando su undo_id existe en el journal y ademas es el head LIFO de su agregado.
-  var loadHistorial=useCallback(function(){
-    return Promise.all([
-      fetch('/api/activity').then(function(r){return r.json();}).catch(function(){return [];}),
-      fetch('/api/undo').then(function(r){return r.json();}).catch(function(){return [];})
-    ]).then(function(res){
-      setActLog(Array.isArray(res[0])?res[0]:[]);
-      setUndoLog(Array.isArray(res[1])?res[1]:[]);
-      return res;
-    });
-  },[]);
-
   function navTo(id){
     setView(id);setMenuOpen(false);
     if(id==='historial') loadHistorial();
     if(id==='deudas') loadDebts();
   }
-
-  // Ejecuta el undo y refresca TODO: el journal cambia de estado, el historial gana su entrada
-  // compensatoria y los datos del prestamo/deuda vuelven al snapshot.
-  var confirmarUndo=useCallback(function(entry){
-    return API.post('/api/undo/'+entry.id,{}).then(function(r){
-      if(!r){showToast('No se pudo deshacer','error');return;}
-      if(r.error){showToast(r.error,'error');return;}
-      setUndoDlg(null);
-      return Promise.all([reload(),loadHistorial(),loadDebts()]).then(function(){
-        // El backend avisa (sin bloquear) cuando el estado habia cambiado desde la operacion.
-        showToast(r.warning?'Deshecho, con advertencias':'Operacion deshecha');
-      });
-    });
-  },[reload,loadHistorial,loadDebts]);
 
   // Acordeon del sidebar: alterna una seccion y persiste el estado en localStorage (sobrevive F5).
   function toggleNavSection(key){
