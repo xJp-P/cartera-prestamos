@@ -7,6 +7,7 @@
 const express  = require('express');
 const Database = require('better-sqlite3');
 const path     = require('path');
+const crypto   = require('crypto');
 
 // Raíz del proyecto (un nivel arriba de /backend)
 const PROJECT_ROOT = path.join(__dirname, '..');
@@ -441,6 +442,213 @@ module.exports = function createApp(dbPath) {
       .run(nsFix, nsFix, nsFix, fl.id);
   });
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // "La Bestia" — Fase 1: infraestructura de DESHACER (undo_journal)
+  // ══════════════════════════════════════════════════════════════════════════
+  // Doctrina: se guarda el SNAPSHOT del AGREGADO COMPLETO antes de mutar (no diffs
+  // ni matematica inversa), y el journal se escribe DENTRO de la misma transaccion
+  // que la mutacion. Deshacer = restaurar el agregado verbatim + re-aplicar el
+  // housekeeping determinista (auto-mora, fixPrestamos) para que el paso del tiempo
+  // no corrompa estados (Candado B). LIFO estricto por scope (Candado A).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS undo_journal (
+      id           TEXT PRIMARY KEY,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+      accion       TEXT NOT NULL,
+      endpoint     TEXT NOT NULL,
+      descripcion  TEXT NOT NULL,
+      scope_tipo   TEXT NOT NULL,
+      scope_id     TEXT NOT NULL,
+      snapshot     TEXT NOT NULL,
+      pre_hash     TEXT NOT NULL,
+      post_hash    TEXT NOT NULL,
+      estado       TEXT NOT NULL DEFAULT 'disponible',
+      undone_at    TEXT,
+      app_version  TEXT NOT NULL DEFAULT '',
+      schema_ver   INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE INDEX IF NOT EXISTS idx_uj_scope  ON undo_journal(scope_tipo, scope_id);
+    CREATE INDEX IF NOT EXISTS idx_uj_estado ON undo_journal(estado);
+  `);
+
+  let APP_VERSION = 'desconocida';
+  try { APP_VERSION = require('../package.json').version; } catch (_) {}
+
+  // Serializacion canonica (claves ordenadas, recursiva) -> hash estable e
+  // independiente del orden de columnas que devuelva el driver.
+  function stableStringify(v) {
+    if (v === null || typeof v !== 'object') return JSON.stringify(v);
+    if (Array.isArray(v)) return '[' + v.map(stableStringify).join(',') + ']';
+    return '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + stableStringify(v[k])).join(',') + '}';
+  }
+  function hashSnapshot(obj) {
+    return crypto.createHash('sha256').update(stableStringify(obj)).digest('hex');
+  }
+
+  // Columnas vigentes de una tabla (cache). Base del restore por INTERSECCION:
+  // restaurar solo las columnas que existen hoy -> un snapshot viejo con menos
+  // columnas deja las nuevas en su default (Candado E, drift de esquema).
+  const _colsCache = {};
+  function tableCols(t) {
+    if (!_colsCache[t]) _colsCache[t] = db.prepare('PRAGMA table_info(' + t + ')').all().map(c => c.name);
+    return _colsCache[t];
+  }
+  function restoreRow(table, row) {
+    const cols = tableCols(table).filter(c => Object.prototype.hasOwnProperty.call(row, c));
+    const vals = {}; cols.forEach(c => { vals[c] = row[c]; });
+    db.prepare('INSERT OR REPLACE INTO ' + table + '(' + cols.join(',') + ') VALUES (' + cols.map(c => '@' + c).join(',') + ')').run(vals);
+  }
+
+  // ── Snapshot del AGREGADO (todo lo que una mutacion podria tocar) ────────────
+  // Por que el agregado ENTERO y no solo la fila tocada: casi toda operacion tiene
+  // efectos colaterales (p.ej. PUT /payments dispara la auto-finalizacion, que muta
+  // loans.estado/montoCOP). Snapshotear solo la cuota dejaria el prestamo corrupto
+  // al deshacer. El agregado elimina esa clase de bug por construccion.
+  function snapshotScope(tipo, id) {
+    if (tipo === 'debt') {
+      return {
+        v: 1, tipo: 'debt',
+        deuda: db.prepare('SELECT * FROM mis_deudas WHERE id = ?').get(id) || null,
+        pagos: db.prepare('SELECT * FROM pagos_deudas WHERE deuda_id = ? ORDER BY id').all(id)
+      };
+    }
+    return {
+      v: 1, tipo: 'loan',
+      loan: db.prepare('SELECT * FROM loans WHERE id = ?').get(id) || null,
+      payments: db.prepare('SELECT * FROM payments WHERE prestamoId = ? ORDER BY cuotaN, id').all(id)
+    };
+  }
+  // Restaurar reemplaza el agregado ENTERO (no parchea filas sueltas). Los IDs de
+  // cuota son deterministas (`${loanId}-${cuotaN}`), asi que reinsertar es exacto.
+  function restoreScope(snap, id) {
+    if (snap.tipo === 'debt') {
+      db.prepare('DELETE FROM pagos_deudas WHERE deuda_id = ?').run(id);
+      db.prepare('DELETE FROM mis_deudas WHERE id = ?').run(id);
+      if (snap.deuda) restoreRow('mis_deudas', snap.deuda);
+      (snap.pagos || []).forEach(p => restoreRow('pagos_deudas', p));
+    } else {
+      db.prepare('DELETE FROM payments WHERE prestamoId = ?').run(id);
+      if (snap.loan) restoreRow('loans', snap.loan);
+      else db.prepare('DELETE FROM loans WHERE id = ?').run(id);
+      (snap.payments || []).forEach(p => restoreRow('payments', p));
+    }
+  }
+  // Housekeeping determinista re-aplicado tras restaurar (Candado B): deja el estado
+  // consistente con la fecha de HOY, igual que el arranque, sin caducar el undo.
+  function reHousekeepLoan(id) {
+    db.prepare("UPDATE payments SET estadoPago='En Mora' WHERE prestamoId=? AND estadoPago='Pendiente' AND fechaPago < ?").run(id, hoyStr());
+    const l = db.prepare('SELECT * FROM loans WHERE id = ?').get(id);
+    if (l && l.estado === 'Activo' && l.modalidad === 'Prestamo') {
+      const ns = Math.round(l.montoCOP);
+      db.prepare("UPDATE payments SET saldoInicial=?, abonoCapital=?, cuotaTotal=?, saldoFinal=0 WHERE prestamoId=? AND estadoPago='En Mora' AND id NOT LIKE '%-ab-%'").run(ns, ns, ns, id);
+    }
+  }
+
+  const insUndo = db.prepare(`
+    INSERT INTO undo_journal(id, accion, endpoint, descripcion, scope_tipo, scope_id, snapshot, pre_hash, post_hash, app_version)
+    VALUES (@id, @accion, @endpoint, @descripcion, @scope_tipo, @scope_id, @snapshot, @pre_hash, @post_hash, @app_version)
+  `);
+
+  // Retencion: conservar las 200 mas recientes y descartar > 90 dias (lo que ocurra
+  // primero). Borra el TAIL (mas viejo), nunca el head, asi que no rompe el LIFO.
+  function podarJournal() {
+    db.prepare("DELETE FROM undo_journal WHERE created_at < datetime('now','localtime','-90 days')").run();
+    db.prepare("DELETE FROM undo_journal WHERE rowid NOT IN (SELECT rowid FROM undo_journal ORDER BY rowid DESC LIMIT 200)").run();
+  }
+  podarJournal();
+
+  // Error de validacion -> respuesta 4xx sin tocar la BD.
+  class ClientError extends Error {
+    constructor(message, code) { super(message); this.code = code || 400; }
+  }
+
+  // ── HELPER UNIVERSAL: mutacion atomica con journal de undo ───────────────────
+  // FASE 0: snapshot del agregado (solo lectura) + pre_hash.
+  // FASE 1: compute() valida + computa TODO en memoria; si lanza ClientError -> 4xx,
+  //         BD intacta (ni una escritura).
+  // FASE 2: UNA sola transaccion -> aplicar() + INSERT journal (post_hash releido
+  //         DENTRO de la tx) + activity_log + poda. Todo o nada.
+  // compute() debe devolver { descripcion, payload, aplicar }.
+  // La respuesta HTTP sale de: (lo que devuelva aplicar()) || payload || {ok:true}. Devolver el
+  // payload desde aplicar() permite responder con la fila YA MUTADA (p.ej. la deuda actualizada),
+  // que solo puede leerse despues de escribir y dentro de la misma transaccion.
+  // descripcion tambien acepta funcion: se evalua tras aplicar(), para textos que dependen del
+  // estado final (p.ej. el saldo recalculado desde el ledger).
+  function mutacionAtomica(req, res, meta, compute) {
+    const pre = snapshotScope(meta.scopeTipo, meta.scopeId);
+    const preHash = hashSnapshot(pre);
+    let computed;
+    try {
+      computed = compute();
+    } catch (e) {
+      if (e instanceof ClientError) return res.status(e.code).json({ error: e.message });
+      throw e;
+    }
+    let payload = null;
+    const run = db.transaction(() => {
+      payload = computed.aplicar() || computed.payload || { ok: true };
+      const desc = typeof computed.descripcion === 'function' ? computed.descripcion() : computed.descripcion;
+      const postHash = hashSnapshot(snapshotScope(meta.scopeTipo, meta.scopeId));
+      const ujId = 'uj-' + genId();
+      insUndo.run({
+        id: ujId, accion: meta.accion, endpoint: meta.endpoint,
+        descripcion: desc, scope_tipo: meta.scopeTipo, scope_id: meta.scopeId,
+        snapshot: JSON.stringify(pre), pre_hash: preHash, post_hash: postHash, app_version: APP_VERSION
+      });
+      logAction.run(meta.logTipo || meta.accion, desc);
+      podarJournal();
+      return ujId;
+    });
+    const undoId = run();
+    res.json(Object.assign({ undoId: undoId }, payload));
+  }
+
+  // ── API: Deshacer ────────────────────────────────────────────────────────────
+  app.post('/api/undo/:id', (req, res) => {
+    const entry = db.prepare('SELECT * FROM undo_journal WHERE id = ?').get(req.params.id);
+    if (!entry) return res.status(404).json({ error: 'Operacion no encontrada en el historial' });
+    if (entry.estado !== 'disponible') {
+      return res.status(400).json({ error: 'Esta operacion ya fue ' + (entry.estado === 'deshecho' ? 'deshecha' : 'invalidada') + ' y no puede revertirse de nuevo' });
+    }
+    // Candado A — LIFO estricto por scope: solo la entrada disponible MAS reciente
+    // de este agregado puede deshacerse.
+    const top = db.prepare("SELECT id, descripcion, created_at FROM undo_journal WHERE scope_tipo=? AND scope_id=? AND estado='disponible' ORDER BY rowid DESC LIMIT 1").get(entry.scope_tipo, entry.scope_id);
+    if (top && top.id !== entry.id) {
+      return res.status(409).json({ error: 'Primero debes deshacer la operacion mas reciente de este ' + (entry.scope_tipo === 'debt' ? 'registro' : 'prestamo') + ': "' + top.descripcion + '" (' + top.created_at + ')' });
+    }
+    let snap;
+    try { snap = JSON.parse(entry.snapshot); } catch (_) { return res.status(500).json({ error: 'Snapshot corrupto: no se puede deshacer con seguridad' }); }
+
+    // Candado B (DETECTOR, no gate): si el estado ACTUAL del agregado ya no coincide
+    // con el post_hash del journal, algo lo cambio despues (housekeeping del arranque,
+    // o una mutacion aun NO cubierta por el journal en esta fase). Se restaura igual
+    // y se ADVIERTE — nunca se bloquea en silencio.
+    const drift = hashSnapshot(snapshotScope(entry.scope_tipo, entry.scope_id)) !== entry.post_hash;
+
+    const run = db.transaction(() => {
+      restoreScope(snap, entry.scope_id);
+      if (entry.scope_tipo === 'loan') reHousekeepLoan(entry.scope_id);
+      db.prepare("UPDATE undo_journal SET estado='deshecho', undone_at=datetime('now','localtime') WHERE id=?").run(entry.id);
+      logAction.run('deshacer', 'Deshiciste: ' + entry.descripcion);
+    });
+    run();
+
+    res.json({
+      ok: true, deshecho: entry.id, accion: entry.accion, scope_id: entry.scope_id,
+      warning: drift ? 'El estado habia cambiado desde esta operacion (housekeeping o una mutacion no journalizada). Se restauro el snapshot y se re-aplico el housekeeping; revisa el resultado.' : null
+    });
+  });
+
+  // ── API: Historial de undo (para la UI y diagnostico) ────────────────────────
+  app.get('/api/undo', (req, res) => {
+    const { scopeTipo, scopeId } = req.query;
+    const cols = 'id, created_at, accion, descripcion, scope_tipo, scope_id, estado, undone_at';
+    const rows = (scopeTipo && scopeId)
+      ? db.prepare('SELECT ' + cols + " FROM undo_journal WHERE scope_tipo=? AND scope_id=? ORDER BY rowid DESC LIMIT 50").all(scopeTipo, scopeId)
+      : db.prepare('SELECT ' + cols + ' FROM undo_journal ORDER BY rowid DESC LIMIT 50').all();
+    res.json(rows);
+  });
+
   // ── API: Recalcular cronogramas ───────────────────────────────────────────
   // v1.9.0 FIX: solo borra Pendientes regulares. Cuotas Pagadas y En Mora se preservan
   // intactas (son deuda historica / causada y no deben ser recalculadas). nextRegularN
@@ -449,7 +657,11 @@ module.exports = function createApp(dbPath) {
   app.post('/api/recalculate', (_req, res) => {
     const activeLoans = db.prepare("SELECT * FROM loans WHERE estado = 'Activo'").all();
     let updated = 0;
-    for (const loan of activeLoans) {
+    // ATOMICO por prestamo: el borrado de Pendientes y su regeneracion van juntos. Antes iban
+    // sueltos -> un fallo entre ambos dejaba al deudor SIN cronograma. Se envuelve cada iteracion
+    // (no el lote entero) para que un prestamo problematico no revierta el trabajo de los demas.
+    // NO se journaliza: /recalculate es reconstructivo por diseño y de alcance global.
+    const recalcularUno = db.transaction((loan) => {
       const prev = db.prepare('SELECT * FROM payments WHERE prestamoId = ?').all(loan.id);
       const prevRegulares = prev.filter(p => !p.id || p.id.indexOf('-ab-') === -1);
       const prevPagadasYMora = prevRegulares.filter(p => p.estadoPago === 'Pagado' || p.estadoPago === 'En Mora');
@@ -529,6 +741,9 @@ module.exports = function createApp(dbPath) {
         }
       });
       if (schedule.length > 0) insertSchedule(schedule);
+    });
+    for (const loan of activeLoans) {
+      recalcularUno(loan);
       updated++;
     }
     // Re-aplicar auto-mora a Pendientes que cruzaron la fecha
@@ -566,7 +781,11 @@ module.exports = function createApp(dbPath) {
   });
   app.put('/api/config', (req, res) => {
     const stmt = db.prepare('INSERT OR REPLACE INTO config(key, value) VALUES (?, ?)');
-    for (const [k, v] of Object.entries(req.body)) stmt.run(k, String(v));
+    // ATOMICO: guarda TODAS las claves o ninguna (antes, un fallo a mitad del bucle dejaba la
+    // configuracion a medio guardar). No se journaliza: no es una operacion financiera.
+    db.transaction(() => {
+      for (const [k, v] of Object.entries(req.body)) stmt.run(k, String(v));
+    })();
     res.json({ ok: true });
   });
 
@@ -582,13 +801,18 @@ module.exports = function createApp(dbPath) {
     // v1.10.0: gananciaFija solo aplica para modalidad Pago Unico — forzar 0 en el resto
     if (loan.modalidad !== 'Pago Unico') loan.gananciaFija = 0;
     else loan.gananciaFija = Math.round(+loan.gananciaFija || 0);
-    db.prepare(`
-      INSERT INTO loans(id,nombre,cedula,telefono,moneda,montoOrigen,trmAcordada,montoCOP,
-        tasaMensual,plazoMeses,modalidad,fechaInicio,diaPago,estado,notas,frecuencia,fechaDevolucion,comprasUSD,gananciaFija)
-      VALUES (@id,@nombre,@cedula,@telefono,@moneda,@montoOrigen,@trmAcordada,@montoCOP,
-        @tasaMensual,@plazoMeses,@modalidad,@fechaInicio,@diaPago,@estado,@notas,@frecuencia,@fechaDevolucion,@comprasUSD,@gananciaFija)
-    `).run(loan);
-    insertSchedule(buildSchedule(loan));
+    // ATOMICO: el INSERT del prestamo y la generacion de su cronograma van en UNA transaccion.
+    // Antes iban sueltos: un fallo entre ambos creaba un prestamo sin cuotas. Este endpoint NO
+    // se journaliza (fuera del alcance acordado del undo), pero la atomicidad si es exigible.
+    db.transaction(() => {
+      db.prepare(`
+        INSERT INTO loans(id,nombre,cedula,telefono,moneda,montoOrigen,trmAcordada,montoCOP,
+          tasaMensual,plazoMeses,modalidad,fechaInicio,diaPago,estado,notas,frecuencia,fechaDevolucion,comprasUSD,gananciaFija)
+        VALUES (@id,@nombre,@cedula,@telefono,@moneda,@montoOrigen,@trmAcordada,@montoCOP,
+          @tasaMensual,@plazoMeses,@modalidad,@fechaInicio,@diaPago,@estado,@notas,@frecuencia,@fechaDevolucion,@comprasUSD,@gananciaFija)
+      `).run(loan);
+      insertSchedule(buildSchedule(loan));
+    })();
     var detalleLog = (loan.moneda === 'USD' ? 'USD $' + loan.montoOrigen : '$' + Math.round(loan.montoCOP).toLocaleString()) + ' (' + loan.modalidad + ')';
     if (loan.modalidad === 'Pago Unico' && loan.gananciaFija > 0) {
       detalleLog += ' [ganancia $' + Math.round(loan.gananciaFija).toLocaleString('es-CO') + ']';
@@ -603,13 +827,12 @@ module.exports = function createApp(dbPath) {
     // v1.10.0: gananciaFija solo aplica para modalidad Pago Unico — forzar 0 en el resto
     if (loan.modalidad !== 'Pago Unico') loan.gananciaFija = 0;
     else loan.gananciaFija = Math.round(+loan.gananciaFija || 0);
-    db.prepare(`
-      UPDATE loans SET nombre=@nombre, cedula=@cedula, telefono=@telefono, moneda=@moneda,
-        montoOrigen=@montoOrigen, trmAcordada=@trmAcordada, montoCOP=@montoCOP,
-        tasaMensual=@tasaMensual, plazoMeses=@plazoMeses, modalidad=@modalidad,
-        fechaInicio=@fechaInicio, diaPago=@diaPago, estado=@estado, notas=@notas, frecuencia=@frecuencia, fechaDevolucion=@fechaDevolucion, comprasUSD=@comprasUSD, gananciaFija=@gananciaFija
-      WHERE id=@id
-    `).run(loan);
+    // ATOMICO desde "La Bestia": antes el UPDATE de loans, el DELETE de Pendientes y el
+    // insertSchedule iban sueltos (3 escrituras sin transaccion) -> un fallo intermedio dejaba
+    // el prestamo editado con el cronograma a medio borrar. Ahora todo va en una sola tx.
+    // El UPDATE se movio al final (a `aplicar`): ningun computo posterior lee `payments` de la
+    // BD despues del DELETE, y el cronograma se calcula desde el `loan` del body, no de la BD.
+    return mutacionAtomica(req, res, { accion: 'edicion', endpoint: 'PUT /api/loans/:id', scopeTipo: 'loan', scopeId: req.params.id }, () => {
 
     // v1.9.0 FIX: solo borrar Pendientes regulares. Cuotas Pagadas y En Mora se preservan
     // intactas (deuda historica/causada). Esto garantiza que un edit nunca afecta cuotas
@@ -628,10 +851,7 @@ module.exports = function createApp(dbPath) {
       }
     });
 
-    // Borrar SOLO Pendientes — Pagadas, Mora y abonos quedan intactos
-    prevPendientes.forEach(p => {
-      db.prepare('DELETE FROM payments WHERE id = ?').run(p.id);
-    });
+    // (El borrado de Pendientes se aplica en la fase de escritura, mas abajo.)
 
     // Saldo actual considerando abonos previos (montoCOP es el del request, pero defendemos
     // contra valores incorrectos restando los abonos confirmados).
@@ -686,15 +906,36 @@ module.exports = function createApp(dbPath) {
         if (!p.observaciones) p.observaciones = 'Cuota transitoria por cambio de fecha de pago (' + (extraLoanEdit >= 0 ? '+$' : '-$') + Math.abs(extraLoanEdit).toLocaleString('es-CO') + ')';
       }
     });
-    if (schedule.length > 0) insertSchedule(schedule);
-    logAction.run('edicion', 'Editaste prestamo de ' + loan.nombre);
-    res.json(loan);
+
+    return {
+      descripcion: 'Editaste prestamo de ' + loan.nombre,
+      payload: loan,
+      aplicar: () => {
+        db.prepare(`
+          UPDATE loans SET nombre=@nombre, cedula=@cedula, telefono=@telefono, moneda=@moneda,
+            montoOrigen=@montoOrigen, trmAcordada=@trmAcordada, montoCOP=@montoCOP,
+            tasaMensual=@tasaMensual, plazoMeses=@plazoMeses, modalidad=@modalidad,
+            fechaInicio=@fechaInicio, diaPago=@diaPago, estado=@estado, notas=@notas, frecuencia=@frecuencia, fechaDevolucion=@fechaDevolucion, comprasUSD=@comprasUSD, gananciaFija=@gananciaFija
+          WHERE id=@id
+        `).run(loan);
+        // Borrar SOLO Pendientes — Pagadas, Mora y abonos quedan intactos
+        prevPendientes.forEach(p => {
+          db.prepare('DELETE FROM payments WHERE id = ?').run(p.id);
+        });
+        if (schedule.length > 0) insertSchedule(schedule);
+      }
+    };
+    });
   });
 
   app.delete('/api/loans/:id', (req, res) => {
     const loan = db.prepare('SELECT nombre, montoCOP FROM loans WHERE id = ?').get(req.params.id);
-    db.prepare('DELETE FROM payments WHERE prestamoId = ?').run(req.params.id);
-    db.prepare('DELETE FROM loans WHERE id = ?').run(req.params.id);
+    // ATOMICO: los dos DELETE van juntos (antes sueltos -> podian dejar cuotas huerfanas sin su
+    // prestamo). NO se journaliza: eliminar un prestamo es deliberado y ya tiene su confirmacion.
+    db.transaction(() => {
+      db.prepare('DELETE FROM payments WHERE prestamoId = ?').run(req.params.id);
+      db.prepare('DELETE FROM loans WHERE id = ?').run(req.params.id);
+    })();
     if (loan) logAction.run('eliminacion', 'Eliminaste prestamo de ' + loan.nombre);
     res.json({ ok: true });
   });
@@ -737,6 +978,10 @@ module.exports = function createApp(dbPath) {
   app.put('/api/payments/:id', (req, res) => {
     const { estadoPago, fechaRecaudo, observaciones, montoCOPRecibido, montoUSDRecibido } = req.body;
     const payBefore = db.prepare('SELECT * FROM payments WHERE id = ?').get(req.params.id);
+    // El scope del journal es el PRESTAMO (no la cuota): esta ruta tambien muta loans via
+    // auto-finalizacion / reactivacion, asi que el agregado entero es la unidad de undo.
+    if (!payBefore) return res.status(404).json({ error: 'Cuota no encontrada' });
+    return mutacionAtomica(req, res, { accion: 'pago', endpoint: 'PUT /api/payments/:id', scopeTipo: 'loan', scopeId: payBefore.prestamoId }, () => {
     // Al marcar Pagado: partialPaid = cuotaTotal (recibido completo); al revertir: partialPaid = 0 (historial se pierde)
     let newPartial;
     if (estadoPago === 'Pagado' && payBefore) newPartial = payBefore.cuotaTotal;
@@ -766,12 +1011,13 @@ module.exports = function createApp(dbPath) {
     } else {
       newRecibos = (payBefore && payBefore.recibos) || '[]';
     }
+    const label = estadoPago === 'Pagado' ? 'Registraste pago' : estadoPago === 'En Mora' ? 'Marcaste en mora' : 'Revertiste a pendiente';
+    return {
+      descripcion: label + ': ' + payBefore.nombreCliente + ' cuota #' + payBefore.cuotaN + ' por $' + Math.round(payBefore.cuotaTotal).toLocaleString(),
+      payload: { ok: true },
+      aplicar: () => {
     db.prepare('UPDATE payments SET estadoPago=?, fechaRecaudo=?, observaciones=?, montoCOPRecibido=?, montoUSDRecibido=?, partialPaid=?, recibos=?, paidAt=? WHERE id=?')
       .run(estadoPago, fechaRecaudo || null, observaciones || '', montoCOPRecibido || 0, montoUSDRecibido || 0, newPartial, newRecibos, newPaidAt, req.params.id);
-    if (payBefore) {
-      const label = estadoPago === 'Pagado' ? 'Registraste pago' : estadoPago === 'En Mora' ? 'Marcaste en mora' : 'Revertiste a pendiente';
-      logAction.run('pago', label + ': ' + payBefore.nombreCliente + ' cuota #' + payBefore.cuotaN + ' por $' + Math.round(payBefore.cuotaTotal).toLocaleString());
-    }
 
     // Auto-finalización: si se marcó como Pagado, verificar si todas las cuotas regulares están pagadas
     if (estadoPago === 'Pagado') {
@@ -805,8 +1051,9 @@ module.exports = function createApp(dbPath) {
         }
       }
     }
-
-    res.json({ ok: true });
+      }
+    };
+    });
   });
 
   // ── API: Pago Parcial ─────────────────────────────────────────────────────
@@ -815,13 +1062,16 @@ module.exports = function createApp(dbPath) {
     const { monto, fecha, observaciones, montoUSD } = req.body;
     const pay = db.prepare('SELECT * FROM payments WHERE id = ?').get(req.params.id);
     if (!pay) return res.status(404).json({ error: 'Cuota no encontrada' });
-    if (pay.estadoPago === 'Pagado') return res.status(400).json({ error: 'La cuota ya está pagada' });
-    if (pay.id.indexOf('-ab-') !== -1) return res.status(400).json({ error: 'No se pueden aplicar pagos parciales sobre un abono a capital' });
+    // Scope = el PRESTAMO: esta ruta tambien puede mutar loans (auto-finalizacion y limpieza
+    // de proximaCuotaExtra), asi que el agregado entero es la unidad de undo.
+    return mutacionAtomica(req, res, { accion: 'pago_parcial', logTipo: 'pago', endpoint: 'POST /api/payments/:id/partial', scopeTipo: 'loan', scopeId: pay.prestamoId }, () => {
+    if (pay.estadoPago === 'Pagado') throw new ClientError('La cuota ya está pagada');
+    if (pay.id.indexOf('-ab-') !== -1) throw new ClientError('No se pueden aplicar pagos parciales sobre un abono a capital');
     const montoNum = Math.round(+monto || 0);
-    if (montoNum <= 0) return res.status(400).json({ error: 'El monto debe ser mayor a 0' });
+    if (montoNum <= 0) throw new ClientError('El monto debe ser mayor a 0');
     const yaPagado = pay.partialPaid || 0;
     const restante = pay.cuotaTotal - yaPagado;
-    if (montoNum > restante) return res.status(400).json({ error: 'El monto supera el saldo pendiente de la cuota ($' + Math.round(restante).toLocaleString() + ')' });
+    if (montoNum > restante) throw new ClientError('El monto supera el saldo pendiente de la cuota ($' + Math.round(restante).toLocaleString() + ')');
 
     const nuevoPartial = yaPagado + montoNum;
     // v1.12.x FIX (pago bimonetario): en prestamos USD, si el USD recibido cubre la cuota en USD
@@ -844,12 +1094,21 @@ module.exports = function createApp(dbPath) {
     recibosArr.push({ fecha: fechaPago, cop: montoNum });
     const recibosJSON = JSON.stringify(recibosArr);
 
+    // `completa` ya se conoce aqui (se deriva de pay + monto), asi que la descripcion del
+    // journal/log se puede fijar antes de escribir.
+    const descPartial = completa
+      ? 'Pago parcial final: ' + pay.nombreCliente + ' cuota #' + pay.cuotaN + ' $' + montoNum.toLocaleString() + ' (completo $' + Math.round(pay.cuotaTotal).toLocaleString() + ')'
+      : 'Pago parcial: ' + pay.nombreCliente + ' cuota #' + pay.cuotaN + ' $' + montoNum.toLocaleString() + ' (faltan $' + Math.round(pay.cuotaTotal - nuevoPartial).toLocaleString() + ')';
+
+    return {
+      descripcion: descPartial,
+      payload: { ok: true, completa, partialPaid: nuevoPartial, restante: Math.max(0, pay.cuotaTotal - nuevoPartial) },
+      aplicar: () => {
     if (completa) {
       // Completa la cuota: marcar Pagado
       const usdAcum = (pay.montoUSDRecibido || 0) + (+montoUSD || 0);
       db.prepare("UPDATE payments SET estadoPago=?, fechaRecaudo=?, observaciones=?, montoCOPRecibido=?, montoUSDRecibido=?, partialPaid=?, recibos=?, paidAt=datetime('now','localtime') WHERE id=?")
         .run('Pagado', fechaPago, obsCombinada, nuevoPartial, Math.round(usdAcum * 100) / 100, pay.cuotaTotal, recibosJSON, req.params.id);
-      logAction.run('pago', 'Pago parcial final: ' + pay.nombreCliente + ' cuota #' + pay.cuotaN + ' $' + montoNum.toLocaleString() + ' (completo $' + Math.round(pay.cuotaTotal).toLocaleString() + ')');
 
       // Si era la cuota con proximaCuotaExtra, limpiarla del loan
       const loanRow = db.prepare('SELECT proximaCuotaExtraN FROM loans WHERE id = ?').get(pay.prestamoId);
@@ -869,10 +1128,10 @@ module.exports = function createApp(dbPath) {
       const usdAcum = (pay.montoUSDRecibido || 0) + (+montoUSD || 0);
       db.prepare('UPDATE payments SET partialPaid=?, observaciones=?, montoCOPRecibido=?, montoUSDRecibido=?, recibos=? WHERE id=?')
         .run(nuevoPartial, obsCombinada, copAcum, Math.round(usdAcum * 100) / 100, recibosJSON, req.params.id);
-      const faltan = pay.cuotaTotal - nuevoPartial;
-      logAction.run('pago', 'Pago parcial: ' + pay.nombreCliente + ' cuota #' + pay.cuotaN + ' $' + montoNum.toLocaleString() + ' (faltan $' + Math.round(faltan).toLocaleString() + ')');
     }
-    res.json({ ok: true, completa, partialPaid: nuevoPartial, restante: Math.max(0, pay.cuotaTotal - nuevoPartial) });
+      }
+    };
+    });
   });
 
   // ── API: Abono a Capital ──────────────────────────────────────────────────
@@ -884,6 +1143,10 @@ module.exports = function createApp(dbPath) {
     const loan = db.prepare('SELECT * FROM loans WHERE id = ?').get(req.params.id);
     if (!loan) return res.status(404).json({ error: 'No encontrado' });
 
+    // v2.1 "La Bestia" — el endpoint delega en mutacionAtomica: la FASE 1 (compute)
+    // valida y computa; la FASE 2 (aplicar) se ejecuta dentro de la transaccion del
+    // helper junto al INSERT del journal de undo. Las validaciones lanzan ClientError.
+    return mutacionAtomica(req, res, { accion: 'abono', endpoint: 'POST /api/loans/:id/abono', scopeTipo: 'loan', scopeId: req.params.id }, () => {
     // ── FASE 1: LECTURA + VALIDACION (sin escrituras) ────────────────────────
     const allPays = db.prepare('SELECT * FROM payments WHERE prestamoId = ? ORDER BY cuotaN').all(req.params.id);
 
@@ -916,13 +1179,13 @@ module.exports = function createApp(dbPath) {
     // derivaba del propio capital y siempre cuadraba a la fuerza. Opcional: si no llega (prestamos
     // COP y la ruta de liquidacion) se conserva el comportamiento anterior.
     const copRecibidoNum = Math.max(0, Math.round(+montoCOPRecibido || 0));
-    if (montoNum <= 0) return res.status(400).json({ error: 'El monto del abono debe ser mayor a 0' });
+    if (montoNum <= 0) throw new ClientError('El monto del abono debe ser mayor a 0');
     // Validacion bifurcada: al LIQUIDAR se acepta cubrir todo el capital pendiente (incluida la mora),
     // por eso se valida contra capitalPendienteLiq y NO contra saldoReal (que rebotaba el cobro de un
     // C+I con mora — showstopper). En un abono normal se mantiene la validacion contra saldoReal.
     if (liquidar) {
       if (montoNum > capitalPendienteLiq + 1) {
-        return res.status(400).json({ error: 'El monto supera el capital pendiente ($' + capitalPendienteLiq.toLocaleString('es-CO') + ')' });
+        throw new ClientError('El monto supera el capital pendiente ($' + capitalPendienteLiq.toLocaleString('es-CO') + ')');
       }
     } else if (Math.round(saldoReal - montoNum) < 0) {
       // v2.0.0 — defense-in-depth. El AbonoModal ya topa el monto en saldoAbonable (espejo exacto
@@ -930,12 +1193,10 @@ module.exports = function createApp(dbPath) {
       // POR QUE el tope es menor que el capital total y a que herramienta acudir, en vez del
       // criptico "El abono supera el saldo actual".
       const capMoraMsg = Math.max(0, capitalPendienteLiq - saldoReal);
-      return res.status(400).json({
-        error: 'El abono supera el capital amortizable ($' + Math.round(saldoReal).toLocaleString('es-CO') + ').' +
-          (capMoraMsg > 0
-            ? ' Los $' + Math.round(capMoraMsg).toLocaleString('es-CO') + ' restantes son capital de cuotas En Mora: se cobran liquidando la deuda o pagando esas cuotas desde la seccion Pagos.'
-            : '')
-      });
+      throw new ClientError('El abono supera el capital amortizable ($' + Math.round(saldoReal).toLocaleString('es-CO') + ').' +
+        (capMoraMsg > 0
+          ? ' Los $' + Math.round(capMoraMsg).toLocaleString('es-CO') + ' restantes son capital de cuotas En Mora: se cobran liquidando la deuda o pagando esas cuotas desde la seccion Pagos.'
+          : ''));
     }
     // En liquidacion el prestamo se salda por completo -> nuevoSaldo 0 (no hay recalculo de pendientes).
     const nuevoSaldo = liquidar ? 0 : Math.round(saldoReal - montoNum);
@@ -962,27 +1223,25 @@ module.exports = function createApp(dbPath) {
     if (nuevoSaldo > 0) {
       if (esCapInt && recalcMode === 'modificarPlazo') {
         const nuevoN = parseInt(recalcValor, 10);
-        if (!nuevoN || nuevoN < 1) return res.status(400).json({ error: 'Numero de cuotas invalido. Debe ser >= 1.' });
+        if (!nuevoN || nuevoN < 1) throw new ClientError('Numero de cuotas invalido. Debe ser >= 1.');
         nuevasCuotas = buildSchedule(updatedLoan, nextRegularN, nuevoSaldo, nuevoN);
         nuevoPlazoMeses = regularConsumed + nuevoN;
         nuevaCuotaFija = 0; // limpiar (el usuario cambio de opinion)
         logRecalc = ' — plazo ajustado a ' + nuevoN + ' cuota' + (nuevoN > 1 ? 's' : '') + ' restantes (total: ' + nuevoPlazoMeses + ')';
       } else if (esCapInt && recalcMode === 'fijarCuota') {
         const cuotaDeseada = +recalcValor || 0;
-        if (cuotaDeseada <= 0) return res.status(400).json({ error: 'Cuota invalida. Debe ser > 0.' });
+        if (cuotaDeseada <= 0) throw new ClientError('Cuota invalida. Debe ser > 0.');
         const r = tasaPeriodo((loan.tasaMensual || 0) / 100, loan.frecuencia || 'Mensual');
         const interesPrimerPeriodo = nuevoSaldo * r;
         if (cuotaDeseada <= interesPrimerPeriodo) {
-          return res.status(400).json({
-            error: 'La cuota debe ser mayor a $' + Math.round(interesPrimerPeriodo).toLocaleString('es-CO') +
-              ' (intereses del primer periodo). Con $' + Math.round(cuotaDeseada).toLocaleString('es-CO') +
-              ' nunca se saldaria la deuda.'
-          });
+          throw new ClientError('La cuota debe ser mayor a $' + Math.round(interesPrimerPeriodo).toLocaleString('es-CO') +
+            ' (intereses del primer periodo). Con $' + Math.round(cuotaDeseada).toLocaleString('es-CO') +
+            ' nunca se saldaria la deuda.');
         }
         try {
           nuevasCuotas = buildScheduleFixedPMT(updatedLoan, nextRegularN, nuevoSaldo, cuotaDeseada);
         } catch (e) {
-          return res.status(400).json({ error: e.message });
+          throw new ClientError(e.message);
         }
         nuevoPlazoMeses = regularConsumed + nuevasCuotas.length;
         nuevaCuotaFija = Math.round(cuotaDeseada);
@@ -996,10 +1255,16 @@ module.exports = function createApp(dbPath) {
       }
     }
 
-    // ── FASE 2: ESCRITURA (transaccion atomica) ──────────────────────────────
-    const abonoId = req.params.id + '-ab-' + Date.now();
-    const fechaAbono = fecha || hoyStr();
-    const aplicar = db.transaction(() => {
+    // ── FASE 2: ESCRITURA — la ejecuta mutacionAtomica dentro de UNA transaccion,
+    // junto al INSERT del journal de undo y el activity_log. Todo o nada.
+    let logBase = 'Registraste abono de $' + Math.round(montoNum).toLocaleString() + ' a ' + loan.nombre + (nuevoSaldo <= 0 ? ' (SALDADO)' : ' — saldo: $' + Math.round(nuevoSaldo).toLocaleString());
+    if (recalcMode === 'modificarPlazo' || recalcMode === 'fijarCuota') logBase += ' [recalc: ' + recalcMode + ']';
+    return {
+      descripcion: logBase,
+      payload: { ok: true, nuevoSaldo: Math.max(0, nuevoSaldo) },
+      aplicar: () => {
+      const abonoId = req.params.id + '-ab-' + Date.now();
+      const fechaAbono = fecha || hoyStr();
       // Solo borrar cuotas PENDIENTES; las cuotas En Mora permanecen intactas (deuda independiente)
       db.prepare("DELETE FROM payments WHERE prestamoId = ? AND estadoPago = 'Pendiente'").run(req.params.id);
 
@@ -1090,15 +1355,9 @@ module.exports = function createApp(dbPath) {
           db.prepare('UPDATE loans SET cuotaFijaPactada = ? WHERE id = ?').run(nuevaCuotaFija, req.params.id);
         }
       }
+      }
+      };
     });
-    aplicar();
-
-    let logBase = 'Registraste abono de $' + Math.round(montoNum).toLocaleString() + ' a ' + loan.nombre + (nuevoSaldo <= 0 ? ' (SALDADO)' : ' — saldo: $' + Math.round(nuevoSaldo).toLocaleString());
-    if (recalcMode === 'modificarPlazo' || recalcMode === 'fijarCuota') {
-      logBase += ' [recalc: ' + recalcMode + ']';
-    }
-    logAction.run('abono', logBase);
-    res.json({ ok: true, nuevoSaldo: Math.max(0, nuevoSaldo) });
   });
 
   // ── API: Reestructurar Prestamo (sin abono) ──────────────────────────────
@@ -1109,10 +1368,11 @@ module.exports = function createApp(dbPath) {
     const { recalcMode, recalcValor } = req.body;
     const loan = db.prepare('SELECT * FROM loans WHERE id = ?').get(req.params.id);
     if (!loan) return res.status(404).json({ error: 'No encontrado' });
-    if (loan.estado !== 'Activo') return res.status(400).json({ error: 'Solo se pueden reestructurar prestamos activos' });
-    if (loan.modalidad !== 'Capital + Intereses') return res.status(400).json({ error: 'La reestructuracion solo aplica para prestamos de Capital + Intereses' });
+    return mutacionAtomica(req, res, { accion: 'reestructuracion', endpoint: 'POST /api/loans/:id/reestructurar', scopeTipo: 'loan', scopeId: req.params.id }, () => {
+    if (loan.estado !== 'Activo') throw new ClientError('Solo se pueden reestructurar prestamos activos');
+    if (loan.modalidad !== 'Capital + Intereses') throw new ClientError('La reestructuracion solo aplica para prestamos de Capital + Intereses');
     if (recalcMode !== 'modificarPlazo' && recalcMode !== 'fijarCuota') {
-      return res.status(400).json({ error: 'Modo de recalculo invalido. Debe ser "modificarPlazo" o "fijarCuota".' });
+      throw new ClientError('Modo de recalculo invalido. Debe ser "modificarPlazo" o "fijarCuota".');
     }
 
     // ── FASE 1: LECTURA + VALIDACION (sin escrituras) ────────────────────────
@@ -1127,7 +1387,7 @@ module.exports = function createApp(dbPath) {
       (p.estadoPago === 'En Mora' && p.id.indexOf('-ab-') === -1)
     ).reduce((s, p) => s + p.abonoCapital, 0);
     const saldoReal = Math.max(0, originalCOP - todoCapPagado);
-    if (saldoReal <= 0) return res.status(400).json({ error: 'El prestamo no tiene saldo de capital pendiente para reestructurar' });
+    if (saldoReal <= 0) throw new ClientError('El prestamo no tiene saldo de capital pendiente para reestructurar');
 
     const regularConsumed = allPays.filter(p =>
       (p.estadoPago === 'Pagado' || p.estadoPago === 'En Mora') &&
@@ -1143,7 +1403,7 @@ module.exports = function createApp(dbPath) {
 
     if (recalcMode === 'modificarPlazo') {
       const nuevoN = parseInt(recalcValor, 10);
-      if (!nuevoN || nuevoN < 1) return res.status(400).json({ error: 'Numero de cuotas invalido. Debe ser >= 1.' });
+      if (!nuevoN || nuevoN < 1) throw new ClientError('Numero de cuotas invalido. Debe ser >= 1.');
       nuevasCuotas = buildSchedule(updatedLoan, nextRegularN, saldoReal, nuevoN);
       nuevoPlazoMeses = regularConsumed + nuevoN;
       nuevaCuotaFija = 0;
@@ -1151,37 +1411,36 @@ module.exports = function createApp(dbPath) {
     } else {
       // fijarCuota
       const cuotaDeseada = +recalcValor || 0;
-      if (cuotaDeseada <= 0) return res.status(400).json({ error: 'Cuota invalida. Debe ser > 0.' });
+      if (cuotaDeseada <= 0) throw new ClientError('Cuota invalida. Debe ser > 0.');
       const r = tasaPeriodo((loan.tasaMensual || 0) / 100, loan.frecuencia || 'Mensual');
       const interesPrimerPeriodo = saldoReal * r;
       if (cuotaDeseada <= interesPrimerPeriodo) {
-        return res.status(400).json({
-          error: 'La cuota debe ser mayor a $' + Math.round(interesPrimerPeriodo).toLocaleString('es-CO') +
-            ' (intereses del primer periodo). Con $' + Math.round(cuotaDeseada).toLocaleString('es-CO') +
-            ' nunca se saldaria la deuda.'
-        });
+        throw new ClientError('La cuota debe ser mayor a $' + Math.round(interesPrimerPeriodo).toLocaleString('es-CO') +
+          ' (intereses del primer periodo). Con $' + Math.round(cuotaDeseada).toLocaleString('es-CO') +
+          ' nunca se saldaria la deuda.');
       }
       try {
         nuevasCuotas = buildScheduleFixedPMT(updatedLoan, nextRegularN, saldoReal, cuotaDeseada);
       } catch (e) {
-        return res.status(400).json({ error: e.message });
+        throw new ClientError(e.message);
       }
       nuevoPlazoMeses = regularConsumed + nuevasCuotas.length;
       nuevaCuotaFija = Math.round(cuotaDeseada);
       logRecalc = ' — cuota fija $' + Math.round(cuotaDeseada).toLocaleString('es-CO') + ' x ' + nuevasCuotas.length + ' cuotas (total: ' + nuevoPlazoMeses + ')';
     }
 
-    // ── FASE 2: ESCRITURA (transaccion atomica) ──────────────────────────────
-    const aplicar = db.transaction(() => {
-      // Borrar cuotas Pendientes (regulares, no abonos). Mora y Pagadas intactas.
-      db.prepare("DELETE FROM payments WHERE prestamoId = ? AND estadoPago = 'Pendiente' AND id NOT LIKE '%-ab-%'").run(req.params.id);
-      insertSchedule(nuevasCuotas);
-      db.prepare('UPDATE loans SET plazoMeses = ?, cuotaFijaPactada = ? WHERE id = ?').run(nuevoPlazoMeses, nuevaCuotaFija, req.params.id);
+    // ── FASE 2: ESCRITURA — la ejecuta mutacionAtomica dentro de UNA transaccion.
+    return {
+      descripcion: 'Reestructuraste ' + loan.nombre + logRecalc,
+      payload: { ok: true, nuevasCuotas: nuevasCuotas.length, nuevoPlazoMeses, cuotaFijaPactada: nuevaCuotaFija },
+      aplicar: () => {
+        // Borrar cuotas Pendientes (regulares, no abonos). Mora y Pagadas intactas.
+        db.prepare("DELETE FROM payments WHERE prestamoId = ? AND estadoPago = 'Pendiente' AND id NOT LIKE '%-ab-%'").run(req.params.id);
+        insertSchedule(nuevasCuotas);
+        db.prepare('UPDATE loans SET plazoMeses = ?, cuotaFijaPactada = ? WHERE id = ?').run(nuevoPlazoMeses, nuevaCuotaFija, req.params.id);
+      }
+    };
     });
-    aplicar();
-
-    logAction.run('reestructuracion', 'Reestructuraste ' + loan.nombre + logRecalc);
-    res.json({ ok: true, nuevasCuotas: nuevasCuotas.length, nuevoPlazoMeses, cuotaFijaPactada: nuevaCuotaFija });
   });
 
   // ── API: Cierre Forzoso ───────────────────────────────────────────────────
@@ -1190,23 +1449,30 @@ module.exports = function createApp(dbPath) {
   app.post('/api/loans/:id/force-close', (req, res) => {
     const loan = db.prepare('SELECT * FROM loans WHERE id = ?').get(req.params.id);
     if (!loan) return res.status(404).json({ error: 'No encontrado' });
-    if (loan.estado !== 'Activo') return res.status(400).json({ error: 'Solo se pueden cerrar préstamos activos' });
+    // ATOMICO desde "La Bestia": antes el DELETE y el UPDATE iban sueltos (sin transaccion),
+    // asi que un fallo entre ambos dejaba el cronograma borrado con el prestamo aun Activo.
+    return mutacionAtomica(req, res, { accion: 'cierre', endpoint: 'POST /api/loans/:id/force-close', scopeTipo: 'loan', scopeId: req.params.id }, () => {
+      if (loan.estado !== 'Activo') throw new ClientError('Solo se pueden cerrar préstamos activos');
 
-    const allPays = db.prepare('SELECT * FROM payments WHERE prestamoId = ?').all(req.params.id);
-    const originalCOP = loan.moneda === 'USD' ? Math.round(loan.montoOrigen * loan.trmAcordada) : Math.round(loan.montoOrigen);
-    const todoCapPagado = allPays.filter(p => p.estadoPago === 'Pagado').reduce((s, p) => s + p.abonoCapital, 0);
-    const capitalPerdido = Math.max(0, Math.round(originalCOP - todoCapPagado));
-    const interesesPerdidos = Math.round(allPays
-      .filter(p => p.estadoPago === 'En Mora' && p.id.indexOf('-ab-') === -1)
-      .reduce((s, p) => s + p.interesPeriodo, 0));
+      const allPays = db.prepare('SELECT * FROM payments WHERE prestamoId = ?').all(req.params.id);
+      const originalCOP = loan.moneda === 'USD' ? Math.round(loan.montoOrigen * loan.trmAcordada) : Math.round(loan.montoOrigen);
+      const todoCapPagado = allPays.filter(p => p.estadoPago === 'Pagado').reduce((s, p) => s + p.abonoCapital, 0);
+      const capitalPerdido = Math.max(0, Math.round(originalCOP - todoCapPagado));
+      const interesesPerdidos = Math.round(allPays
+        .filter(p => p.estadoPago === 'En Mora' && p.id.indexOf('-ab-') === -1)
+        .reduce((s, p) => s + p.interesPeriodo, 0));
+      const totalPerdido = capitalPerdido + interesesPerdidos;
 
-    db.prepare("DELETE FROM payments WHERE prestamoId = ? AND estadoPago IN ('Pendiente', 'En Mora')").run(req.params.id);
-    db.prepare("UPDATE loans SET estado = 'Cancelado', capitalPerdido = ?, interesesPerdidos = ?, montoCOP = 0, cuotaFijaPactada = 0 WHERE id = ?")
-      .run(capitalPerdido, interesesPerdidos, req.params.id);
-
-    const totalPerdido = capitalPerdido + interesesPerdidos;
-    logAction.run('cierre', 'Cerraste a la fuerza el préstamo de ' + loan.nombre + ' — pérdida: $' + totalPerdido.toLocaleString() + ' (capital $' + capitalPerdido.toLocaleString() + ' + intereses mora $' + interesesPerdidos.toLocaleString() + ')');
-    res.json({ ok: true, capitalPerdido: capitalPerdido, interesesPerdidos: interesesPerdidos, totalPerdido: totalPerdido });
+      return {
+        descripcion: 'Cerraste a la fuerza el préstamo de ' + loan.nombre + ' — pérdida: $' + totalPerdido.toLocaleString() + ' (capital $' + capitalPerdido.toLocaleString() + ' + intereses mora $' + interesesPerdidos.toLocaleString() + ')',
+        payload: { ok: true, capitalPerdido: capitalPerdido, interesesPerdidos: interesesPerdidos, totalPerdido: totalPerdido },
+        aplicar: () => {
+          db.prepare("DELETE FROM payments WHERE prestamoId = ? AND estadoPago IN ('Pendiente', 'En Mora')").run(req.params.id);
+          db.prepare("UPDATE loans SET estado = 'Cancelado', capitalPerdido = ?, interesesPerdidos = ?, montoCOP = 0, cuotaFijaPactada = 0 WHERE id = ?")
+            .run(capitalPerdido, interesesPerdidos, req.params.id);
+        }
+      };
+    });
   });
 
   // ── API: Cambiar día de pago (con prorrateo) ──────────────────────────────
@@ -1220,13 +1486,14 @@ module.exports = function createApp(dbPath) {
     const { nuevoDia } = req.body;
     const loan = db.prepare('SELECT * FROM loans WHERE id = ?').get(req.params.id);
     if (!loan) return res.status(404).json({ error: 'No encontrado' });
-    if (loan.estado !== 'Activo') return res.status(400).json({ error: 'Solo se puede cambiar la fecha de prestamos activos' });
-    if (loan.modalidad === 'Prestamo' || loan.modalidad === 'Pago Unico') return res.status(400).json({ error: 'No aplica para prestamos sin cuotas periodicas' });
     const freq = loan.frecuencia || 'Mensual';
-    if (freq !== 'Mensual') return res.status(400).json({ error: 'Cambiar el dia de pago solo aplica a prestamos de frecuencia Mensual' });
     const nuevoDiaInt = parseInt(nuevoDia, 10);
-    if (!nuevoDiaInt || nuevoDiaInt < 1 || nuevoDiaInt > 31) return res.status(400).json({ error: 'Dia invalido' });
-    if (nuevoDiaInt === loan.diaPago) return res.status(400).json({ error: 'El nuevo dia debe ser distinto al actual' });
+    return mutacionAtomica(req, res, { accion: 'cambio-fecha', endpoint: 'POST /api/loans/:id/cambiar-dia-pago', scopeTipo: 'loan', scopeId: req.params.id }, () => {
+    if (loan.estado !== 'Activo') throw new ClientError('Solo se puede cambiar la fecha de prestamos activos');
+    if (loan.modalidad === 'Prestamo' || loan.modalidad === 'Pago Unico') throw new ClientError('No aplica para prestamos sin cuotas periodicas');
+    if (freq !== 'Mensual') throw new ClientError('Cambiar el dia de pago solo aplica a prestamos de frecuencia Mensual');
+    if (!nuevoDiaInt || nuevoDiaInt < 1 || nuevoDiaInt > 31) throw new ClientError('Dia invalido');
+    if (nuevoDiaInt === loan.diaPago) throw new ClientError('El nuevo dia debe ser distinto al actual');
 
     // ── FASE 1: LECTURA + VALIDACION + COMPUTO (sin escrituras) ───────────────
     const allPays = db.prepare('SELECT * FROM payments WHERE prestamoId = ? ORDER BY cuotaN').all(req.params.id);
@@ -1247,7 +1514,7 @@ module.exports = function createApp(dbPath) {
     const originalCOP = loan.moneda === 'USD' ? Math.round(loan.montoOrigen * loan.trmAcordada) : Math.round(loan.montoOrigen);
     const todoCapPagado = pagadasRegulares.reduce((s, p) => s + p.abonoCapital, 0);
     const saldoActual = Math.max(0, originalCOP - todoCapPagado);
-    if (saldoActual <= 0) return res.status(400).json({ error: 'El prestamo no tiene saldo pendiente' });
+    if (saldoActual <= 0) throw new ClientError('El prestamo no tiene saldo pendiente');
 
     // CUOTA TRANSITORIA: prorratear el interes de la 1a cuota a los DIAS REALES de su periodo.
     // Referencia = fechaPago de la ultima cuota PAGADA (o fechaInicio si aun no hay pagos).
@@ -1279,7 +1546,29 @@ module.exports = function createApp(dbPath) {
     const loanConNuevoDia = Object.assign({}, loan, { diaPago: nuevoDiaInt, fechaBaseCronograma: baseCron });
     const indefinido = loan.modalidad === 'Intereses';
     const remaining = indefinido ? 3 : Math.max(1, (loan.plazoMeses || 12) - regularConsumed);
-    const nuevasCuotas = buildSchedule(loanConNuevoDia, nextRegularN, saldoActual, remaining);
+    let nuevasCuotas = buildSchedule(loanConNuevoDia, nextRegularN, saldoActual, remaining);
+
+    // ── GUARDA DEFENSIVA: NUNCA sobrescribir una cuota ya PAGADA ───────────────
+    // Este endpoint tiene una asimetria propia: BORRA las cuotas En Mora pero cuenta como
+    // consumidas SOLO las Pagadas (regularConsumed, arriba). Si las Pagadas no son contiguas
+    // —estado normal cuando el deudor abona el mes corriente y arrastra cuotas viejas— entonces
+    // nextRegularN queda POR DEBAJO del cuotaN de una Pagada existente, y como los ids son
+    // deterministas (`${loanId}-${cuotaN}`) e insPayment es INSERT OR REPLACE, la fila Pagada
+    // se reemplazaba EN SILENCIO por una Pendiente nueva: se perdian estadoPago, fechaRecaudo,
+    // montoCOPRecibido, paidAt y el ledger `recibos`, y el capital de esa cuota dejaba de contar
+    // en la formula canonica de saldo -> la deuda del cliente SUBIA sola.
+    // (Defecto preexistente detectado en la auditoria adversarial de la Fase 1 de undo; reproducido
+    //  sobre la BD real: un pago de $265.000 destruido y el saldo inflado en $162.761.)
+    // Se saltan esos ids. Mismo patron defensivo que autoExtendSoloIntereses, que ya comprueba
+    // la existencia antes de insertar. NO cambia la doctrina financiera del prorrateo: el filtro
+    // se aplica ANTES de marcar la cuota transitoria, de modo que la transitoria siempre recae
+    // sobre una fila que si se va a insertar.
+    const idsPagadas = new Set(pagadasRegulares.map(p => p.id));
+    const cuotasProtegidas = nuevasCuotas.filter(p => idsPagadas.has(p.id)).map(p => p.cuotaN);
+    if (cuotasProtegidas.length > 0) {
+      nuevasCuotas = nuevasCuotas.filter(p => !idsPagadas.has(p.id));
+    }
+
     let netAdj = 0;
     if (nuevasCuotas.length > 0) {
       const primera = nuevasCuotas[0];
@@ -1296,37 +1585,40 @@ module.exports = function createApp(dbPath) {
         + (moraConsolidada > 0 ? ' + mora consolidada $' + moraConsolidada.toLocaleString('es-CO') : '');
     }
 
-    // ── FASE 2: ESCRITURA (transaccion atomica) ──────────────────────────────
-    const aplicar = db.transaction(() => {
-      // Borrar Pendientes + En Mora regulares (preserva Pagadas y abonos '-ab-')
-      db.prepare("DELETE FROM payments WHERE prestamoId = ? AND estadoPago IN ('Pendiente','En Mora') AND id NOT LIKE '%-ab-%'").run(req.params.id);
-      db.prepare('UPDATE loans SET diaPago = ?, fechaBaseCronograma = ? WHERE id = ?').run(nuevoDiaInt, baseCron, req.params.id);
-      // Persistir el ajuste NETO con signo (proximaCuotaExtra) para reproducir la cuota transitoria
-      // al regenerar. /recalculate y PUT /loans aplican `+= extra` con guard `!== 0`.
-      db.prepare('UPDATE loans SET proximaCuotaExtra = ?, proximaCuotaExtraN = ? WHERE id = ?')
-        .run(netAdj, nuevasCuotas.length > 0 ? nuevasCuotas[0].cuotaN : 0, req.params.id);
-      if (nuevasCuotas.length > 0) insertSchedule(nuevasCuotas);
-    });
-    aplicar();
-
+    // ── FASE 2: ESCRITURA — la ejecuta mutacionAtomica dentro de UNA transaccion.
     const logMsg = 'Cambiaste dia de pago de ' + loan.nombre + ' del ' + loan.diaPago + ' al ' + nuevoDiaInt
       + ' - 1a cuota transitoria de ' + diasReales + ' dias (interes $' + interesProrrateado.toLocaleString('es-CO') + ')'
       + (moraCount > 0 ? ' + ' + moraCount + ' cuota' + (moraCount > 1 ? 's' : '') + ' en mora ($' + moraConsolidada.toLocaleString('es-CO') + ')' : '');
-    logAction.run('cambio-fecha', logMsg);
 
-    res.json({
-      ok: true,
-      nuevoDia: nuevoDiaInt,
-      primeraCuota: nuevasCuotas[0] || null,
-      // Radiografia de la cuota transitoria para el modal: capital (amortizacion normal, intacta),
-      // interes prorrateado (solo dias reales) y total. capitalCuota = abonoCapital de la 1a cuota.
-      capitalCuota: nuevasCuotas.length > 0 ? nuevasCuotas[0].abonoCapital : 0,
-      cuotaTotalTransitoria: nuevasCuotas.length > 0 ? nuevasCuotas[0].cuotaTotal : 0,
-      cuotasRecurrentes: nuevasCuotas.length > 1 ? nuevasCuotas[1].cuotaTotal : (nuevasCuotas[0] ? nuevasCuotas[0].cuotaTotal - netAdj : 0),
-      moraConsolidada: moraConsolidada,
-      prorrateo: interesProrrateado,
-      diasReales: diasReales,
-      moraCount: moraCount
+    return {
+      descripcion: logMsg,
+      payload: {
+        ok: true,
+        nuevoDia: nuevoDiaInt,
+        primeraCuota: nuevasCuotas[0] || null,
+        // Radiografia de la cuota transitoria para el modal: capital (amortizacion normal, intacta),
+        // interes prorrateado (solo dias reales) y total. capitalCuota = abonoCapital de la 1a cuota.
+        capitalCuota: nuevasCuotas.length > 0 ? nuevasCuotas[0].abonoCapital : 0,
+        cuotaTotalTransitoria: nuevasCuotas.length > 0 ? nuevasCuotas[0].cuotaTotal : 0,
+        cuotasRecurrentes: nuevasCuotas.length > 1 ? nuevasCuotas[1].cuotaTotal : (nuevasCuotas[0] ? nuevasCuotas[0].cuotaTotal - netAdj : 0),
+        moraConsolidada: moraConsolidada,
+        prorrateo: interesProrrateado,
+        diasReales: diasReales,
+        moraCount: moraCount,
+        // Cuotas ya Pagadas que la guarda defensiva protegio de ser sobrescritas (normalmente []).
+        cuotasProtegidas: cuotasProtegidas
+      },
+      aplicar: () => {
+        // Borrar Pendientes + En Mora regulares (preserva Pagadas y abonos '-ab-')
+        db.prepare("DELETE FROM payments WHERE prestamoId = ? AND estadoPago IN ('Pendiente','En Mora') AND id NOT LIKE '%-ab-%'").run(req.params.id);
+        db.prepare('UPDATE loans SET diaPago = ?, fechaBaseCronograma = ? WHERE id = ?').run(nuevoDiaInt, baseCron, req.params.id);
+        // Persistir el ajuste NETO con signo (proximaCuotaExtra) para reproducir la cuota transitoria
+        // al regenerar. /recalculate y PUT /loans aplican `+= extra` con guard `!== 0`.
+        db.prepare('UPDATE loans SET proximaCuotaExtra = ?, proximaCuotaExtraN = ? WHERE id = ?')
+          .run(netAdj, nuevasCuotas.length > 0 ? nuevasCuotas[0].cuotaN : 0, req.params.id);
+        if (nuevasCuotas.length > 0) insertSchedule(nuevasCuotas);
+      }
+    };
     });
   });
 
@@ -1371,16 +1663,22 @@ module.exports = function createApp(dbPath) {
     // QA3: fecha_creacion editable. Si viene en el payload se usa; si no, el INSERT omite la
     // columna y queda el DEFAULT (datetime('now','localtime')).
     const fecha = (req.body.fecha_creacion || '').toString().slice(0, 10);
+    // El id se genera ANTES para que el scope del journal sea conocido. El snapshot previo de
+    // una deuda que aun no existe es {deuda:null, pagos:[]} -> deshacer = eliminarla.
     const id = genId();
-    if (fecha) {
-      db.prepare(`INSERT INTO mis_deudas(id, titulo, acreedor, concepto, monto_original, saldo_pendiente, estado, fecha_creacion)
-                  VALUES (?, ?, ?, ?, ?, ?, 'Activa', ?)`).run(id, titulo, acreedor, concepto, monto, monto, fecha);
-    } else {
-      db.prepare(`INSERT INTO mis_deudas(id, titulo, acreedor, concepto, monto_original, saldo_pendiente, estado)
-                  VALUES (?, ?, ?, ?, ?, ?, 'Activa')`).run(id, titulo, acreedor, concepto, monto, monto);
-    }
-    logAction.run('deuda', 'Nueva deuda "' + titulo + '" con ' + acreedor + ' por $' + monto.toLocaleString('es-CO'));
-    res.json(db.prepare('SELECT * FROM mis_deudas WHERE id = ?').get(id));
+    return mutacionAtomica(req, res, { accion: 'deuda_crear', logTipo: 'deuda', endpoint: 'POST /api/debts', scopeTipo: 'debt', scopeId: id }, () => ({
+      descripcion: 'Nueva deuda "' + titulo + '" con ' + acreedor + ' por $' + monto.toLocaleString('es-CO'),
+      aplicar: () => {
+        if (fecha) {
+          db.prepare(`INSERT INTO mis_deudas(id, titulo, acreedor, concepto, monto_original, saldo_pendiente, estado, fecha_creacion)
+                      VALUES (?, ?, ?, ?, ?, ?, 'Activa', ?)`).run(id, titulo, acreedor, concepto, monto, monto, fecha);
+        } else {
+          db.prepare(`INSERT INTO mis_deudas(id, titulo, acreedor, concepto, monto_original, saldo_pendiente, estado)
+                      VALUES (?, ?, ?, ?, ?, ?, 'Activa')`).run(id, titulo, acreedor, concepto, monto, monto);
+        }
+        return db.prepare('SELECT * FROM mis_deudas WHERE id = ?').get(id);
+      }
+    }));
   });
 
   // Registra un abono manual: inserta en pagos_deudas y resta saldo_pendiente.
@@ -1393,33 +1691,35 @@ module.exports = function createApp(dbPath) {
     // QA5 "Cuenta Rotativa": 'abono' reduce la deuda, 'cargo' la aumenta (sin tope).
     const tipo = req.body.tipo === 'cargo' ? 'cargo' : 'abono';
     const monto = Math.round(+req.body.monto_pagado || 0);
-    if (monto <= 0) return res.status(400).json({ error: 'El monto del movimiento debe ser mayor a 0' });
-    // Solo el abono tiene tope (no se puede abonar mas que el saldo). El cargo NO tiene limite,
-    // y puede reactivar una deuda 'Pagada'.
-    if (tipo === 'abono' && monto > deuda.saldo_pendiente) {
-      return res.status(400).json({ error: 'El abono ($' + monto.toLocaleString('es-CO') + ') supera el saldo pendiente ($' + Math.round(deuda.saldo_pendiente).toLocaleString('es-CO') + ')' });
-    }
     const fecha = (req.body.fecha_pago || hoyStr()).toString().slice(0, 10);
     const notas = (req.body.notas || '').trim();
     const pagoId = genId();
 
-    // FASE 2 — escrituras atomicas (all-or-nothing). El saldo se RECALCULA desde el ledger:
-    // saldo = monto_original + SUM(cargos) - SUM(abonos). Estado vuelve a 'Activa' si saldo > 0.
-    const aplicar = db.transaction(() => {
-      db.prepare('INSERT INTO pagos_deudas(id, deuda_id, monto_pagado, fecha_pago, notas, tipo) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(pagoId, deuda.id, monto, fecha, notas, tipo);
-      const agg = db.prepare("SELECT COALESCE(SUM(CASE WHEN tipo = 'cargo' THEN monto_pagado ELSE 0 END), 0) AS cargos, COALESCE(SUM(CASE WHEN tipo = 'cargo' THEN 0 ELSE monto_pagado END), 0) AS abonos FROM pagos_deudas WHERE deuda_id = ?").get(deuda.id);
-      const saldo = Math.round((deuda.monto_original + agg.cargos - agg.abonos) * 100) / 100;
-      const estado = saldo <= 0 ? 'Pagada' : 'Activa';
-      db.prepare('UPDATE mis_deudas SET saldo_pendiente = ?, estado = ? WHERE id = ?').run(saldo, estado, deuda.id);
+    return mutacionAtomica(req, res, { accion: 'deuda_movimiento', logTipo: 'deuda', endpoint: 'POST /api/debts/:id/pay', scopeTipo: 'debt', scopeId: req.params.id }, () => {
+      if (monto <= 0) throw new ClientError('El monto del movimiento debe ser mayor a 0');
+      // Solo el abono tiene tope (no se puede abonar mas que el saldo). El cargo NO tiene limite,
+      // y puede reactivar una deuda 'Pagada'.
+      if (tipo === 'abono' && monto > deuda.saldo_pendiente) {
+        throw new ClientError('El abono ($' + monto.toLocaleString('es-CO') + ') supera el saldo pendiente ($' + Math.round(deuda.saldo_pendiente).toLocaleString('es-CO') + ')');
+      }
+      // El saldo se RECALCULA desde el ledger: monto_original + SUM(cargos) - SUM(abonos).
+      // La descripcion se evalua DESPUES de aplicar (necesita el saldo ya recalculado).
+      let actualizada = null;
+      return {
+        descripcion: () => (tipo === 'cargo' ? 'Cargo' : 'Abono') + ' a deuda con ' + deuda.acreedor + ': $' + monto.toLocaleString('es-CO')
+          + ' — saldo: $' + Math.round(actualizada.saldo_pendiente).toLocaleString('es-CO') + (actualizada.estado === 'Pagada' ? ' (PAGADA)' : ''),
+        aplicar: () => {
+          db.prepare('INSERT INTO pagos_deudas(id, deuda_id, monto_pagado, fecha_pago, notas, tipo) VALUES (?, ?, ?, ?, ?, ?)')
+            .run(pagoId, deuda.id, monto, fecha, notas, tipo);
+          const agg = db.prepare("SELECT COALESCE(SUM(CASE WHEN tipo = 'cargo' THEN monto_pagado ELSE 0 END), 0) AS cargos, COALESCE(SUM(CASE WHEN tipo = 'cargo' THEN 0 ELSE monto_pagado END), 0) AS abonos FROM pagos_deudas WHERE deuda_id = ?").get(deuda.id);
+          const saldo = Math.round((deuda.monto_original + agg.cargos - agg.abonos) * 100) / 100;
+          const estado = saldo <= 0 ? 'Pagada' : 'Activa';
+          db.prepare('UPDATE mis_deudas SET saldo_pendiente = ?, estado = ? WHERE id = ?').run(saldo, estado, deuda.id);
+          actualizada = db.prepare('SELECT * FROM mis_deudas WHERE id = ?').get(deuda.id);
+          return { ok: true, pago: db.prepare('SELECT * FROM pagos_deudas WHERE id = ?').get(pagoId), deuda: actualizada };
+        }
+      };
     });
-    aplicar();
-
-    const actualizada = db.prepare('SELECT * FROM mis_deudas WHERE id = ?').get(deuda.id);
-    logAction.run('deuda', (tipo === 'cargo' ? 'Cargo' : 'Abono') + ' a deuda con ' + deuda.acreedor + ': $' + monto.toLocaleString('es-CO')
-      + ' — saldo: $' + Math.round(actualizada.saldo_pendiente).toLocaleString('es-CO') + (actualizada.estado === 'Pagada' ? ' (PAGADA)' : ''));
-
-    res.json({ ok: true, pago: db.prepare('SELECT * FROM pagos_deudas WHERE id = ?').get(pagoId), deuda: actualizada });
   });
 
   // Edita una deuda (acreedor, concepto, monto_original). Recalcula saldo y estado.
@@ -1431,24 +1731,30 @@ module.exports = function createApp(dbPath) {
     const acreedor = (req.body.acreedor || '').trim();
     const concepto = (req.body.concepto || '').trim();
     const monto = Math.round(+req.body.monto_original || 0);
-    if (!titulo) return res.status(400).json({ error: 'El titulo es obligatorio' });
-    if (!acreedor) return res.status(400).json({ error: 'El acreedor es obligatorio' });
-    if (monto <= 0) return res.status(400).json({ error: 'El monto original debe ser mayor a 0' });
-    // QA5: saldo = monto_original + SUM(cargos) - SUM(abonos). La proteccion impide bajar el monto
-    // por debajo de lo ya abonado NETO (abonos - cargos), que dejaria el saldo negativo.
-    const agg = db.prepare("SELECT COALESCE(SUM(CASE WHEN tipo = 'cargo' THEN monto_pagado ELSE 0 END), 0) AS cargos, COALESCE(SUM(CASE WHEN tipo = 'cargo' THEN 0 ELSE monto_pagado END), 0) AS abonos FROM pagos_deudas WHERE deuda_id = ?").get(req.params.id);
-    const netAbonado = Math.round(agg.abonos - agg.cargos);
-    if (monto < netAbonado) {
-      return res.status(400).json({ error: 'El monto ($' + monto.toLocaleString('es-CO') + ') no puede ser menor a lo ya abonado neto ($' + netAbonado.toLocaleString('es-CO') + ')' });
-    }
-    const nuevoSaldo = Math.round((monto + agg.cargos - agg.abonos) * 100) / 100;
-    const nuevoEstado = nuevoSaldo <= 0 ? 'Pagada' : 'Activa';
-    // QA3: fecha_creacion editable; si el payload no la trae, se conserva la existente.
-    const fecha = (req.body.fecha_creacion || '').toString().slice(0, 10) || deuda.fecha_creacion;
-    db.prepare('UPDATE mis_deudas SET titulo = ?, acreedor = ?, concepto = ?, monto_original = ?, saldo_pendiente = ?, estado = ?, fecha_creacion = ? WHERE id = ?')
-      .run(titulo, acreedor, concepto, monto, nuevoSaldo, nuevoEstado, fecha, req.params.id);
-    logAction.run('deuda', 'Editaste la deuda "' + titulo + '" con ' + acreedor + ' (monto $' + monto.toLocaleString('es-CO') + ', saldo $' + nuevoSaldo.toLocaleString('es-CO') + ')');
-    res.json(db.prepare('SELECT * FROM mis_deudas WHERE id = ?').get(req.params.id));
+    return mutacionAtomica(req, res, { accion: 'deuda_editar', logTipo: 'deuda', endpoint: 'PUT /api/debts/:id', scopeTipo: 'debt', scopeId: req.params.id }, () => {
+      if (!titulo) throw new ClientError('El titulo es obligatorio');
+      if (!acreedor) throw new ClientError('El acreedor es obligatorio');
+      if (monto <= 0) throw new ClientError('El monto original debe ser mayor a 0');
+      // QA5: saldo = monto_original + SUM(cargos) - SUM(abonos). La proteccion impide bajar el monto
+      // por debajo de lo ya abonado NETO (abonos - cargos), que dejaria el saldo negativo.
+      const agg = db.prepare("SELECT COALESCE(SUM(CASE WHEN tipo = 'cargo' THEN monto_pagado ELSE 0 END), 0) AS cargos, COALESCE(SUM(CASE WHEN tipo = 'cargo' THEN 0 ELSE monto_pagado END), 0) AS abonos FROM pagos_deudas WHERE deuda_id = ?").get(req.params.id);
+      const netAbonado = Math.round(agg.abonos - agg.cargos);
+      if (monto < netAbonado) {
+        throw new ClientError('El monto ($' + monto.toLocaleString('es-CO') + ') no puede ser menor a lo ya abonado neto ($' + netAbonado.toLocaleString('es-CO') + ')');
+      }
+      const nuevoSaldo = Math.round((monto + agg.cargos - agg.abonos) * 100) / 100;
+      const nuevoEstado = nuevoSaldo <= 0 ? 'Pagada' : 'Activa';
+      // QA3: fecha_creacion editable; si el payload no la trae, se conserva la existente.
+      const fecha = (req.body.fecha_creacion || '').toString().slice(0, 10) || deuda.fecha_creacion;
+      return {
+        descripcion: 'Editaste la deuda "' + titulo + '" con ' + acreedor + ' (monto $' + monto.toLocaleString('es-CO') + ', saldo $' + nuevoSaldo.toLocaleString('es-CO') + ')',
+        aplicar: () => {
+          db.prepare('UPDATE mis_deudas SET titulo = ?, acreedor = ?, concepto = ?, monto_original = ?, saldo_pendiente = ?, estado = ?, fecha_creacion = ? WHERE id = ?')
+            .run(titulo, acreedor, concepto, monto, nuevoSaldo, nuevoEstado, fecha, req.params.id);
+          return db.prepare('SELECT * FROM mis_deudas WHERE id = ?').get(req.params.id);
+        }
+      };
+    });
   });
 
   // Elimina una deuda y su ledger. La FK tiene ON DELETE CASCADE; ademas borramos el
@@ -1456,13 +1762,14 @@ module.exports = function createApp(dbPath) {
   app.delete('/api/debts/:id', (req, res) => {
     const deuda = db.prepare('SELECT * FROM mis_deudas WHERE id = ?').get(req.params.id);
     if (!deuda) return res.status(404).json({ error: 'Deuda no encontrada' });
-    const borrar = db.transaction(() => {
-      db.prepare('DELETE FROM pagos_deudas WHERE deuda_id = ?').run(req.params.id);
-      db.prepare('DELETE FROM mis_deudas WHERE id = ?').run(req.params.id);
-    });
-    borrar();
-    logAction.run('deuda', 'Eliminaste la deuda con ' + deuda.acreedor + ' ($' + Math.round(deuda.monto_original).toLocaleString('es-CO') + ')');
-    res.json({ ok: true });
+    // El snapshot guarda la deuda + su ledger completo -> deshacer la RESUCITA con sus movimientos.
+    return mutacionAtomica(req, res, { accion: 'deuda_eliminar', logTipo: 'deuda', endpoint: 'DELETE /api/debts/:id', scopeTipo: 'debt', scopeId: req.params.id }, () => ({
+      descripcion: 'Eliminaste la deuda con ' + deuda.acreedor + ' ($' + Math.round(deuda.monto_original).toLocaleString('es-CO') + ')',
+      aplicar: () => {
+        db.prepare('DELETE FROM pagos_deudas WHERE deuda_id = ?').run(req.params.id);
+        db.prepare('DELETE FROM mis_deudas WHERE id = ?').run(req.params.id);
+      }
+    }));
   });
 
   return app;
