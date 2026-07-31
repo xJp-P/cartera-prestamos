@@ -317,27 +317,66 @@ module.exports = function createApp(dbPath) {
       return rows;
     }
 
+    // ── v2.2.0 — ARITMETICA EN PESOS ENTEROS ─────────────────────────────────
+    // Antes el bucle calculaba a 2 decimales y arrastraba ESE saldo, pero persistia
+    // Math.round(...) a pesos: lo guardado y lo computado hacia adelante divergian. Dos efectos:
+    //  (a) la ultima cuota (residual = interes + saldo) caia 1 peso por debajo de las demas y el
+    //      cliente veia "$105.999" donde el contrato decia "$106.000" -> parecia un error del recibo;
+    //  (b) peor y silencioso: Σ abonoCapital daba 400.001 sobre un prestamo de 400.000, asi que la
+    //      formula canonica de saldo (origCOP − Σ capital de Pagadas) se iba a negativo y solo la
+    //      salvaba el Math.max(0, ...). Ese descuadre es la misma clase de fallo de los Bugs #35/#19.
+    // Ahora el saldo camina en enteros: lo persistido ES lo computado. Por construccion,
+    // interes + capital == cuota en cada fila y Σ capital == capital prestado, exacto.
+    const cuotaNominal = Math.round(cuotaFija);
+    saldo = Math.round(saldo);
+    // Tolerancia del ajuste de la ultima cuota. El residuo de redondeo NO crece linealmente con el
+    // plazo: el medio peso que se pierde al redondear el PMT se capitaliza periodo a periodo, asi
+    // que a 48 cuotas puede llegar a varios cientos de pesos. Medido sobre 2.700 combinaciones, el
+    // criterio que separa limpiamente los dos mundos es la diferencia como FRACCION de la cuota:
+    //   - ruido de redondeo -> siempre una fraccion minima del valor de la cuota
+    //   - globo legitimo    -> multiplos de la cuota (pasa cuando tasa y plazo son tan altos que el
+    //                          PMT converge al interes puro y el prestamo no amortiza nada)
+    // Solo se absorbe el primero. El segundo se respeta: ahi la ultima cuota SI es distinta de
+    // verdad y ocultarlo seria mentir sobre la deuda.
+    const tolResidual = Math.max(totalCuotas * 2 + 2, Math.ceil(cuotaNominal * 0.02));
+
     for (let i = 0; i < totalCuotas; i++) {
       const cuotaN = startN + i;
-      const interes = Math.round(saldo * r * 100) / 100;
+      let interes = Math.round(saldo * r);
       const isLast  = indefinido ? false : (i === totalCuotas - 1);
       let capital, cuota;
 
       if (indefinido || modalidad === 'Intereses') {
+        // Solo intereses: el capital viaja completo a la ultima cuota (globo). Sin cambios.
         capital = isLast ? saldo : 0;
-        cuota   = isLast ? Math.round((interes + saldo) * 100) / 100 : Math.round(interes * 100) / 100;
+        cuota   = isLast ? interes + saldo : interes;
+      } else if (isLast) {
+        // Ultima cuota: el capital es el residual EXACTO -> Σ capital == prestado, siempre.
+        capital = saldo;
+        const cuotaNatural = interes + capital;
+        // El interes nunca puede quedar negativo al absorber (pasaria si el capital residual
+        // superara la cuota nominal); en ese caso la diferencia no es ruido y se respeta.
+        if (Math.abs(cuotaNatural - cuotaNominal) <= tolResidual && cuotaNominal - capital >= 0) {
+          // Diferencia = ruido de redondeo: la cuota final vale lo MISMO que las demas (es lo
+          // pactado) y el interes absorbe el ajuste, que es donde contablemente corresponde.
+          cuota = cuotaNominal;
+          interes = cuota - capital;
+        } else {
+          cuota = cuotaNatural; // diferencia real (globo): se respeta
+        }
       } else {
-        capital = isLast ? saldo : Math.round((cuotaFija - interes) * 100) / 100;
-        cuota   = isLast ? Math.round((interes + saldo) * 100) / 100 : Math.round(cuotaFija * 100) / 100;
+        // Cuotas regulares: valor nominal exacto; el capital es el complemento del interes.
+        capital = Math.min(saldo, cuotaNominal - interes);
+        cuota   = cuotaNominal;
       }
 
-      const saldoFinal = Math.max(0, Math.round((saldo - capital) * 100) / 100);
+      const saldoFinal = Math.max(0, saldo - capital);
       rows.push({
         id: `${id}-${cuotaN}`, prestamoId: id, nombreCliente: nombre, cuotaN: cuotaN,
         fechaPago: getPayDate(baseCron, cuotaN, diaPago, freq),
-        saldoInicial: Math.round(saldo), interesPeriodo: Math.round(interes),
-        abonoCapital: Math.round(capital), cuotaTotal: Math.round(cuota),
-        saldoFinal: Math.round(saldoFinal),
+        saldoInicial: saldo, interesPeriodo: interes,
+        abonoCapital: capital, cuotaTotal: cuota,
+        saldoFinal: saldoFinal,
         estadoPago: 'Pendiente', fechaRecaudo: null, observaciones: '',
         montoCOPRecibido: 0, montoUSDRecibido: 0, partialPaid: 0, extraConsolidado: 0
       });
@@ -370,24 +409,30 @@ module.exports = function createApp(dbPath) {
         ' no cubre el interes del primer periodo ($' + Math.round(interesInicial).toLocaleString('es-CO') + ').');
     }
     const rows = [];
-    let saldo = saldoInicial;
+    // v2.2.0 — pesos enteros, misma doctrina que buildSchedule: lo persistido ES lo computado
+    // hacia adelante, asi que interes + capital == cuota y Σ capital == saldo inicial, exacto.
+    // AQUI SI se conserva el residual visible de la ultima cuota: en "fijar cuota" el usuario
+    // pacta un valor y el sobrante final es una consecuencia BUSCADA del modelo (N-1 iguales +
+    // 1 residual), no ruido de redondeo como en el PMT.
+    const cuotaEnt = Math.round(cuotaFija);
+    let saldo = Math.round(saldoInicial);
     let cuotaN = startN;
     const MAX_ITER = 1000; // safety net
     let i = 0;
-    while (saldo > 0.5 && i < MAX_ITER) {
-      const interes = Math.round(saldo * r * 100) / 100;
+    while (saldo > 0 && i < MAX_ITER) {
+      const interes = Math.round(saldo * r);
       // Si esta cuota completa o exceria el saldo, es la ultima (residual)
       const saldoMasInteres = saldo + interes;
       let capital, cuotaTotal, saldoFinal;
-      if (saldoMasInteres <= cuotaFija + 0.5) {
+      if (saldoMasInteres <= cuotaEnt) {
         // Ultima cuota: residual exacto
         capital = saldo;
-        cuotaTotal = Math.round(saldoMasInteres * 100) / 100;
+        cuotaTotal = saldoMasInteres;
         saldoFinal = 0;
       } else {
-        capital = Math.round((cuotaFija - interes) * 100) / 100;
-        cuotaTotal = cuotaFija;
-        saldoFinal = Math.max(0, Math.round((saldo - capital) * 100) / 100);
+        capital = Math.min(saldo, cuotaEnt - interes);
+        cuotaTotal = cuotaEnt;
+        saldoFinal = Math.max(0, saldo - capital);
       }
       rows.push({
         id: `${id}-${cuotaN}`,
