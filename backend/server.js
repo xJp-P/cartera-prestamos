@@ -32,22 +32,19 @@ const {
   snapshotCobros, restaurarCobros, abortarSiHuerfanos,
 } = require('./core/cobros');
 
+// Routers — Etapa 2/A5 del refactor. Cada uno exporta (ctx) => Router.
+const crearRutasVendor   = require('./routes/vendor');
+const crearRutasConfig   = require('./routes/config');
+const crearRutasActivity = require('./routes/activity');
+
 
 module.exports = function createApp(dbPath) {
 
   const app = express();
 
-  // ── Servir React desde node_modules (sin internet) ────────────────────────
-  // Usamos package.json como punto de entrada porque React 18 restringe
-  // el acceso directo a subcarpetas via require.resolve()
-  app.get('/vendor/react.js', (_req, res) => {
-    const base = path.dirname(require.resolve('react/package.json'));
-    res.sendFile(path.join(base, 'umd', 'react.production.min.js'));
-  });
-  app.get('/vendor/react-dom.js', (_req, res) => {
-    const base = path.dirname(require.resolve('react-dom/package.json'));
-    res.sendFile(path.join(base, 'umd', 'react-dom.production.min.js'));
-  });
+  // ── Rutas ─────────────────────────────────────────────────────────────────
+  // vendor va ANTES de express.json()/static, igual que en el monolito.
+  app.use(crearRutasVendor());
 
   app.use(express.json());
   app.use(express.static(path.join(PROJECT_ROOT, 'public')));
@@ -249,20 +246,6 @@ module.exports = function createApp(dbPath) {
     res.json({ ok: true, updated });
   });
 
-  // ── API: Config ───────────────────────────────────────────────────────────
-  app.get('/api/config', (_req, res) => {
-    const rows = db.prepare('SELECT key, value FROM config').all();
-    res.json(Object.fromEntries(rows.map(r => [r.key, r.value])));
-  });
-  app.put('/api/config', (req, res) => {
-    const stmt = db.prepare('INSERT OR REPLACE INTO config(key, value) VALUES (?, ?)');
-    // ATOMICO: guarda TODAS las claves o ninguna (antes, un fallo a mitad del bucle dejaba la
-    // configuracion a medio guardar). No se journaliza: no es una operacion financiera.
-    db.transaction(() => {
-      for (const [k, v] of Object.entries(req.body)) stmt.run(k, String(v));
-    })();
-    res.json({ ok: true });
-  });
 
   // ── API: Loans ────────────────────────────────────────────────────────────
   app.get('/api/loans', (_req, res) => {
@@ -1127,11 +1110,6 @@ module.exports = function createApp(dbPath) {
     });
   });
 
-  // ── API: Historial de acciones ────────────────────────────────────────────
-  app.get('/api/activity', (_req, res) => {
-    const rows = db.prepare('SELECT * FROM activity_log ORDER BY id DESC LIMIT 100').all();
-    res.json(rows);
-  });
 
   // ── API: Modulo "Mis Deudas" (registro manual, sin intereses) ───────────────
 
@@ -1279,6 +1257,20 @@ module.exports = function createApp(dbPath) {
       }
     }));
   });
+
+  // ── Montaje de los routers ────────────────────────────────────────────────
+  // `ctx` es lo que cada router necesita del closure: la conexion, las sentencias
+  // preparadas, el motor y los helpers transversales. Se arma una sola vez.
+  const ctx = {
+    db, logAction, insPayment, runPayment, insertSchedule,
+    mutacionAtomica, hashSnapshot, snapshotScope, restoreScope, podarJournal,
+    snapshotCobros, restaurarCobros, abortarSiHuerfanos, reHousekeepLoan,
+    buildSchedule, buildScheduleFixedPMT, getPayDate, tasaPeriodo, cuotasHastaHoy,
+    ClientError, genId, hoyStr,
+  };
+
+  app.use(crearRutasConfig(ctx));
+  app.use(crearRutasActivity(ctx));
 
   return app;
 };
