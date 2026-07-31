@@ -295,8 +295,8 @@ export function DebtorModal(props){
             // Fase 2: los tres rubros salen de la IMPUTACION, no de filtrar por estadoPago==='Pagado'.
             // Antes un parcial en curso era INVISIBLE aqui: el cliente abonaba $400.000 y ni el
             // capital, ni los intereses, ni el total se movian — mientras el panel de Flujo de Caja,
-            // justo debajo, si contaba el dinero. En el caso real que lo destapo, la contradiccion entre
-            // los dos bloques del MISMO recuadro fue de $400.000 exactos.
+            // justo debajo, si contaba el dinero. En el caso real que lo destapo, la contradiccion
+            // entre los dos bloques del MISMO recuadro fue de $400.000 exactos.
             var recCapHoy=Math.round(impLoan.capital);   // capital recuperado (incluye parciales)
             var recIntHoy=Math.round(impLoan.interes);   // intereses cobrados (incluye parciales)
             var recTRMHoy=Math.round(impLoan.ajuste);    // efecto cambiario, ya aislado por la imputacion
