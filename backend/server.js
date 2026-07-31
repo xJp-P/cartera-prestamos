@@ -463,11 +463,64 @@ module.exports = function createApp(dbPath) {
 
   const insPayment = db.prepare(`
     INSERT OR REPLACE INTO payments(id,prestamoId,nombreCliente,cuotaN,fechaPago,saldoInicial,
-      interesPeriodo,abonoCapital,cuotaTotal,saldoFinal,estadoPago,fechaRecaudo,observaciones,montoCOPRecibido,montoUSDRecibido,partialPaid,extraConsolidado)
+      interesPeriodo,abonoCapital,cuotaTotal,saldoFinal,estadoPago,fechaRecaudo,observaciones,montoCOPRecibido,montoUSDRecibido,partialPaid,extraConsolidado,recibos)
     VALUES (@id,@prestamoId,@nombreCliente,@cuotaN,@fechaPago,@saldoInicial,
-      @interesPeriodo,@abonoCapital,@cuotaTotal,@saldoFinal,@estadoPago,@fechaRecaudo,@observaciones,@montoCOPRecibido,@montoUSDRecibido,@partialPaid,@extraConsolidado)
+      @interesPeriodo,@abonoCapital,@cuotaTotal,@saldoFinal,@estadoPago,@fechaRecaudo,@observaciones,@montoCOPRecibido,@montoUSDRecibido,@partialPaid,@extraConsolidado,@recibos)
   `);
-  const insertSchedule = db.transaction(rows => rows.forEach(r => insPayment.run(r)));
+  // `recibos` es INSERT OR REPLACE: si no se lista, REPLACE borra la fila y la reinserta con el
+  // DEFAULT '[]' -> el ledger de caja se pierde en silencio al regenerar. Se normaliza aqui, en
+  // un solo punto, para que ningun constructor de filas tenga que acordarse de la columna.
+  const runPayment = r => insPayment.run(Object.assign({}, r, { recibos: r.recibos == null ? '[]' : r.recibos }));
+  const insertSchedule = db.transaction(rows => rows.forEach(r => runPayment(r)));
+
+  // ── Durabilidad de lo COBRADO al regenerar un cronograma ───────────────────
+  // Varios endpoints borran las cuotas Pendientes (y en un caso las En Mora) y las vuelven a
+  // generar. Si una de esas cuotas llevaba un PAGO PARCIAL encima, regenerarla destruye el
+  // registro del dinero: el cliente pago y el sistema lo olvida (misma clase de falla que el
+  // Bug #38, cuya guarda solo protege las cuotas Pagadas). Estos 3 helpers son la unica
+  // implementacion del snapshot/restauracion; no duplicar la logica en cada endpoint.
+  function snapshotCobros(filas) {
+    const map = {};
+    (filas || []).forEach(p => {
+      const tieneLedger = p.recibos && p.recibos !== '[]';
+      if ((p.partialPaid || 0) > 0 || p.observaciones || tieneLedger) {
+        map[p.cuotaN] = {
+          partialPaid: p.partialPaid || 0,
+          observaciones: p.observaciones || '',
+          recibos: p.recibos || '[]'
+        };
+      }
+    });
+    return map;
+  }
+  function restaurarCobros(schedule, map) {
+    (schedule || []).forEach(p => {
+      const s = map[p.cuotaN];
+      if (!s) return;
+      p.partialPaid = s.partialPaid;
+      p.recibos = s.recibos;
+      if (s.observaciones) p.observaciones = s.observaciones;
+    });
+  }
+  // Cuotas con DINERO encima cuyo cuotaN no existe en el cronograma nuevo (p.ej. al acortar el
+  // plazo): restaurarlas es imposible y dejarlas caer seria perder plata en silencio. El endpoint
+  // debe abortar en FASE 1 -> 4xx con la BD intacta. Las observaciones sin dinero no cuentan.
+  function cobrosHuerfanos(schedule, map) {
+    const nuevos = new Set((schedule || []).map(p => p.cuotaN));
+    return Object.keys(map)
+      .filter(n => (map[n].partialPaid || 0) > 0 && !nuevos.has(+n))
+      .map(n => ({ cuotaN: +n, partialPaid: map[n].partialPaid }));
+  }
+  function abortarSiHuerfanos(schedule, map) {
+    const h = cobrosHuerfanos(schedule, map);
+    if (h.length === 0) return;
+    const det = h.map(x => 'cuota ' + x.cuotaN + ' ($' + Math.round(x.partialPaid).toLocaleString('es-CO') + ')').join(', ');
+    throw new ClientError(
+      'La operacion eliminaria el registro de un pago parcial ya recibido: ' + det + '. ' +
+      'El nuevo cronograma no incluye esa(s) cuota(s), asi que el dinero quedaria sin donde figurar. ' +
+      'Completa o revierte ese pago parcial antes de continuar.'
+    );
+  }
 
   // ── Auto-mora al arrancar ─────────────────────────────────────────────────
   db.prepare(`UPDATE payments SET estadoPago='En Mora' WHERE estadoPago='Pendiente' AND fechaPago < ?`)
@@ -727,13 +780,9 @@ module.exports = function createApp(dbPath) {
       const prevPagadasYMora = prevRegulares.filter(p => p.estadoPago === 'Pagado' || p.estadoPago === 'En Mora');
       const prevPendientes = prevRegulares.filter(p => p.estadoPago === 'Pendiente');
 
-      // Snapshot de partialPaid + observaciones de Pendientes (para restaurar tras regenerar)
-      const partialMap = {};
-      prevPendientes.forEach(p => {
-        if ((p.partialPaid || 0) > 0 || p.observaciones) {
-          partialMap[p.cuotaN] = { partialPaid: p.partialPaid || 0, observaciones: p.observaciones || '' };
-        }
-      });
+      // Snapshot de lo cobrado sobre las Pendientes: monto parcial + ledger `recibos` (fechas
+      // reales del dinero) + observaciones, para restaurarlo tras regenerar.
+      const partialMap = snapshotCobros(prevPendientes);
 
       // Borrar SOLO las Pendientes — Pagadas y Mora quedan intactas
       prevPendientes.forEach(p => {
@@ -787,12 +836,8 @@ module.exports = function createApp(dbPath) {
       // Aplicar extra del prorrateo (proximaCuotaExtra) a la cuota objetivo si aun esta pendiente
       const extraLoan = Math.round(+loan.proximaCuotaExtra || 0);
       const extraN = +loan.proximaCuotaExtraN || 0;
+      restaurarCobros(schedule, partialMap);
       schedule.forEach(p => {
-        const partial = partialMap[p.cuotaN];
-        if (partial) {
-          p.partialPaid = partial.partialPaid;
-          if (partial.observaciones) p.observaciones = partial.observaciones;
-        }
         if (extraLoan !== 0 && p.cuotaN === extraN) {
           p.interesPeriodo = Math.round(p.interesPeriodo + extraLoan);
           p.cuotaTotal = Math.round(p.cuotaTotal + extraLoan);
@@ -903,13 +948,8 @@ module.exports = function createApp(dbPath) {
     const prevPagadasYMora = prevRegulares.filter(p => p.estadoPago === 'Pagado' || p.estadoPago === 'En Mora');
     const prevPendientes = prevRegulares.filter(p => p.estadoPago === 'Pendiente');
 
-    // Snapshot de partialPaid + observaciones de Pendientes
-    const partialMapEdit = {};
-    prevPendientes.forEach(p => {
-      if ((p.partialPaid || 0) > 0 || p.observaciones) {
-        partialMapEdit[p.cuotaN] = { partialPaid: p.partialPaid || 0, observaciones: p.observaciones || '' };
-      }
-    });
+    // Snapshot de lo cobrado sobre las Pendientes (parcial + ledger `recibos` + observaciones)
+    const partialMapEdit = snapshotCobros(prevPendientes);
 
     // (El borrado de Pendientes se aplica en la fase de escritura, mas abajo.)
 
@@ -953,12 +993,8 @@ module.exports = function createApp(dbPath) {
     // Aplicar extra del prorrateo + restaurar partialPaid
     const extraLoanEdit = Math.round(+loan.proximaCuotaExtra || 0);
     const extraNEdit = +loan.proximaCuotaExtraN || 0;
+    restaurarCobros(schedule, partialMapEdit);
     schedule.forEach(p => {
-      const partial = partialMapEdit[p.cuotaN];
-      if (partial) {
-        p.partialPaid = partial.partialPaid;
-        if (partial.observaciones) p.observaciones = partial.observaciones;
-      }
       if (extraLoanEdit !== 0 && p.cuotaN === extraNEdit) {
         p.interesPeriodo = Math.round(p.interesPeriodo + extraLoanEdit);
         p.cuotaTotal = Math.round(p.cuotaTotal + extraLoanEdit);
@@ -1029,7 +1065,7 @@ module.exports = function createApp(dbPath) {
           // Solo insertar si no existen ya
           nuevas.forEach(p => {
             const exists = db.prepare('SELECT id FROM payments WHERE id = ?').get(p.id);
-            if (!exists) insPayment.run(p);
+            if (!exists) runPayment(p);
           });
         }
       }
@@ -1326,6 +1362,15 @@ module.exports = function createApp(dbPath) {
       }
     }
 
+    // DURABILIDAD DE LO COBRADO: abajo se borran TODAS las cuotas Pendientes y se regeneran.
+    // Si alguna llevaba un pago parcial encima, sin esto el registro del dinero se destruye
+    // (el cliente pago y el sistema lo olvida). Se restaura sobre el cronograma en memoria,
+    // antes de escribir. La guarda de huerfanos NO aplica cuando el prestamo queda saldado:
+    // ahi el cronograma vacio es correcto y el parcial ya se conto en la liquidacion.
+    const cobrosPrevAb = snapshotCobros(allPays.filter(p => p.id.indexOf('-ab-') === -1 && p.estadoPago === 'Pendiente'));
+    if (nuevoSaldo > 0) abortarSiHuerfanos(nuevasCuotas, cobrosPrevAb);
+    restaurarCobros(nuevasCuotas, cobrosPrevAb);
+
     // ── FASE 2: ESCRITURA — la ejecuta mutacionAtomica dentro de UNA transaccion,
     // junto al INSERT del journal de undo y el activity_log. Todo o nada.
     let logBase = 'Registraste abono de $' + Math.round(montoNum).toLocaleString() + ' a ' + loan.nombre + (nuevoSaldo <= 0 ? ' (SALDADO)' : ' — saldo: $' + Math.round(nuevoSaldo).toLocaleString());
@@ -1379,7 +1424,7 @@ module.exports = function createApp(dbPath) {
       // nada que registrar en un abono aparte -> se omite la fila (las cuotas mora ya lo capturan).
       const crearAbono = !liquidar || abonoCapReg > 0 || abonoInt > 0;
       if (crearAbono) {
-        insPayment.run({
+        runPayment({
           id: abonoId,
           prestamoId: req.params.id,
           nombreCliente: loan.nombre,
@@ -1501,6 +1546,14 @@ module.exports = function createApp(dbPath) {
       nuevaCuotaFija = Math.round(cuotaDeseada);
       logRecalc = ' — cuota fija $' + Math.round(cuotaDeseada).toLocaleString('es-CO') + ' x ' + nuevasCuotas.length + ' cuotas (total: ' + nuevoPlazoMeses + ')';
     }
+
+    // DURABILIDAD DE LO COBRADO (ver /abono): las Pendientes se borran y se regeneran; sin este
+    // snapshot un pago parcial en curso desapareceria. Aqui el plazo PUEDE acortarse, asi que la
+    // guarda de huerfanos es especialmente pertinente: si la cuota que llevaba dinero ya no
+    // existe en el cronograma nuevo, se aborta con 4xx y la BD queda intacta.
+    const cobrosPrevRe = snapshotCobros(allPays.filter(p => p.id.indexOf('-ab-') === -1 && p.estadoPago === 'Pendiente'));
+    abortarSiHuerfanos(nuevasCuotas, cobrosPrevRe);
+    restaurarCobros(nuevasCuotas, cobrosPrevRe);
 
     // ── FASE 2: ESCRITURA — la ejecuta mutacionAtomica dentro de UNA transaccion.
     return {
@@ -1641,6 +1694,15 @@ module.exports = function createApp(dbPath) {
     if (cuotasProtegidas.length > 0) {
       nuevasCuotas = nuevasCuotas.filter(p => !idsPagadas.has(p.id));
     }
+
+    // DURABILIDAD DE LO COBRADO (ver /abono): este endpoint borra Pendientes Y En Mora, asi que
+    // el snapshot cubre ambas. Restaurar ANTES de marcar la transitoria es deliberado: asi la
+    // etiqueta "Cuota transitoria..." (que se escribe justo abajo) prevalece sobre la observacion
+    // vieja en vez de ser pisada por ella. El parcial de una cuota En Mora viaja al mismo cuotaN,
+    // que es coherente: la transitoria absorbe precisamente el interes de esa mora.
+    const cobrosPrevFecha = snapshotCobros(regularesTodas.filter(p => p.estadoPago === 'Pendiente' || p.estadoPago === 'En Mora'));
+    abortarSiHuerfanos(nuevasCuotas, cobrosPrevFecha);
+    restaurarCobros(nuevasCuotas, cobrosPrevFecha);
 
     let netAdj = 0;
     if (nuevasCuotas.length > 0) {

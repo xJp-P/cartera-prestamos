@@ -208,6 +208,99 @@ function cobrosDe(p){
   }
   return [];
 }
+// ── IMPUTACION de lo cobrado entre INTERES y CAPITAL (Fase 1) ─────────────────
+// UNA sola fuente de verdad para repartir el dinero de una cuota entre sus rubros. Antes este
+// concepto NO existia: `partialPaid` era un escalar de caja sin composicion, asi que cada
+// superficie improviso (unas ignoraban el parcial, otras lo contaban entero, y el Flujo de Caja
+// volcaba interes y capital COMPLETOS en el evento que saldaba -> una fila de $50.000 declaraba
+// $450.000 de rubros).
+//
+// REGLA DE NEGOCIO (decision del usuario, 2026-07-31): CASCADA INTERES -> CAPITAL.
+//   Es el default legal en Colombia (Codigo Civil art. 1653: el pago se imputa primero a
+//   intereses salvo consentimiento expreso del acreedor) y es coherente con el motor, que ya
+//   devengo ese interes PARA ESE PERIODO. Imputar a capital primero dejaria interes devengado
+//   y no cobrado sin columna donde vivir.
+//
+// ESTO ES PRESENTACION, NO AMORTIZACION. No toca buildSchedule, ni saldoFinal, ni el saldoReal
+// del backend (techo del abono / liquidacion). Solo REPARTE una composicion que el motor ya fijo.
+//
+// Garantias, por construccion:
+//   (1) En CADA evento:            interes + capital + ajuste === cop
+//   (2) En una cuota SALDADA:      suma(interes) === interesPeriodo  y  suma(capital) === abonoCapital
+//       -> reconcilia EXACTO con el motor y con la formula canonica de saldo, de modo que adoptar
+//          este helper no mueve el saldo de ningun prestamo existente.
+//   (3) `ajuste` es el hueco entre la caja y la composicion de la cuota. Dos origenes legitimos:
+//       en USD, el efecto cambiario (Bug #23: una cuota queda Pagada con menos COP de los
+//       proyectados) — concepto que la app YA modela; en COP, el residuo de redondeo de las filas
+//       legacy del Bug #43 (medido: 4 prestamos, 1 a 3 pesos). Se NOMBRA en vez de esconderlo
+//       inflando el capital, que es justo lo que descuadraria el saldo.
+function imputarCobros(pay){
+  var vacio={eventos:[],totales:{cobrado:0,interes:0,capital:0,ajuste:0},sinLedger:0,saldada:false};
+  if(!pay) return vacio;
+  var evs=cobrosDe(pay);
+  var saldada=pay.estadoPago==='Pagado';
+  var intTotal=Math.round(pay.interesPeriodo||0);
+  // Capital de la cuota: se ancla a `abonoCapital` PORQUE ES LA MISMA BASE de la formula canonica
+  // de saldo (origCOP - suma abonoCapital de Pagadas). Anclarlo a la reconciliacion
+  // `cuotaTotal - interes` (doctrina v1.18.0, correcta para las COLUMNAS del cronograma) haria
+  // que el capital imputado difiera del canonico en las filas legacy con residuo de redondeo del
+  // Bug #43 — medido sobre la cartera real: 4 prestamos, entre 1 y 3 pesos — y entonces adoptar
+  // este helper MOVERIA el saldo de esos prestamos sin explicacion. Defensa: si la columna viene
+  // en 0 con cuota viva (capital fantasma historico, Bugs #30/#34) se cae a la reconciliacion.
+  var capTotal=Math.round(pay.abonoCapital||0);
+  var reconc=Math.round(pay.cuotaTotal||0)-intTotal;
+  if(capTotal<=0&&reconc>0) capTotal=reconc;
+  if(capTotal<0) capTotal=0;
+  var intPend=intTotal, capPend=capTotal, cobrado=0;
+  var out=evs.map(function(e){
+    var cop=Math.round(e.cop||0);
+    var ai=Math.min(cop,intPend);          intPend-=ai;
+    var ac=Math.min(cop-ai,capPend);       capPend-=ac;
+    cobrado+=cop;
+    return {fecha:e.fecha,cop:cop,interes:ai,capital:ac,ajuste:0};
+  });
+  // Cuota SALDADA: el remanente de composicion que la caja no alcanzo a cubrir (tipico en USD
+  // cuando la TRM bajo) se ancla al ULTIMO evento, para que los totales cuadren con el motor.
+  // El desfase resultante queda visible como ajuste, no disfrazado de capital cobrado.
+  if(saldada&&out.length>0&&(intPend>0||capPend>0)){
+    var u=out[out.length-1];
+    u.interes+=intPend; u.capital+=capPend;
+    intPend=0; capPend=0;
+  }
+  // Identidad (1), calculada al final para que valga en TODOS los casos: si sobro caja sin
+  // composicion que cubrir, el excedente cae aqui en vez de inflar un rubro.
+  var ti=0,tc=0,ta=0;
+  out.forEach(function(r){ r.ajuste=r.cop-r.interes-r.capital; ti+=r.interes; tc+=r.capital; ta+=r.ajuste; });
+  // Dinero registrado en partialPaid que NINGUN evento representa: solo puede ocurrir en filas
+  // legacy anteriores al ledger `recibos` (v1.11.4). Se reporta en vez de inventarle una fecha,
+  // para no romper la identidad "KPI == suma del grafico" que cobrosDe garantiza.
+  var sinLedger=Math.max(0,Math.round(pay.partialPaid||0)-cobrado);
+  return {eventos:out,totales:{cobrado:cobrado,interes:ti,capital:tc,ajuste:ta},
+          sinLedger:sinLedger,saldada:saldada};
+}
+// SALDO CON CAJA APLICADA (Fase 3) — la cifra que se MUESTRA, en pantalla y en los PDFs.
+// = capital prestado - capital efectivamente cubierto (cuotas saldadas + abonos + la parte de
+// capital de los parciales en curso, segun la cascada de imputarCobros).
+// NO CONFUNDIR con el saldo del MOTOR (`originalCOP - suma abonoCapital de Pagadas`), que gobierna
+// el techo del abono, la liquidacion y el recalculo del PMT y NO puede moverse por un parcial.
+// Un solo helper para que ninguna superficie vuelva a inventar su propia formula: hasta la Fase 3
+// convivian TRES definiciones distintas de "saldo" y los PDFs usaban la mas atrasada.
+function saldoConCaja(loan, loanPays){
+  if(!loan) return 0;
+  var origCOP=loan.moneda==='USD'?Math.round(loan.montoOrigen*loan.trmAcordada):Math.round(loan.montoOrigen);
+  var lp=(loanPays||[]).filter(function(p){return String(p.prestamoId)===String(loan.id);});
+  var cap=lp.reduce(function(s,p){return s+imputarCobros(p).totales.capital;},0);
+  return Math.max(0,origCOP-Math.round(cap));
+}
+// Rubros que AUN se deben de una cuota, tras aplicar lo ya abonado en cascada interes -> capital.
+// Los PDFs prospectivos (factura de cobro) deben exigir esto, no la composicion nominal: si no,
+// el documento cobra un interes que el parcial ya cubrio y sus filas no suman el total exigido.
+function pendienteDeCuota(pay){
+  var intTot=Math.round(pay.interesPeriodo||0);
+  var capTot=Math.max(0,Math.round(pay.cuotaTotal||0)-intTot);
+  var imp=imputarCobros(pay).totales;
+  return {interes:Math.max(0,intTot-imp.interes), capital:Math.max(0,capTot-imp.capital)};
+}
 function fmtD(s) { return s?new Date(s+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}):'-'; }
 
 // ── FLUJO DE CAJA REAL de un prestamo (v2.2.0) ────────────────────────────────
@@ -219,19 +312,27 @@ function fmtD(s) { return s?new Date(s+'T12:00:00').toLocaleDateString('es-CO',{
 // cubre el 100% de la historia. Cada evento se enriquece con los metadatos de su fila padre:
 // el ledger aporta CUANDO y CUANTO, la fila aporta QUE era.
 function flujoCajaDe(loan, loanPays){
-  if(!loan) return {eventos:[],totales:{ingreso:0,interes:0,capital:0},inferidos:0};
+  if(!loan) return {eventos:[],totales:{ingreso:0,interes:0,capital:0,ajuste:0},inferidos:0};
   var esUSD=loan.moneda==='USD';
   var origCOP=esUSD?Math.round(loan.montoOrigen*loan.trmAcordada):Math.round(loan.montoOrigen);
   var pays=(loanPays||[]).filter(function(p){return String(p.prestamoId)===String(loan.id);});
   var evs=[];
   pays.forEach(function(p){
-    var lista=cobrosDe(p);
+    // Fase 2: el reparto interes/capital de CADA evento lo decide imputarCobros (cascada
+    // interes -> capital). Antes se volcaba la composicion COMPLETA de la cuota en su ultimo
+    // evento, de modo que un ingreso de $50.000 declaraba $450.000 de rubros y la fila del
+    // parcial mostraba "—" con el saldo congelado.
+    var imp=imputarCobros(p);
     // Sin ledger Y sin monto registrado, cobrosDe cae a cuotaTotal: el dato es RECONSTRUIDO.
     // Se marca para no presentarlo como registro exacto de caja (cobros previos a v1.11.4).
-    var inferido=!(p.montoCOPRecibido>0);
-    lista.forEach(function(ev,k){
-      evs.push({fecha:String(ev.fecha),cop:ev.cop,pay:p,k:k,nEv:lista.length,
-        esUltimo:k===lista.length-1,inferido:inferido});
+    // El ledger manda: si existe, el monto es REAL aunque montoCOPRecibido siga en 0 — que es lo
+    // que pasa con un pago parcial en curso, donde /partial solo escribe partialPaid y `recibos`.
+    var tieneLedger=false;
+    try{var _l=JSON.parse(p.recibos||'[]'); tieneLedger=Array.isArray(_l)&&_l.length>0;}catch(_){}
+    var inferido=!tieneLedger&&!(p.montoCOPRecibido>0);
+    imp.eventos.forEach(function(ev,k){
+      evs.push({fecha:String(ev.fecha),cop:ev.cop,interes:ev.interes,capital:ev.capital,ajuste:ev.ajuste,
+        pay:p,k:k,nEv:imp.eventos.length,esUltimo:k===imp.eventos.length-1,inferido:inferido});
     });
   });
   // Orden por fecha REAL del dinero; desempate por hora de registro. Importa: hay cuotas
@@ -241,31 +342,28 @@ function flujoCajaDe(loan, loanPays){
     if(c!==0) return c;
     return String(a.pay.paidAt||'').localeCompare(String(b.pay.paidAt||''));
   });
-  var saldo=origCOP,ti=0,tc=0,tg=0,inf=0;
+  var saldo=origCOP,ti=0,tc=0,tg=0,ta=0,inf=0;
   var out=evs.map(function(e,i){
     var p=e.pay;
     var esAbono=p.id&&p.id.indexOf('-ab-')!==-1;
     var saldado=p.estadoPago==='Pagado';
-    // El capital se amortiza cuando la cuota queda SALDADA, en su ultimo evento. Un parcial en
-    // curso movio caja pero todavia no amortizo: repartirlo entre interes y capital seria inventar.
-    var aplica=saldado&&e.esUltimo;
-    var interes=aplica?Math.round(p.interesPeriodo||0):0;
-    var capital=aplica?Math.round(p.abonoCapital||0):0;
-    saldo=Math.max(0,saldo-capital); ti+=interes; tc+=capital; tg+=e.cop;
+    // El capital ya viene imputado por evento -> el saldo baja con CADA peso que entra, no de
+    // golpe en el evento que salda la cuota.
+    saldo=Math.max(0,saldo-e.capital); ti+=e.interes; tc+=e.capital; tg+=e.cop; ta+=e.ajuste;
     if(e.inferido) inf++;
     var atraso=(!esAbono&&p.fechaPago)?Math.round((new Date(e.fecha+'T12:00:00')-new Date(p.fechaPago+'T12:00:00'))/86400000):null;
-    return {n:i+1,fecha:e.fecha,cop:e.cop,interes:interes,capital:capital,saldo:saldo,
-      esAbono:esAbono,parcialEnCurso:!saldado,desglosado:aplica,inferido:e.inferido,
+    return {n:i+1,fecha:e.fecha,cop:e.cop,interes:e.interes,capital:e.capital,ajuste:e.ajuste,saldo:saldo,
+      esAbono:esAbono,parcialEnCurso:!saldado,inferido:e.inferido,
       cuotaN:p.cuotaN,vence:p.fechaPago,atraso:atraso,obs:p.observaciones||'',
       usd:p.montoUSDRecibido||0,nEv:e.nEv};
   });
-  return {eventos:out,totales:{ingreso:tg,interes:ti,capital:tc},inferidos:inf,origCOP:origCOP};
+  return {eventos:out,totales:{ingreso:tg,interes:ti,capital:tc,ajuste:ta},inferidos:inf,origCOP:origCOP};
 }
 
 // ── Cálculo CENTRALIZADO de la liquidación (v1.19.0) ──────────────────────────
-// UNA sola fuente de verdad para el "Valor de liquidación": el modal, las tarjetas del
-// perfil/Cartera y los PDFs (cronograma + recibo de abono) llaman a este helper, así no
-// pueden divergir. Regla de negocio:
+// UNA sola fuente de verdad para el "Valor de liquidación": LiquidarModal, AbonoModal, la
+// tarjeta del perfil del deudor (DebtorModal) y los PDFs (cronograma + recibo de abono)
+// llaman a este helper, así no pueden divergir. Regla de negocio:
 //   Total = Capital pendiente + Intereses en mora − abonos parciales en curso (+ interés
 //           del próximo mes si el checkbox está activo)
 //   Capital pendiente = originalCOP − Σ abonoCapital de cuotas Pagadas (incluye abonos '-ab-').
@@ -493,7 +591,7 @@ function generateCronogramaPDF(loan, payments, darkMode) {
     // Filas de totales: 7 celdas (antes 6) y cada total alineado BAJO SU columna —
     // los intereses en INTERES (3a) y el capital en ABONO A CAPITAL (4a). Antes todos
     // caian en la 4a celda, que en el layout viejo era la de "Cuota".
-    loan.modalidad === 'Intereses' ? function(){var intPagados=cuotas.filter(function(p){return p.estadoPago==='Pagado';}).reduce(function(s,p){return s+p.interesPeriodo;},0);return intPagados>0?'<tr class="total-row"><td></td><td style="text-align:left">INTERESES PAGADOS</td><td><strong>'+fvT(intPagados)+'</strong></td><td></td><td></td><td></td><td></td></tr>':'';}() : loan.modalidad === 'Capital + Intereses' ? function(){var capPagado=cuotas.filter(function(p){return p.estadoPago==='Pagado';}).reduce(function(s,p){return s+Math.max(0,p.cuotaTotal-p.interesPeriodo);},0);return capPagado>0?'<tr class="total-row"><td></td><td style="text-align:left">CAPITAL PAGADO</td><td></td><td><strong>'+fvT(capPagado)+'</strong></td><td></td><td></td><td></td></tr>':'';}() : '',
+    loan.modalidad === 'Intereses' ? function(){var intPagados=cuotas.reduce(function(s,p){return s+imputarCobros(p).totales.interes;},0);return intPagados>0?'<tr class="total-row"><td></td><td style="text-align:left">INTERESES PAGADOS</td><td><strong>'+fvT(intPagados)+'</strong></td><td></td><td></td><td></td><td></td></tr>':'';}() : loan.modalidad === 'Capital + Intereses' ? function(){var capPagado=cuotas.reduce(function(s,p){return s+imputarCobros(p).totales.capital;},0);return capPagado>0?'<tr class="total-row"><td></td><td style="text-align:left">CAPITAL PAGADO</td><td></td><td><strong>'+fvT(capPagado)+'</strong></td><td></td><td></td><td></td></tr>':'';}() : '',
     totalAbonos > 0 ? '<tr class="total-row" style="background:' + (dark ? '#131d2e' : '#ddf4ff') + ' !important;color:' + (dark ? '#79c0ff' : '#0969da') + '"><td></td><td style="text-align:left">ABONOS</td><td></td><td><strong>' + fvT(totalAbonos) + '</strong></td><td></td><td></td><td></td></tr>' : '',
     '</table>',
     loan.modalidad === 'Intereses' ? '<div class="nota"><strong>Nota:</strong> Este prestamo es de plazo indefinido. Solo se muestran las cuotas generadas hasta la fecha. Los pagos de intereses continuaran hasta que el capital sea devuelto en su totalidad, ya sea al final del acuerdo o mediante abonos a capital.</div>' : '',
@@ -547,6 +645,15 @@ function generateReportePrestamosPDF(loans, pays, darkMode) {
   // del dinero. Se usa en las 4 superficies del reporte (sub-fila, orden del mapa de riesgo,
   // total vencido y su equivalente USD) para que no puedan divergir entre si.
   function saldoMora(p) { return Math.max(0, (p.cuotaTotal || 0) - (p.partialPaid || 0)); }
+  // USD: el cliente paga DOLARES, asi que lo pendiente se mide contra los dolares YA entregados
+  // (montoUSDRecibido), no reconvirtiendo los COP abonados a TRM pactada — eso exige de mas cuando
+  // la TRM del dia fue menor (doctrina del Bug #23). Misma formula que `pendUSD` en la Factura de
+  // Cobro. Sin USD registrado (parcial pagado en pesos) se cae al equivalente COP, correcto ahi.
+  function saldoMoraUSD(p, trm) {
+    if (!(trm > 0)) return 0;
+    var usdRec = +p.montoUSDRecibido || 0;
+    return usdRec > 0 ? Math.max(0, (p.cuotaTotal || 0) / trm - usdRec) : saldoMora(p) / trm;
+  }
 
   // Saldo (formula canonica: originalCOP - capital pagado) + cuotas en mora, por prestamo activo
   var rows = (loans || []).filter(function(l) { return l.estado === 'Activo'; }).map(function(l) {
@@ -554,8 +661,10 @@ function generateReportePrestamosPDF(loans, pays, darkMode) {
     var trm = l.trmAcordada || 1;
     var lp = (pays || []).filter(function(p) { return p.prestamoId === l.id; });
     var originalCOP = esUSD ? Math.round(l.montoOrigen * trm) : Math.round(l.montoOrigen);
-    var capPagado = lp.filter(function(p) { return p.estadoPago === 'Pagado'; }).reduce(function(s, p) { return s + p.abonoCapital; }, 0);
-    var saldo = Math.max(0, originalCOP - capPagado);
+    // Fase 3: saldo CON CAJA APLICADA. Antes la columna SALDO y el totalizador "capital total en
+    // la calle" eran ciegos al capital ya cubierto por un parcial en curso, mientras las sub-filas
+    // de mora SI lo descontaban (helper saldoMora, v2.1.2) -> el documento se contradecia solo.
+    var saldo = saldoConCaja(l, lp);
     var moras = lp.filter(function(p) { return p.id.indexOf('-ab-') === -1 && p.estadoPago === 'En Mora'; })
                   .sort(function(a, b) { return a.cuotaN - b.cuotaN; });
     var vencido = moras.reduce(function(s, p) { return s + saldoMora(p); }, 0);
@@ -611,7 +720,7 @@ function generateReportePrestamosPDF(loans, pays, darkMode) {
   var totalVencido = rows.reduce(function(s, r) { return s + r.moras.reduce(function(a, p) { return a + saldoMora(p); }, 0); }, 0);
   var countMora = rows.filter(function(r) { return r.moras.length > 0; }).length;
   // Porcion en USD de los totales (solo prestamos en dolares) para mostrarla al lado del COP
-  var totalVencidoUSD = rows.reduce(function(s, r) { if (!r.esUSD || r.trm <= 0) return s; return s + r.moras.reduce(function(a, p) { return a + saldoMora(p); }, 0) / r.trm; }, 0);
+  var totalVencidoUSD = rows.reduce(function(s, r) { if (!r.esUSD || r.trm <= 0) return s; return s + r.moras.reduce(function(a, p) { return a + saldoMoraUSD(p, r.trm); }, 0); }, 0);
   var totalSaldoUSD = rows.reduce(function(s, r) { if (!r.esUSD || r.trm <= 0) return s; return s + r.saldo / r.trm; }, 0);
 
   var filasHTML = rows.map(function(r) {
@@ -640,7 +749,7 @@ function generateReportePrestamosPDF(loans, pays, darkMode) {
       // pago parcial, cobrar el 100% seria cobrar dos veces lo abonado.
       var pend = saldoMora(p);
       var abonado = Math.max(0, (p.cuotaTotal || 0) - pend);
-      var usdMora = r.esUSD ? ' &middot; <span class="usd-i">' + copToUsd(pend, r.trm) + '</span>' : '';
+      var usdMora = r.esUSD ? ' &middot; <span class="usd-i">' + fmtUSD(saldoMoraUSD(p, r.trm)) + '</span>' : '';
       // Si hubo abono parcial se aclara, para que el deudor entienda por que la cifra es menor
       // que el valor de la cuota (de lo contrario el documento parece tener un error).
       var notaParcial = abonado > 0 ? ' &middot; abonado ' + fmt(abonado) + ' de ' + fmt(p.cuotaTotal) : '';
@@ -739,8 +848,18 @@ function generateRecibo(pay, loan, copRec, usdRec, allPays, opts) {
   opts = opts || {};
   var dark = document.documentElement.getAttribute('data-theme') === 'dark';
   var esUSD = loan && loan.moneda === 'USD';
-  var saldoRestante = pay.saldoFinal;
   var montoRecibido = copRec || pay.cuotaTotal;
+  // Fase 3 — imputacion de ESTE pago y saldo resultante.
+  // OJO: el recibo se emite ANTES de persistir, asi que `allPays` es el estado PREVIO y el ledger
+  // aun no contiene este evento. Por eso se parte de lo que la cuota debia (pendienteDeCuota) y se
+  // aplica la cascada al monto recibido, en vez de leer el ledger.
+  var _pendR = pendienteDeCuota(pay);
+  var _iR = Math.min(Math.round(montoRecibido), _pendR.interes);
+  var impPago = { interes: _iR, capital: Math.min(Math.round(montoRecibido) - _iR, _pendR.capital) };
+  // Saldo DESPUES del pago = saldo con caja aplicada (previo) menos el capital que este pago cubre.
+  // Antes se imprimia `pay.saldoFinal`, el cierre PROYECTADO del cronograma: una TERCERA definicion
+  // de saldo, que no coincidia ni con la app ni con los demas PDFs.
+  var saldoRestante = loan ? Math.max(0, saldoConCaja(loan, allPays) - impPago.capital) : pay.saldoFinal;
   var yaAbonadoPrev = opts.yaAbonadoPrev || 0;
   var totalAcum = yaAbonadoPrev + montoRecibido;
   // v1.12.x FIX (recibo bimonetario): en prestamos USD, si el USD recibido cubre la cuota en USD
@@ -851,8 +970,12 @@ function generateRecibo(pay, loan, copRec, usdRec, allPays, opts) {
     '<div class="row"><span class="label">Cuota</span><span class="value">#' + pay.cuotaN + ((pay && pay.extraConsolidado && pay.extraConsolidado !== 0) ? ' <span style="color:' + (dark ? '#d29922' : '#9a6700') + ';font-weight:700">(Cuota Transitoria / Interes Prorrateado)</span>' : '') + '</span></div>',
     '<div class="row"><span class="label">Fecha vencimiento</span><span class="value">' + fmtD(pay.fechaPago) + '</span></div>',
     '<div class="row"><span class="label">Fecha recaudo</span><span class="value">' + fmtD(opts.fechaRecaudo || pay.fechaRecaudo || nowStr()) + '</span></div>',
-    !esParcial && pay.interesPeriodo > 0 ? '<div class="row"><span class="label">Intereses</span><span class="value">' + fv(pay.interesPeriodo) + '</span></div>' : '',
-    !esParcial && pay.abonoCapital > 0 ? '<div class="row"><span class="label">Abono a capital</span><span class="value">' + fv(pay.abonoCapital) + '</span></div>' : '',
+    // Fase 3: se imputa ESTE pago (cascada interes -> capital), no la composicion nominal de la
+    // cuota. Antes, en un pago PARCIAL las dos filas se suprimian —el deudor no sabia a que fue su
+    // dinero— y en el pago que cerraba la cuota se imprimian los rubros COMPLETOS, de modo que el
+    // recibo del remanente de $50.000 declaraba $227.574 de interes + $222.426 de capital.
+    impPago.interes > 0 ? '<div class="row"><span class="label">Intereses</span><span class="value">' + fv(impPago.interes) + '</span></div>' : '',
+    impPago.capital > 0 ? '<div class="row"><span class="label">Abono a capital</span><span class="value">' + fv(impPago.capital) + '</span></div>' : '',
     '<div class="row"><span class="label">Monto cuota</span><span class="value">' + fv(pay.cuotaTotal) + '</span></div>',
     yaAbonadoPrev > 0 ? '<div class="row"><span class="label">Abonado previamente</span><span class="value">' + fv(yaAbonadoPrev) + '</span></div>' : '',
     '</div>',
@@ -911,12 +1034,24 @@ function generateFacturaCobro(pay, loan, allPays, datosPago, opts) {
 
   // Saldo del prestamo (formula canonica: originalCOP - capital de cuotas Pagadas)
   var originalCOP = esUSD ? Math.round(loan.montoOrigen * trm) : Math.round(loan.montoOrigen);
-  var capPagado = (allPays || []).filter(function(p){ return p.prestamoId === loan.id && p.estadoPago === 'Pagado'; })
-                                 .reduce(function(s, p){ return s + p.abonoCapital; }, 0);
-  var saldoPrestamo = Math.max(0, originalCOP - capPagado);
+  // Fase 3: saldo CON CAJA APLICADA. Antes filtraba por estadoPago==='Pagado', asi que el capital
+  // ya cubierto por un parcial era invisible: el papel que recibia el cliente imprimia un saldo
+  // clavado mientras su propio perfil en la app ya mostraba otro (medido: $172.426 de diferencia).
+  var saldoPrestamo = saldoConCaja(loan, allPays);
 
   var yaPag = +pay.partialPaid || 0;
   var aPagar = yaPag > 0 ? Math.max(0, pay.cuotaTotal - yaPag) : pay.cuotaTotal;
+  // Rubros que aun se deben, tras imputar lo ya abonado en cascada interes -> capital.
+  var pend = pendienteDeCuota(pay);
+  // USD: el cliente paga DOLARES, asi que lo pendiente se mide en dolares contra los dolares ya
+  // entregados (montoUSDRecibido). Reconvertir los COP abonados a TRM pactada exigia de mas cuando
+  // la TRM del dia fue menor: con USD 200 entregados de una cuota de USD 400 el documento pedia
+  // USD 227.19. Es la doctrina del Bug #23, que el backend ya aplica al dar la cuota por saldada
+  // comparando USD contra USD (server.js, rama `completaUSD` de /partial).
+  var usdRec = +pay.montoUSDRecibido || 0;
+  var pendUSD = (esUSD && usdRec > 0) ? Math.max(0, Math.round((pay.cuotaTotal / trm - usdRec) * 100) / 100) : null;
+  function moneyPend(){ return pendUSD !== null ? fmtUSD(pendUSD) : money(aPagar); }
+  function moneyYaPag(){ return (esUSD && usdRec > 0) ? fmtUSD(usdRec) : money(yaPag); }
   // Cuota transitoria (v1.14.0): interes prorrateado por cambio de dia de pago
   var esTransitoria = !!(pay.extraConsolidado && pay.extraConsolidado !== 0);
 
@@ -961,9 +1096,11 @@ function generateFacturaCobro(pay, loan, allPays, datosPago, opts) {
   function rowHTML(label, cop){ return '<div class="rc-row"><span class="rc-lab">' + label + '</span><span class="rc-val">' + money(cop) + '</span></div>'; }
   // Capital mostrado = Valor cuota - Interes (en la moneda visible) para que Interes + Capital cuadre
   // EXACTO con el total (en USD, redondear cada rubro por separado descuadraba 1 centavo).
+  // Se ancla a lo PENDIENTE (aPagar / pend.interes), no a la cuota nominal, para que
+  // Interes + Capital siga sumando EXACTO el total exigido cuando hay un parcial en curso.
   function moneyCapital(){
-    if (esUSD) { var t = Math.round(pay.cuotaTotal / trm * 100) / 100, i = Math.round(pay.interesPeriodo / trm * 100) / 100; return fmtUSD(t - i); }
-    return fmt(pay.cuotaTotal - pay.interesPeriodo);
+    if (esUSD) { var t = pendUSD !== null ? pendUSD : Math.round(aPagar / trm * 100) / 100, i = Math.round(pend.interes / trm * 100) / 100; return fmtUSD(t - i); }
+    return fmt(aPagar - pend.interes);
   }
 
   var comoPagar = (datosPago && String(datosPago).trim())
@@ -1038,17 +1175,20 @@ function generateFacturaCobro(pay, loan, allPays, datosPago, opts) {
     '<div class="rc-stitle">Cobro dirigido a</div>',
     '<div><div class="rc-deudor-name">' + esc(pay.nombreCliente) + '</div>' + (deudorMeta ? '<div class="rc-deudor-meta">' + deudorMeta + '</div>' : '') + '</div>',
     '<div class="rc-total"><div class="rc-total-label">Total a pagar</div>',
-    '<div class="rc-total-amt">' + money(aPagar) + '</div>',
+    '<div class="rc-total-amt">' + moneyPend() + '</div>',
     '<div style="margin-top:8px"><span class="rc-total-chip">Cuota #' + pay.cuotaN + '</span>' + (esTransitoria ? ' <span style="font-size:10px;color:' + C.amber + ';font-weight:700">(Cuota Transitoria / Interes Prorrateado)</span>' : '') + '</div>',
-    (yaPag > 0 ? '<div class="rc-total-sub">Ya abonaste ' + money(yaPag) + ' de ' + money(pay.cuotaTotal) + '</div>' : ''),
+    (yaPag > 0 ? '<div class="rc-total-sub">Ya abonaste ' + moneyYaPag() + ' de ' + money(pay.cuotaTotal) + '</div>' : ''),
     '<div class="rc-total-dates">',
     '<div class="rc-tdate"><div class="rc-tdate-lab">' + (dr > 0 ? 'Vencio el' : dr === 0 ? 'Vence hoy' : 'Vence el') + '</div><div class="rc-tdate-val" style="color:' + heroC.ac + '">' + fmtD(pay.fechaPago) + '</div></div>',
     '<div class="rc-tdate"><div class="rc-tdate-lab">Fecha de hoy</div><div class="rc-tdate-val">' + fmtD(hoyStr) + '</div></div>',
     '</div></div>',
-    '<div class="rc-stitle">Desglose de la cuota</div><div>',
-    (pay.interesPeriodo > 0 ? rowHTML(esTransitoria ? 'Interes prorrateado' : 'Interes del periodo', pay.interesPeriodo) : ''),
-    (pay.abonoCapital > 0 ? '<div class="rc-row"><span class="rc-lab">Abono a capital</span><span class="rc-val">' + moneyCapital() + '</span></div>' : ''),
-    '<div class="rc-row rc-row-tot"><span class="rc-lab">Valor de la cuota</span><span class="rc-val">' + money(pay.cuotaTotal) + '</span></div></div>',
+    // Fase 3: con un parcial en curso el desglose muestra lo que AUN SE DEBE, no la composicion
+    // nominal. Antes imprimia $227.574 de interes + $222.426 de capital bajo un "Total a pagar" de
+    // $50.000: cobraba un interes que el parcial ya habia cubierto y las filas no sumaban el total.
+    '<div class="rc-stitle">' + (yaPag > 0 ? 'Desglose de lo que falta' : 'Desglose de la cuota') + '</div><div>',
+    (pend.interes > 0 ? rowHTML(esTransitoria ? 'Interes prorrateado' : 'Interes del periodo', pend.interes) : ''),
+    (pend.capital > 0 ? '<div class="rc-row"><span class="rc-lab">Abono a capital</span><span class="rc-val">' + moneyCapital() + '</span></div>' : ''),
+    '<div class="rc-row rc-row-tot"><span class="rc-lab">' + (yaPag > 0 ? 'Total pendiente' : 'Valor de la cuota') + '</span><span class="rc-val">' + moneyPend() + '</span></div></div>',
     '<div class="rc-stitle">Detalle del prestamo</div><div class="rc-panel">',
     '<div class="rc-row"><span class="rc-lab">Modalidad</span><span class="rc-val">' + esc(loan.modalidad) + '</span></div>',
     '<div class="rc-row"><span class="rc-lab">Monto original</span><span class="rc-val">' + (esUSD ? fmtUSD(loan.montoOrigen) : fmt(loan.montoOrigen)) + '</span></div>',
@@ -1094,9 +1234,12 @@ function generateReciboAbono(loan, allPays, opts) {
 
   var lp = (allPays || []).filter(function(p){ return p.prestamoId === loan.id; });
   var originalCOP = esUSD ? Math.round(loan.montoOrigen * trm) : Math.round(loan.montoOrigen);
-  var capPagado = lp.filter(function(p){ return p.estadoPago === 'Pagado'; }).reduce(function(s, p){ return s + p.abonoCapital; }, 0);
-  var saldoDespues = Math.max(0, originalCOP - capPagado);          // formula canonica
-  var saldoAntes = (pre.saldo != null) ? pre.saldo : (saldoDespues + monto);
+  // Fase 3: saldo CON CAJA APLICADA (este recibo se emite DESPUES de persistir y recargar, asi que
+  // `lp` ya trae el abono). Antes usaba la formula canonica pura y contradecia al perfil del deudor.
+  var saldoDespues = saldoConCaja(loan, lp);
+  // Fase 3: el "Saldo anterior" que se IMPRIME usa la base con caja aplicada, para no contradecir
+  // al perfil del deudor. Se cae a `pre.saldo` (motor) si el snapshot es de una version anterior.
+  var saldoAntes = (pre.saldoCaja != null) ? pre.saldoCaja : ((pre.saldo != null) ? pre.saldo : (saldoDespues + monto));
   var pend = lp.filter(function(p){ return p.id.indexOf('-ab-') === -1 && p.estadoPago === 'Pendiente'; })
                .sort(function(a, b){ return a.cuotaN - b.cuotaN; });
   var nAbonos = lp.filter(function(p){ return p.id.indexOf('-ab-') !== -1; }).length;
@@ -1185,14 +1328,25 @@ function generateReciboAbono(loan, allPays, opts) {
     var filas = pend.map(function(p){
       return '<tr><td class="c">' + p.cuotaN + '</td><td>' + fmtD(p.fechaPago) + '</td>' +
         '<td class="r">' + money(p.interesPeriodo) + '</td><td class="r">' + money(p.abonoCapital) + '</td>' +
-        '<td class="r"><strong>' + money(p.cuotaTotal) + '</strong></td><td class="r">' + money(p.saldoFinal) + '</td></tr>';
+        '<td class="r"><strong>' + money(p.cuotaTotal) + '</strong>' +
+        ((p.partialPaid||0) > 0 ? '<br><span style="font-size:9px;opacity:.75">Abonado ' + money(Math.round(p.partialPaid)) + '</span>' : '') +
+        '</td><td class="r">' + money(p.saldoFinal) + '</td></tr>';
     }).join('');
-    var tCap = pend.reduce(function(s, p){ return s + p.abonoCapital; }, 0);
-    var tCuo = pend.reduce(function(s, p){ return s + p.cuotaTotal; }, 0);
+    // Fase 3: el TOTAL declara lo que AUN se debe. Un parcial sobre una cuota Pendiente ahora
+    // SOBREVIVE al abono (Bug #44), asi que sumar la cuota entera lo re-cobraria — y contradiria
+    // al bloque de liquidacion de este mismo recibo, que si resta los parciales. La CELDA de cada
+    // fila sigue en `cuotaTotal` (doctrina v1.18.0) con la sub-linea "Abonado X", igual que el
+    // cronograma PDF. Sin parciales, estos totales son identicos a los anteriores.
+    var tInt = pend.reduce(function(s, p){ return s + pendienteDeCuota(p).interes; }, 0);
+    var tCap = pend.reduce(function(s, p){ return s + pendienteDeCuota(p).capital; }, 0);
+    var tCuo = tInt + tCap;
+    var yaAbon = pend.reduce(function(s, p){ return s + Math.round(p.partialPaid || 0); }, 0);
     cronoHTML = '<div class="ab-st">Cronograma actualizado &mdash; ' + nRest + ' cuota' + (nRest === 1 ? '' : 's') + ' restante' + (nRest === 1 ? '' : 's') + '</div>' +
       '<table class="ab-t"><tr><th style="text-align:center">Cuota</th><th>Vence</th><th style="text-align:right">Interes</th>' +
       '<th style="text-align:right">Abono a capital</th><th style="text-align:right">Valor cuota</th><th style="text-align:right">Saldo</th></tr>' +
-      filas + '<tr class="tot"><td class="c" colspan="2">TOTAL A PAGAR</td><td class="r">' + money(intDespues) +
+      filas + '<tr class="tot"><td class="c" colspan="2">TOTAL A PAGAR' +
+      (yaAbon > 0 ? ' <span style="font-weight:400;font-size:9px">(neto de ' + money(yaAbon) + ' ya abonado)</span>' : '') +
+      '</td><td class="r">' + money(tInt) +
       '</td><td class="r">' + money(tCap) + '</td><td class="r">' + money(tCuo) + '</td><td class="r">&mdash;</td></tr></table>';
   }
 
@@ -1953,6 +2107,20 @@ function App(){
       'Corregido un error que podia BORRAR el pago de una cuota: si un deudor te pagaba una cuota dejando otras mas viejas en mora y despues le cambiabas el dia de pago, ese pago desaparecia y su deuda subia sola. Ahora las cuotas ya pagadas quedan protegidas.',
       'La tarjeta "Transacciones del Mes" del Inicio ahora si muestra los abonos parciales, en la fecha real en que recibiste el dinero (antes solo listaba cuotas pagadas por completo, asi que un pago parcial no aparecia en ninguna parte).'
     ]
+    ,'2.3.0': [
+      'Los PAGOS PARCIALES ahora cuentan en toda la app. Antes, si un cliente abonaba una parte de la cuota, el dinero entraba pero el Capital recuperado, los Intereses cobrados y el Saldo no se movian hasta que la cuota quedaba completa. Ya no: cada peso se refleja en el momento en que entra.',
+      'Cada pago se reparte entre interes y capital siguiendo la regla legal: primero cubre el interes del periodo y el sobrante baja el capital. Eso se ve fila por fila en el flujo de caja del deudor.',
+      'Corregido el reparto absurdo del flujo de caja: si una cuota se pagaba en dos veces, el segundo pago cargaba con el interes y el capital COMPLETOS. Una fila de $50.000 llegaba a declarar $450.000 en rubros. Ahora cada fila cuadra: interes + capital = lo que entro.',
+      'El saldo del prestamo baja con cada abono parcial, no de golpe cuando se cierra la cuota.',
+      'IMPORTANTE: los pagos parciales ya no se pierden. Si registrabas un abono a capital, reestructurabas o cambiabas el dia de cobro mientras una cuota tenia un pago parcial encima, el registro de ese dinero se borraba y el sistema volvia a exigir la cuota completa. Corregido.',
+      'RECIBO DE COBRO: ya no cobra intereses que el abono parcial habia cubierto. Antes el desglose mostraba los valores completos de la cuota debajo de un total ya descontado.',
+      'RECIBO DE COBRO en dolares: ya no exige de mas cuando la TRM del dia fue menor a la pactada. Ahora mide lo que falta en dolares contra los dolares que el cliente entrego.',
+      'RECIBO DE PAGO: cuando el pago es parcial, ahora dice a que se aplico el dinero (cuanto a interes y cuanto a capital). Antes esas dos lineas simplemente no se imprimian.',
+      'RECIBO DE PAGO: solo se genera si el pago quedo realmente registrado. Antes se imprimia primero, asi que un fallo de conexion podia dejar en manos del deudor el comprobante de un pago que nunca se guardo.',
+      'RECIBO DE ABONO: el cronograma que imprime ya descuenta lo que el deudor abono parcialmente; antes lo volvia a cobrar en el TOTAL A PAGAR.',
+      'REPORTE DE PRESTAMOS ACTIVOS y CRONOGRAMA en PDF: muestran el mismo saldo que ves en pantalla. Antes los documentos y la app podian dar cifras distintas del mismo prestamo.',
+      'NUEVO en el flujo de caja de prestamos en dolares: columna Efecto TRM, que muestra cuanto se perdio o gano por el cambio en cada cobro. Interes + Capital + Efecto TRM = lo que entro.'
+    ]
   };
   var s23=useState(null); var changelogDlg=s23[0]; var setChangelogDlg=s23[1];
   useEffect(function(){
@@ -2177,13 +2345,16 @@ function App(){
       // v1.18.1: faltaba el guard `if(!r)`. Ante un fallo de API (API.put atrapa el error y
       // resuelve null) este .then corria igual: cerraba el modal y anunciaba "Pago registrado"
       // pese a que la escritura NO se habia hecho. markPartial ya lo tenia bien.
-      .then(function(r){if(!r)return;setPayModal(null);showToast(status==='Pagado'?'Pago registrado':status==='En Mora'?'Marcado en mora':'Estado actualizado');});
+      // v2.3.0: resuelve con `r` (o null) para que el llamador sepa si la escritura ocurrio —
+      // PayModal lo usa para emitir el recibo SOLO si el pago se registro de verdad.
+      .then(function(r){if(!r)return null;setPayModal(null);showToast(status==='Pagado'?'Pago registrado':status==='En Mora'?'Marcado en mora':'Estado actualizado');return r;});
   },[reload]);
 
   var markPartial=useCallback(function(id,monto,fecha,obs,usdRecibido){
     return API.post('/api/payments/'+id+'/partial',{monto:monto,fecha:fecha||nowStr(),observaciones:obs||'',montoUSD:usdRecibido||0})
       .then(function(r){if(!r)return;return reload().then(function(){return r;});})
-      .then(function(r){if(!r)return;setPayModal(null);showToast(r.completa?'Pago completado':'Pago parcial registrado ($'+(r.restante||0).toLocaleString('es-CO')+' restante)');});
+      // v2.3.0: resuelve con `r` (o null) — ver markPay.
+      .then(function(r){if(!r)return null;setPayModal(null);showToast(r.completa?'Pago completado':'Pago parcial registrado ($'+(r.restante||0).toLocaleString('es-CO')+' restante)');return r;});
   },[reload]);
 
   var confirmarCalc=useCallback(function(data){
@@ -2205,7 +2376,10 @@ function App(){
     var orig=esUSD?Math.round(l.montoOrigen*trm):Math.round(l.montoOrigen);
     var capPag=lp.filter(function(p){return p.estadoPago==='Pagado';}).reduce(function(s,p){return s+p.abonoCapital;},0);
     var pend=lp.filter(function(p){return p.id.indexOf('-ab-')===-1&&p.estadoPago==='Pendiente';}).sort(function(a,b){return a.cuotaN-b.cuotaN;});
-    return {saldo:Math.max(0,orig-capPag),cuota:pend.length?pend[0].cuotaTotal:0,cuotas:pend.length,
+    // `saldo` (MOTOR) se conserva a proposito: la liquidacion envia `monto = L.capitalPendiente`,
+    // que esta en esa misma base; parearlo con el saldo con caja imprimiria un Paz y Salvo con
+    // "saldo anterior < monto aplicado". `saldoCaja` es el que se MUESTRA como "Saldo anterior".
+    return {saldo:Math.max(0,orig-capPag),saldoCaja:saldoConCaja(l,lp),cuota:pend.length?pend[0].cuotaTotal:0,cuotas:pend.length,
             intereses:pend.reduce(function(s,p){return s+p.interesPeriodo;},0),plazo:l.plazoMeses};
   }
   function _doAbono(loanId,monto,fecha,obs,montoUSD,liquidar,recalcMode,recalcValor,genRecibo,intExtra,copRecibido){
@@ -2317,12 +2491,14 @@ function App(){
         return s+p.interesPeriodo;
       },0);
     // Saldo real pendiente por préstamo activo (capital - capital recuperado)
+    // KPI "Saldo Pendiente" del Inicio. Fase 3: capital vivo = original - CAPITAL IMPUTADO.
+    // Antes restaba el parcial COMPLETO, mezclando interes dentro de una cifra de capital y
+    // dando un numero distinto al del perfil del deudor para el mismo prestamo.
     var totalDeuda=active.reduce(function(s,l){
-      var lp=pays.filter(function(p){return p.prestamoId===l.id&&p.estadoPago==='Pagado';});
       var orig=l.moneda==='USD'?Math.round(l.montoOrigen*l.trmAcordada):Math.round(l.montoOrigen);
-      var todoCap=lp.reduce(function(a,p){return a+p.abonoCapital;},0);
-      var partialPend=pays.filter(function(p){return p.prestamoId===l.id&&p.id.indexOf('-ab-')===-1&&p.estadoPago!=='Pagado';}).reduce(function(a,p){return a+(p.partialPaid||0);},0);
-      return s+Math.max(0,orig-todoCap-partialPend);
+      var capImp=pays.filter(function(p){return p.prestamoId===l.id;})
+        .reduce(function(a,p){return a+imputarCobros(p).totales.capital;},0);
+      return s+Math.max(0,orig-Math.round(capImp));
     },0);
     // ESPERADO = SOLO cuotas con fechaPago en el mes actual (la meta real, sin mora arrastrada)
     var esperadoTot=mp.reduce(function(s,p){return s+p.cuotaTotal;},0);
@@ -2371,9 +2547,13 @@ function App(){
       map[key].loans.push(l);
       if(l.estado==='Activo'){
         var origL=l.moneda==='USD'?Math.round(l.montoOrigen*l.trmAcordada):Math.round(l.montoOrigen);
-        var todoCapL=pays.filter(function(p){return p.prestamoId===l.id&&p.estadoPago==='Pagado';}).reduce(function(s,p){return s+p.abonoCapital;},0);
-        var partialPendL=pays.filter(function(p){return p.prestamoId===l.id&&p.id.indexOf('-ab-')===-1&&p.estadoPago!=='Pagado';}).reduce(function(s,p){return s+(p.partialPaid||0);},0);
-        var saldoLoan=Math.max(0,origL-todoCapL-partialPendL);
+        // Fase 2: el saldo mostrado descuenta el CAPITAL imputado, no el parcial completo. Restar
+        // `partialPend` crudo descontaba de una cifra de capital una plata que en parte era interes,
+        // y ademas contradecia al panel de Flujo de Caja del mismo perfil (medido: $200.000 de
+        // diferencia entre la cabecera y la tabla, sobre el mismo prestamo).
+        var capImpL=pays.filter(function(p){return p.prestamoId===l.id;})
+          .reduce(function(s,p){return s+imputarCobros(p).totales.capital;},0);
+        var saldoLoan=Math.max(0,origL-Math.round(capImpL));
         map[key].totalSaldo+=saldoLoan;
         if(l.moneda==='USD'&&l.trmAcordada>0) map[key].totalSaldoUSD+=Math.round(saldoLoan/l.trmAcordada*100)/100;
       }
@@ -2764,9 +2944,11 @@ function DashView(props){
     if(l.estado!=='Activo'){loanSaldoMap[l.id]=0;return;}
     var lp=pays.filter(function(p){return p.prestamoId===l.id;});
     var orig=l.moneda==='USD'?Math.round(l.montoOrigen*l.trmAcordada):Math.round(l.montoOrigen);
-    var todoCap=lp.filter(function(p){return p.estadoPago==='Pagado';}).reduce(function(a,p){return a+p.abonoCapital;},0);
-    var partialPend=lp.filter(function(p){return p.id.indexOf('-ab-')===-1&&p.estadoPago!=='Pagado';}).reduce(function(a,p){return a+(p.partialPaid||0);},0);
-    loanSaldoMap[l.id]=Math.max(0,orig-todoCap-partialPend);
+    // Fase 3: capital vivo por capital IMPUTADO (mismo criterio que el KPI del Inicio, el perfil
+    // del deudor y Rendimiento). Alimenta el "Saldo: $X" de las cards de Vence Hoy / Proximos 7
+    // dias / Mora, que antes restaban el parcial completo y discrepaban del resto de la app.
+    var capImp=lp.reduce(function(a,p){return a+imputarCobros(p).totales.capital;},0);
+    loanSaldoMap[l.id]=Math.max(0,orig-Math.round(capImp));
   });
   // Transacciones del mes: TODOS los pagos Pagados (cuotas regulares + abonos) cuya fecha de recaudo
   // cae en el mes actual, ordenados por paidAt (hora real) desc. La card tiene scroll interno.
@@ -3079,12 +3261,10 @@ function CarteraView(props){
       h('div',null,
         h('div',{style:{fontWeight:700,fontSize:17,color:'var(--text)'}},'Mis Prestamos'),
         h('div',{style:{fontSize:13,color:'var(--text2)',marginTop:2}},active.length+' activos - '+fmt(active.reduce(function(s,l){
-          var lp=pays.filter(function(p){return p.prestamoId===l.id&&p.estadoPago==='Pagado';});
-          var esAb=function(p){return p.id.indexOf('-ab-')!==-1;};
-          var origCOP2=l.moneda==='USD'?Math.round(l.montoOrigen*l.trmAcordada):Math.round(l.montoOrigen);
-          var todoCapPag2=lp.reduce(function(a,p){return a+p.abonoCapital;},0);
-          var saldo=Math.max(0,origCOP2-todoCapPag2);
-          return s+Math.max(0,Math.round(saldo));
+          // Fase 3: total del encabezado = SALDO CON CAJA APLICADA, via el unico helper. Antes
+          // replicaba inline el saldo del MOTOR y quedaba congelado ante un parcial en curso,
+          // contradiciendo al KPI del Inicio y a la lista de Deudores.
+          return s+saldoConCaja(l,pays.filter(function(p){return p.prestamoId===l.id;}));
         },0)))),
       h('button',{onClick:onAdd,style:{display:'flex',alignItems:'center',gap:6,background:'var(--green2)',color:'white',border:'none',borderRadius:10,padding:'8px 14px',fontSize:14,fontWeight:600,cursor:'pointer'}},
         h(Ico,{name:'plus',size:15,color:'white'}),' Nuevo')),
@@ -3224,14 +3404,21 @@ function CarteraView(props){
                 var esUSD=loan.moneda==='USD';
                 var regsPag=cuotasReg.filter(function(p){return p.estadoPago==='Pagado';});
                 var abonosPag=abonos.filter(function(p){return p.estadoPago==='Pagado';});
-                if(regsPag.length===0&&abonosPag.length===0)return null; // aun no se cobra nada
+                var parcialesVivos=cuotasReg.filter(function(p){return p.estadoPago!=='Pagado'&&(p.partialPaid||0)>0;});
+                if(regsPag.length===0&&abonosPag.length===0&&parcialesVivos.length===0)return null; // aun no se cobra nada
                 var trm=loan.trmAcordada;
-                var intCobrados=Math.round(regsPag.reduce(function(s,p){return s+p.interesPeriodo;},0));
-                var capRecHoy=Math.round(regsPag.reduce(function(s,p){return s+p.abonoCapital;},0)+abonosPag.reduce(function(s,p){return s+p.abonoCapital;},0));
-                var gananciaTRMReg=esUSD?regsPag.filter(function(p){return p.montoCOPRecibido&&p.montoCOPRecibido>0;}).reduce(function(s,p){return s+(p.montoCOPRecibido-p.cuotaTotal);},0):0;
-                var gananciaTRMAb=esUSD?abonosPag.filter(function(p){return p.montoUSDRecibido&&p.montoUSDRecibido>0;}).reduce(function(s,p){return s+(p.montoCOPRecibido-(p.montoUSDRecibido*trm));},0):0;
-                var gananciaTRM=Math.round(gananciaTRMReg+gananciaTRMAb);
-                var totalRecibidoCOP=capRecHoy+intCobrados+gananciaTRM;
+                // Fase 2: gemelo del bloque del perfil del deudor. Los rubros salen de la
+                // IMPUTACION (cascada interes -> capital) sobre TODOS los pagos del prestamo, de
+                // modo que un parcial en curso deja de ser invisible aqui. El gate de arriba
+                // tambien tuvo que admitirlos: antes exigia al menos una cuota Pagada, asi que un
+                // prestamo cuyo unico cobro fuera un parcial no mostraba el bloque en absoluto.
+                var impC=cuotasReg.concat(abonos).reduce(function(a,p){var t=imputarCobros(p).totales;
+                  a.cobrado+=t.cobrado; a.interes+=t.interes; a.capital+=t.capital; a.ajuste+=t.ajuste; return a;},
+                  {cobrado:0,interes:0,capital:0,ajuste:0});
+                var intCobrados=Math.round(impC.interes);
+                var capRecHoy=Math.round(impC.capital);
+                var gananciaTRM=Math.round(impC.ajuste);
+                var totalRecibidoCOP=Math.round(impC.cobrado); // caja real == capital+interes+ajuste
                 var gananciaTotalCOP=intCobrados+gananciaTRM;
                 var efectoTRMUSD=esUSD&&trm>0?(regsPag.filter(function(p){return p.montoUSDRecibido&&p.montoUSDRecibido>0;}).reduce(function(s,p){return s+(p.montoUSDRecibido-p.cuotaTotal/trm);},0)+abonosPag.filter(function(p){return p.montoUSDRecibido&&p.montoUSDRecibido>0;}).reduce(function(s,p){return s+(p.montoUSDRecibido-p.abonoCapital/trm);},0)):0;
                 var capitalUSD=esUSD&&trm>0?capRecHoy/trm:0;
@@ -3405,8 +3592,10 @@ function DebtorModal(props){
     for(var i=0;i<loans.length;i++){if(loans[i].id===p.prestamoId){loan=loans[i];break;}}
     return loan&&loan.nombre===d.nombre;
   });
-  var interesesPagados=deudorPays.filter(function(p){return p.estadoPago==='Pagado'&&p.interesPeriodo>0;})
-    .reduce(function(s,p){return s+p.interesPeriodo;},0);
+  // Fase 2: intereses REALMENTE cobrados, via imputacion — incluye la parte de interes que ya
+  // cubrio un pago parcial en curso. Antes solo contaba cuotas con estadoPago==='Pagado', asi que
+  // esta cifra de la cabecera contradecia al bloque RECAUDADO A LA FECHA del mismo perfil.
+  var interesesPagados=deudorPays.reduce(function(s,p){return s+imputarCobros(p).totales.interes;},0);
   // Ultimo pago real: solo los que tienen fechaRecaudo definida
   var ultimoPago=deudorPays.filter(function(p){return p.estadoPago==='Pagado'&&p.fechaRecaudo;})
     .sort(function(a,b){return b.fechaRecaudo.localeCompare(a.fechaRecaudo);});
@@ -3609,7 +3798,18 @@ function DebtorModal(props){
         var saldo=Math.max(0,origCOP-todoCapPag);
         var intCobrados=regulares.filter(function(p){return p.estadoPago==='Pagado';}).reduce(function(s,p){return s+p.interesPeriodo;},0);
         var partialPend=regulares.filter(function(p){return p.estadoPago!=='Pagado';}).reduce(function(s,p){return s+(p.partialPaid||0);},0);
-        var saldoDisplay=Math.max(0,saldo-partialPend);
+        // Fase 2: imputacion agregada del prestamo (cascada interes -> capital, ver imputarCobros).
+        // Es la base de TODA cifra de "lo cobrado" que se muestra abajo, de modo que el bloque
+        // RECAUDADO A LA FECHA y el panel de Flujo de Caja no puedan contradecirse: los dos
+        // iteran los mismos eventos de caja.
+        var impLoan=lp.reduce(function(a,p){var t=imputarCobros(p).totales;
+          a.cobrado+=t.cobrado; a.interes+=t.interes; a.capital+=t.capital; a.ajuste+=t.ajuste; return a;},
+          {cobrado:0,interes:0,capital:0,ajuste:0});
+        // SALDO MOSTRADO: capital vivo descontando el capital que YA cubrieron los parciales en
+        // curso. Antes restaba el parcial COMPLETO (`saldo - partialPend`), lo que descontaba de
+        // una cifra de capital una plata que en parte era interes -> restaba de mas.
+        // OJO: `saldo` (canonico) NO se toca; gobierna liquidacion, techo del abono y recalculo.
+        var saldoDisplay=Math.max(0,origCOP-Math.round(impLoan.capital));
         var esUSD=l.moneda==='USD';
         // Desglose de ganancia USD: separa intereses puros de la utilidad cambiaria (diferencia de TRM al cobro).
         // gananciaTRM = sum(montoCOPRecibido - cuotaTotal) por cuota pagada que tiene montoCOPRecibido > 0
@@ -3638,8 +3838,11 @@ function DebtorModal(props){
               h('div',{className:'mono',style:{fontSize:14,fontWeight:600,color:'var(--green)'}},fmt(saldoDisplay)),
               esUSD&&h('div',{className:'mono',style:{fontSize:10,color:'var(--blue)'}},copToUsd(saldoDisplay,l.trmAcordada)))),
           isExp&&function(){
-            var intMoraTotal=enMora.reduce(function(s,p){return s+p.interesPeriodo;},0);
-            var liquidacion=Math.max(0,saldo+intMoraTotal-partialPend);
+            // Unificado con el helper centralizado computeLiquidacion (doctrina "un solo helper",
+            // v1.19.0): esta tarjeta era la última superficie que aún recalculaba la fórmula inline.
+            var _Lq=computeLiquidacion(l,lp,{});
+            var intMoraTotal=_Lq.intMora;
+            var liquidacion=_Lq.total;
             var origCOPDisplay=esUSD?Math.round(l.montoOrigen*l.trmAcordada):Math.round(l.montoOrigen);
             // Parse comprasUSD una sola vez
             var lotes=null;
@@ -3648,14 +3851,24 @@ function DebtorModal(props){
             var lotesCOP=lotes?lotes.reduce(function(s,c){return s+(+c.monto||0)*(+c.tasa||0);},0):0;
             var lotesTRMProm=lotes&&lotesUSD>0?Math.round(lotesCOP/lotesUSD):0;
             // ── Recaudado a la fecha (flujo de caja parcial) ──
-            var recCapHoy=Math.round(todoCapPag); // capital recuperado a la fecha (parcial)
-            var recTotalHoy=recCapHoy+Math.round(intCobrados)+gananciaTRM; // total recibido hasta hoy (COP, derivado)
+            // Fase 2: los tres rubros salen de la IMPUTACION, no de filtrar por estadoPago==='Pagado'.
+            // Antes un parcial en curso era INVISIBLE aqui: el cliente abonaba $400.000 y ni el
+            // capital, ni los intereses, ni el total se movian — mientras el panel de Flujo de Caja,
+            // justo debajo, si contaba el dinero. En el caso real de Luisa la contradiccion entre
+            // los dos bloques del MISMO recuadro fue de $400.000 exactos.
+            var recCapHoy=Math.round(impLoan.capital);   // capital recuperado (incluye parciales)
+            var recIntHoy=Math.round(impLoan.interes);   // intereses cobrados (incluye parciales)
+            var recTRMHoy=Math.round(impLoan.ajuste);    // efecto cambiario, ya aislado por la imputacion
+            var recGanHoy=recIntHoy+recTRMHoy;           // ganancia = interes + efecto TRM
+            // TOTAL = caja real. Por construccion == capital + interes + ajuste, asi que las filas
+            // SUMAN el total y ademas coincide con el total del panel de Flujo de Caja.
+            var recTotalHoy=Math.round(impLoan.cobrado);
             var trm=l.trmAcordada;
             var recRegPag=regulares.filter(function(p){return p.estadoPago==='Pagado';});
             var recAboPag=abonosList.filter(function(p){return p.estadoPago==='Pagado';});
             var efectoTRMUSDHoy=esUSD&&trm>0?(recRegPag.filter(function(p){return p.montoUSDRecibido&&p.montoUSDRecibido>0;}).reduce(function(s,p){return s+(p.montoUSDRecibido-p.cuotaTotal/trm);},0)+recAboPag.filter(function(p){return p.montoUSDRecibido&&p.montoUSDRecibido>0;}).reduce(function(s,p){return s+(p.montoUSDRecibido-p.abonoCapital/trm);},0)):0;
             var recCapUSD=esUSD&&trm>0?recCapHoy/trm:0;
-            var recTotalUSD=recCapUSD+(esUSD&&trm>0?intCobrados/trm:0)+efectoTRMUSDHoy;
+            var recTotalUSD=recCapUSD+(esUSD&&trm>0?recIntHoy/trm:0)+efectoTRMUSDHoy;
             var ganTotUSDHoy=recTotalUSD-recCapUSD; // = interes USD + efecto TRM USD (real, Bug #25)
             // Helper row: label izquierda, valor derecha. divider=true \u2192 linea entre filas internas.
             function row(label,value,sub,opts){
@@ -3686,7 +3899,9 @@ function DebtorModal(props){
                   null,{first:true}),
                 row('Cuotas pagadas',h('div',{style:{fontSize:13,color:'var(--text)',fontWeight:500}},pagadas+' / '+(l.modalidad==='Intereses'?'\u221E':totalReg)))),
               // \u2500\u2500 GRUPO 3: RECAUDADO A LA FECHA (flujo de caja parcial + ganancia) \u2500\u2500
-              (pagadas>0||capAbonos>0)&&h('div',{style:grupoStyle},
+              // El gate incluye impLoan.cobrado para que un prestamo cuyo unico cobro sea un pago
+              // parcial en curso tambien muestre el bloque (antes exigia una cuota ya Pagada).
+              (pagadas>0||capAbonos>0||impLoan.cobrado>0)&&h('div',{style:grupoStyle},
                 h('div',{style:{fontSize:10,color:'var(--text3)',fontWeight:600,letterSpacing:.5,marginBottom:4}},'RECAUDADO A LA FECHA'),
                 h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',padding:'2px 0 9px',borderBottom:'1px solid var(--bg2)'}},
                   h('div',null,
@@ -3702,14 +3917,14 @@ function DebtorModal(props){
                   null,{first:true}),
                 row('Intereses cobrados',
                   h('div',null,
-                    h('div',{className:'mono',style:{fontSize:13,color:intCobrados>0?'var(--green)':'var(--text3)',fontWeight:500}},(intCobrados>0?'+':'')+fmt(intCobrados)),
-                    esUSD&&intCobrados>0&&h('div',{className:'mono',style:{fontSize:10,color:'var(--blue)'}},copToUsd(intCobrados,l.trmAcordada)))),
-                esUSD&&row(gananciaTRM<0?'Perdida por TRM':'Ganancia por TRM',
-                  h('div',{className:'mono',style:{fontSize:13,color:gananciaTRM>0?'var(--green)':gananciaTRM<0?'var(--red)':'var(--text3)',fontWeight:500}},(gananciaTRM>0?'+':gananciaTRM<0?'-':'')+fmt(Math.abs(gananciaTRM))),
-                  gananciaTRM===0?'Sin datos de TRM al cobro':gananciaTRM>0?'TRM subio al cobrar':'TRM bajo al cobrar'),
+                    h('div',{className:'mono',style:{fontSize:13,color:recIntHoy>0?'var(--green)':'var(--text3)',fontWeight:500}},(recIntHoy>0?'+':'')+fmt(recIntHoy)),
+                    esUSD&&recIntHoy>0&&h('div',{className:'mono',style:{fontSize:10,color:'var(--blue)'}},copToUsd(recIntHoy,l.trmAcordada)))),
+                esUSD&&row(recTRMHoy<0?'Perdida por TRM':'Ganancia por TRM',
+                  h('div',{className:'mono',style:{fontSize:13,color:recTRMHoy>0?'var(--green)':recTRMHoy<0?'var(--red)':'var(--text3)',fontWeight:500}},(recTRMHoy>0?'+':recTRMHoy<0?'-':'')+fmt(Math.abs(recTRMHoy))),
+                  recTRMHoy===0?'Sin datos de TRM al cobro':recTRMHoy>0?'TRM subio al cobrar':'TRM bajo al cobrar'),
                 esUSD&&row(l.modalidad==='Prestamo'?'Resultado total':'Ganancia total',
                   h('div',null,
-                    h('div',{className:'mono',style:{fontSize:14,color:gananciaTotal<0?'var(--red)':'var(--green)',fontWeight:600}},(gananciaTotal<0?'-':'+')+fmt(Math.abs(gananciaTotal))),
+                    h('div',{className:'mono',style:{fontSize:14,color:recGanHoy<0?'var(--red)':'var(--green)',fontWeight:600}},(recGanHoy<0?'-':'+')+fmt(Math.abs(recGanHoy))),
                     h('div',{className:'mono',style:{fontSize:10,color:'var(--blue)',fontWeight:400}},(ganTotUSDHoy<0?'-':'+')+fmtUSD(Math.abs(ganTotUSDHoy)))),
                   null,{strong:true}),
                 capAbonos>0&&row('Abonos a capital recibidos',
@@ -4221,21 +4436,25 @@ function PortfolioView(props){
         return s+(p.interesPeriodo/trm);
       },0):0;
 
-      // ── CAPITAL RECUPERADO: abonos explícitos + capital amortizado en cuotas regulares pagadas ──
-      var capitalAmortizado=regularesPaid.reduce(function(s,p){return s+p.abonoCapital;},0);
+      // ── CAPITAL RECUPERADO: via imputacion (Fase 3) ──────────────────────────
+      // Incluye el capital que ya cubrio un pago parcial en curso, ademas del de las cuotas
+      // saldadas y los abonos. Antes solo contaba cuotas con estadoPago==='Pagado'.
+      var capRec=Math.round(lp.reduce(function(s,p){return s+imputarCobros(p).totales.capital;},0));
+      // Se conservan para las filas INFORMATIVAS de la tarjeta ("Abonos a capital recibidos" y
+      // "Abonos parciales recibidos"); ya NO participan del saldo, que sale del capital imputado.
       var capitalAbonos=abonosPaid.reduce(function(s,p){return s+p.abonoCapital;},0);
-      var capRec=capitalAmortizado+capitalAbonos;
-
-      // ── Abonos parciales pendientes (recibidos, no reconocidos como ganancia todavia) ──
       var parcialesPend=regulares.filter(function(p){return p.estadoPago!=='Pagado';}).reduce(function(s,p){return s+(p.partialPaid||0);},0);
 
-      // ── SALDO PENDIENTE: monto original - todo capital pagado - parciales acumulados ──
+      // ── SALDO PENDIENTE: monto original - capital efectivamente recuperado ────
+      // Antes restaba ADEMAS `parcialesPend` (el parcial COMPLETO), lo que rompia la identidad
+      // documentada "Colocado = Recuperado + Saldo": el interes contenido en el parcial
+      // desaparecia de los dos lados. Con el capital imputado la identidad se cumple exacta.
       var saldo;
       if(loan.estado!=='Activo'){
         saldo=0;
       } else {
         var origR=loan.moneda==='USD'?Math.round(loan.montoOrigen*loan.trmAcordada):Math.round(loan.montoOrigen);
-        saldo=Math.max(0,origR-capRec-parcialesPend);
+        saldo=Math.max(0,origR-capRec);
       }
 
       // ── CUOTAS: solo regulares ──
@@ -4544,19 +4763,29 @@ function PayModal(props){
     var m=+montoParcial||0;
     if(m<=0){_showError('Ingresa el monto del pago parcial');return;}
     if(m>restante){_showError('El monto supera el saldo pendiente ('+fmt(restante)+')');return;}
-    if(genRecibo&&loan){generateRecibo(pay,loan,m,+parcialUSD||0,allPays,{yaAbonadoPrev:yaPagado,fechaRecaudo:fecha});}
-    _run(function(){return onPartial(pay.id,m,fecha,obs,+parcialUSD||0);});
+    // v2.3.0: el recibo se emite DESPUES de confirmar la escritura. Antes se imprimia primero, asi
+    // que un fallo de red dejaba en manos del deudor el comprobante de un pago NUNCA registrado.
+    // `allPays` se captura aqui a proposito: es el estado PREVIO, que es el que generateRecibo
+    // necesita para calcular el saldo resultante.
+    _run(function(){return onPartial(pay.id,m,fecha,obs,+parcialUSD||0).then(function(r){
+      if(r&&genRecibo&&loan) generateRecibo(pay,loan,m,+parcialUSD||0,allPays,{yaAbonadoPrev:yaPagado,fechaRecaudo:fecha});
+      return r;
+    });});
   }
   function submitCompleto(){
     if(sending) return;
     if(esUSD&&(!copRec||+copRec<=0)){_showError('Ingresa el monto COP recibido para prestamos en USD');return;}
     if(yaPagado>0){
       // Habia pagos parciales: el recibo es "Pago final" que completa la cuota
-      if(genRecibo){generateRecibo(pay,loan,restante,+usdRec||0,allPays,{yaAbonadoPrev:yaPagado,fechaRecaudo:fecha});}
-      _run(function(){return onPartial(pay.id,restante,fecha,obs,+usdRec||0);});
+      _run(function(){return onPartial(pay.id,restante,fecha,obs,+usdRec||0).then(function(r){
+        if(r&&genRecibo) generateRecibo(pay,loan,restante,+usdRec||0,allPays,{yaAbonadoPrev:yaPagado,fechaRecaudo:fecha});
+        return r;
+      });});
     } else {
-      if(genRecibo){generateRecibo(pay,loan,+copRec||pay.cuotaTotal,+usdRec||0,allPays,{fechaRecaudo:fecha});}
-      _run(function(){return onMark(pay.id,'Pagado',fecha,obs,+copRec||pay.cuotaTotal,+usdRec||0);});
+      _run(function(){return onMark(pay.id,'Pagado',fecha,obs,+copRec||pay.cuotaTotal,+usdRec||0).then(function(r){
+        if(r&&genRecibo) generateRecibo(pay,loan,+copRec||pay.cuotaTotal,+usdRec||0,allPays,{fechaRecaudo:fecha});
+        return r;
+      });});
     }
   }
 
@@ -4699,7 +4928,7 @@ function AbonoModal(props){
   var todoCapPagado=loanPays.filter(function(p){return p.estadoPago==='Pagado';}).reduce(function(s,p){return s+p.abonoCapital;},0);
   var saldoActual=Math.max(0,originalCOP-todoCapPagado);
   var intMora=loanPays.filter(function(p){return p.estadoPago==='En Mora'&&p.id.indexOf('-ab-')===-1;}).reduce(function(s,p){return s+p.interesPeriodo;},0);
-  // ── v2.0.0 — TECHO REAL DEL ABONO: espejo EXACTO de saldoReal del backend (server.js:894-902) ──
+  // ── v2.0.0 — TECHO REAL DEL ABONO: espejo EXACTO del saldoReal que se computa dentro de POST /api/loans/:id/abono ──
   // saldoActual (identico al capitalPendienteLiq del backend) es TODO el capital que se debe:
   // el del cronograma futuro MAS el atrapado en cuotas En Mora. Pero un abono normal (no
   // liquidacion) solo puede tocar el capital FUTURO: el backend valida contra saldoReal, que SI
@@ -4708,11 +4937,20 @@ function AbonoModal(props){
   // con 400 "El abono supera el saldo actual" — el usuario pagaba justo lo que la pantalla decia.
   // Prestamo / Pago Unico (esSingleCuota) NO restan su mora: alli abonoCapital ES el saldo vivo.
   var esSingleCuota=loan.modalidad==='Prestamo'||loan.modalidad==='Pago Unico';
-  var moraRows=loanPays.filter(function(p){return p.estadoPago==='En Mora';}); // sin filtro '-ab-': espejo de server.js:900
+  var moraRows=loanPays.filter(function(p){return p.estadoPago==='En Mora';}); // sin filtro '-ab-': espejo del backend
   var moraCap=moraRows.reduce(function(s,p){return s+p.abonoCapital;},0);
   var moraCount=moraRows.filter(function(p){return p.id.indexOf('-ab-')===-1;}).length;
   var saldoAbonable=esSingleCuota?Math.max(0,originalCOP-todoCapPagado):Math.max(0,originalCOP-todoCapPagado-moraCap);
   var capEnMora=Math.max(0,saldoActual-saldoAbonable); // capital que solo se cobra liquidando o pagando esas cuotas
+  // v2.3.0 — puente con el saldo que muestra el perfil. `saldoActual` es capital CONTRACTUAL
+  // (no baja con parciales); `saldoCajaModal` es el mismo capital con la caja ya aplicada. Su
+  // diferencia ES, por algebra, el capital imputado de los parciales que siguen en curso: en las
+  // cuotas Pagadas el capital imputado coincide con `abonoCapital`, asi que solo sobreviven las
+  // no Pagadas. Ambas son de PRESENTACION; el techo del abono no depende de esto.
+  var saldoCajaModal=saldoConCaja(loan,loanPays);
+  var capImputadoVivo=Math.max(0,saldoActual-saldoCajaModal);
+  var parcialVivo=loanPays.filter(function(p){return p.id.indexOf('-ab-')===-1&&p.estadoPago!=='Pagado';})
+    .reduce(function(s,p){return s+(p.partialPaid||0);},0);
   var liquidacion=computeLiquidacion(loan,loanPays,{}).total; // v1.19.0: helper centralizado
   // ── v2.0.0 — DOBLE ENTRADA OBLIGATORIA EN PRESTAMOS USD ──────────────────────────────
   // La deuda esta denominada en DOLARES y el ledger la lleva en COP a la TRM PACTADA
@@ -4836,6 +5074,18 @@ function AbonoModal(props){
       capEnMora>0&&h('div',{style:{fontSize:11,color:'var(--text3)',marginTop:4}},
         'Abonable a capital: ',h('span',{className:'mono',style:{fontWeight:700,color:'var(--text2)'}},fmt(saldoAbonable)),
         '  •  en mora: ',h('span',{className:'mono',style:{fontWeight:700,color:'var(--yellow)'}},fmt(capEnMora))),
+      // v2.3.0 — "Saldo actual" es el capital CONTRACTUAL (base del motor): no baja con un pago
+      // parcial, porque un parcial no re-amortiza. El perfil del deudor, en cambio, ya muestra el
+      // saldo CON CAJA APLICADA. Mientras un parcial esta en vuelo y ya supero el interes del
+      // periodo, las dos cifras difieren por el capital imputado y sin esta linea pareceria una
+      // inconsistencia. NO se toca `saldoActual`: alimenta `capEnMora` (desglose de la mora) y
+      // el techo del abono sigue siendo el espejo exacto del backend (Bug #36).
+      capImputadoVivo>0&&h('div',{style:{fontSize:11,color:'var(--text3)',marginTop:4,lineHeight:1.5}},
+        'Abonado en curso: ',h('span',{className:'mono',style:{fontWeight:700,color:'var(--blue)'}},fmt(parcialVivo)),
+        ' (',fmt(capImputadoVivo),' a capital)',
+        h('div',null,'Saldo con esos pagos aplicados: ',
+          h('span',{className:'mono',style:{fontWeight:700,color:'var(--text2)'}},fmt(saldoCajaModal)),
+          h('span',{style:{color:'var(--text3)'}},' — es el que ves en el perfil'))),
       intMora>0&&h('div',{className:'mono',style:{fontSize:13,color:'var(--yellow)',marginTop:4}},'Valor de liquidacion: '+fmt(liquidacion)+(esUSD?' '+copToUsd(liquidacion,loan.trmAcordada):''),
         h('div',{style:{fontSize:10,color:'var(--text3)',fontFamily:'var(--font)',marginTop:1}},'(incluye intereses en mora)'))),
     function(){
@@ -5562,6 +5812,10 @@ function FlujoCajaPanel(props){
   if(!fj.eventos.length) return null;
   var esUSD=loan.moneda==='USD';
   var trm=loan.trmAcordada||1;
+  // Efecto TRM: hueco entre la caja y la composicion de la cuota (Fase 2). Solo se materializa
+  // en prestamos USD; el filtro de $5 descarta el residuo de redondeo de las filas legacy del
+  // Bug #43, que no es informacion para el usuario sino ruido historico de 1-3 pesos.
+  var hayAjuste=fj.eventos.some(function(e){return Math.abs(e.ajuste)>5;});
   var uSub=function(cop){return esUSD?h('div',{className:'mono',style:{fontSize:9,color:'var(--blue)',fontWeight:400}},copToUsd(cop,trm)):null;};
   var th=function(txt,alin,w){return h('th',{style:{textAlign:alin||'left',padding:'5px 4px',color:'var(--text3)',fontWeight:600,fontSize:9,letterSpacing:.3,width:w}},txt);};
   var td=function(kids,alin,color,extra){return h('td',{style:Object.assign({padding:'6px 4px',textAlign:alin||'left',color:color||'var(--text)',verticalAlign:'top'},extra||{})},kids);};
@@ -5581,7 +5835,11 @@ function FlujoCajaPanel(props){
         h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:11}},
           h('thead',null,h('tr',{style:{borderBottom:'1px solid var(--border2)'}},
             th('#','left',22),th('Recaudado','left',72),th('Concepto'),
-            th('Interes','right',62),th('Capital','right',62),th('Ingreso','right',68),th('Saldo','right',66))),
+            th('Interes','right',62),th('Capital','right',62),
+            // La columna solo aparece cuando hay desfase cambiario que explicar (prestamos USD
+            // cuya cuota quedo Pagada con menos COP de los proyectados). En COP nunca se muestra.
+            hayAjuste?th('Efecto TRM','right',66):null,
+            th('Ingreso','right',68),th('Saldo','right',66))),
           h('tbody',{className:'mono'},
             fj.eventos.map(function(e){
               // Concepto: el tipo de movimiento + su referencia. Los abonos guardan un cuotaN
@@ -5597,8 +5855,9 @@ function FlujoCajaPanel(props){
                 td(String(e.n),'left','var(--text3)'),
                 td(fmtD(e.fecha).replace(/ de /g,' '),'left','var(--text2)'),
                 td([h('div',{key:'c',style:{fontFamily:'var(--font)',color:'var(--text)'}},concepto),nota],'left'),
-                td(e.desglosado?fmtN(e.interes):'—','right',e.desglosado?'var(--yellow)':'var(--text3)'),
-                td(e.desglosado?fmtN(e.capital):'—','right',e.desglosado?'var(--blue)':'var(--text3)'),
+                td(fmtN(e.interes),'right','var(--yellow)'),
+                td(fmtN(e.capital),'right','var(--blue)'),
+                hayAjuste?td(e.ajuste===0?'—':fmtN(e.ajuste),'right',e.ajuste<0?'var(--red)':(e.ajuste>0?'var(--green)':'var(--text3)')):null,
                 td([h('span',{key:'v',style:{fontWeight:600}},fmtN(e.cop)),
                     e.inferido?h('span',{key:'a',style:{color:'var(--text3)'}},'*'):null,
                     esUSD?uSub(e.cop):null],'right','var(--green)'),
@@ -5609,10 +5868,14 @@ function FlujoCajaPanel(props){
               td('','left'),td('','left'),
               td(fmtN(fj.totales.interes),'right','var(--yellow)',{fontWeight:600}),
               td(fmtN(fj.totales.capital),'right','var(--blue)',{fontWeight:600}),
+              hayAjuste?td(fmtN(fj.totales.ajuste),'right',fj.totales.ajuste<0?'var(--red)':'var(--green)',{fontWeight:600}):null,
               td([h('span',{key:'t',style:{fontWeight:600}},fmtN(fj.totales.ingreso)),esUSD?uSub(fj.totales.ingreso):null],'right','var(--green)'),
               td('','right'))))),
-      fj.inferidos>0&&h('div',{style:{fontSize:9,color:'var(--text3)',lineHeight:1.5,marginTop:7,borderTop:'1px solid var(--bg3)',paddingTop:6}},
-        h('span',{style:{color:'var(--text2)'}},'*'),' Monto reconstruido del valor de la cuota: son cobros anteriores a que la app registrara el efectivo exacto. La fecha si es la real de recaudo.')));
+      (fj.inferidos>0||hayAjuste)&&h('div',{style:{fontSize:9,color:'var(--text3)',lineHeight:1.5,marginTop:7,borderTop:'1px solid var(--bg3)',paddingTop:6}},
+        fj.inferidos>0?h('div',{key:'inf'},
+          h('span',{style:{color:'var(--text2)'}},'*'),' Monto reconstruido del valor de la cuota: son cobros anteriores a que la app registrara el efectivo exacto. La fecha si es la real de recaudo.'):null,
+        hayAjuste?h('div',{key:'trm',style:{marginTop:fj.inferidos>0?4:0}},
+          h('span',{style:{color:'var(--text2)'}},'Efecto TRM: '),'diferencia entre los pesos que entraron y el valor de la cuota a la TRM pactada. El cliente entrego los dolares completos; la brecha es cambiaria, no un saldo por cobrar. Interes + Capital + Efecto TRM = Ingreso.'):null)));
 }
 
 // ── Historial de acciones ─────────────────────────────────────────────────────
