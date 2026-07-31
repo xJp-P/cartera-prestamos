@@ -38,6 +38,9 @@ import {
 import {
   cobrosDe, imputarCobros, saldoConCaja, pendienteDeCuota, flujoCajaDe, computeLiquidacion,
 } from './core/dominio.js';
+import { ST, Ico } from './componentes/iconos.js';
+import { Modal, Fld, ABtn } from './componentes/base.js';
+import { SparklineChart } from './componentes/SparklineChart.js';
 
 'use strict';
 
@@ -1091,59 +1094,8 @@ function generateReciboAbono(loan, allPays, opts) {
   }
 }
 
-var ST = {
-  'Pagado':   {bg:'#0f2b19',color:'#3fb950',bd:'#1b4332',icon:'OK'},
-  'Pendiente':{bg:'#2b2005',color:'#d29922',bd:'#3d2e08',icon:'...'},
-  'En Mora':  {bg:'#2d1117',color:'#f85149',bd:'#5c1b18',icon:'!'}
-};
 
-var ICONS = {
-  home:      'M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z M9 22V12h6v10',
-  briefcase: 'M20 7H4a2 2 0 00-2 2v10a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2z M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2',
-  check2:    'M9 11l3 3L22 4 M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11',
-  users:     'M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2 M23 21v-2a4 4 0 00-3-3.87 M16 3.13a4 4 0 010 7.75',
-  trending:  'M23 6l-9.5 9.5-5-5L1 18 M17 6h6v6',
-  plus:      'M12 5v14 M5 12h14',
-  edit:      'M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7 M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z',
-  trash:     'M3 6h18 M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2',
-  x:         'M18 6L6 18 M6 6l12 12',
-  xCircle:   'M12 22a10 10 0 100-20 10 10 0 000 20z M15 9l-6 6 M9 9l6 6',
-  check:     'M20 6L9 17l-5-5',
-  alert:     'M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z M12 9v4 M12 17h.01',
-  clock:     'M12 2a10 10 0 100 20A10 10 0 0012 2z M12 6v6l4 2',
-  search:    'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z',
-  chevdown:  'M6 9l6 6 6-6',
-  chevleft:  'M15 18l-6-6 6-6',
-  chevright: 'M9 18l6-6-6-6',
-  bell:      'M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9 M13.73 21a2 2 0 01-3.46 0',
-  refresh:   'M23 4v6h-6 M1 20v-6h6 M3.51 9a9 9 0 0114.85-3.36L23 10 M1 14l4.64 4.36A9 9 0 0020.49 15',
-  dollar:    'M12 1v22 M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6',
-  phone:     'M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.8a19.79 19.79 0 01-3.07-8.63A2 2 0 012 0h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L6.09 7.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z',
-  menu:       'M3 12h18 M3 6h18 M3 18h18',
-  calc:       'M4 2h16a2 2 0 012 2v16a2 2 0 01-2 2H4a2 2 0 01-2-2V4a2 2 0 012-2z M8 10h.01 M12 10h.01 M16 10h.01 M8 14h.01 M12 14h.01 M16 14h.01 M8 18h.01 M12 18h.01 M16 18h.01 M8 6h8',
-  calendar:    'M19 4H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V6a2 2 0 00-2-2z M16 2v4 M8 2v4 M3 10h18',
-  download:    'M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4 M7 10l5 5 5-5 M12 15V3',
-  settings:    'M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z M12 15a3 3 0 100-6 3 3 0 000 6z',
-  folder:      'M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z',
-  'refresh-cw': 'M23 4v6h-6 M1 20v-6h6 M3.51 9a9 9 0 0114.85-3.36L23 10 M1 14l4.64 4.36A9 9 0 0020.49 15',
-  sun:         'M12 17a5 5 0 100-10 5 5 0 000 10z M12 1v2 M12 21v2 M4.22 4.22l1.42 1.42 M18.36 18.36l1.42 1.42 M1 12h2 M21 12h2 M4.22 19.78l1.42-1.42 M18.36 5.64l1.42-1.42',
-  moon:        'M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z',
-  activity:    'M22 12h-4l-3 9L9 3l-3 9H2',
-  clipboard:   'M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2 M15 2H9a1 1 0 00-1 1v1a1 1 0 001 1h6a1 1 0 001-1V3a1 1 0 00-1-1z',
-  sparkle:     'M12 2l2 6.5L20.5 10l-6.5 2L12 18.5 10 12l-6.5-1.5L10 8.5 12 2z',
-  shield:      'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z',
-  wallet:      'M4 5h16a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V7a2 2 0 012-2z M2 10h20 M7 15h3',
-  receipt:     'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z M14 2v6h6 M8 13h8 M8 17h8 M8 9h2'
-};
 
-function Ico(props){
-  var name=props.name,size=props.size||18,sw=props.sw||1.8,color=props.color||'currentColor';
-  var d=ICONS[name]; if(!d) return null;
-  var parts=d.split(' M ');
-  var paths=parts.map(function(p,i){return i===0?p:'M '+p;});
-  return h('svg',{width:size,height:size,viewBox:'0 0 24 24',fill:'none',stroke:color,strokeWidth:sw,strokeLinecap:'round',strokeLinejoin:'round'},
-    paths.map(function(p,i){return h('path',{key:i,d:p});}));
-}
 
 // ── App ───────────────────────────────────────────────────────────────────────
 function App(){
@@ -1925,73 +1877,6 @@ function App(){
       h('button',{onClick:function(){if(window.electronAPI) window.electronAPI.relaunch();},style:{background:'var(--green)',color:'#fff',border:'none',borderRadius:12,padding:'14px 48px',fontSize:15,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}},'Reiniciar')));
 }
 
-// ── Dashboard ─────────────────────────────────────────────────────────────────
-// ── Gráfico financiero compacto (SVG puro, sin dependencias) ────────────────
-// Marco clasico (eje Y Oeste + eje X Sur solidos), grid tenue punteado, linea de
-// tendencia + relleno degradado, etiquetas Y (max/min, abreviadas k/M) e eje X (meses).
-// Caja ESTRICTA via overflow:hidden. Padding asimetrico: padL deja aire al eje Y y sus
-// etiquetas; padB deja aire al eje X + la fila de meses. Todo cabe dentro de w x hgt.
-function SparklineChart(props){
-  var _hov=useState(null);var hoveredIndex=_hov[0];var setHoveredIndex=_hov[1];
-  var data=props.data||[];
-  if(data.length<2) return null;
-  var labels=props.labels||[],tipLabels=props.tipLabels||[];
-  var w=props.width||298,hgt=props.height||98,stroke=props.color||'var(--green)';
-  var padL=32,padR=20,padT=16,padB=22;                // padding moderado (el fix real fue z-index): recupera variacion vertical. padB aloja eje X + meses
-  var plotL=padL,plotR=w-padR,plotT=padT,plotB=hgt-padB;
-  var min=Math.min.apply(null,data),max=Math.max.apply(null,data),flat=max===min,range=(max-min)||1,n=data.length;
-  function fmtSpark(v){var a=Math.abs(v);if(a>=1e6)return (v/1e6).toFixed(a>=1e7?0:1).replace(/\.0$/,'')+'M';if(a>=1e3)return Math.round(v/1e3)+'k';return String(Math.round(v));}
-  var pts=data.map(function(v,i){
-    var x=plotL+(i*(plotR-plotL)/(n-1));
-    var y=flat?(plotT+plotB)/2:plotT+(1-(v-min)/range)*(plotB-plotT);
-    return [Math.round(x*10)/10,Math.round(y*10)/10];
-  });
-  var line=pts.map(function(p,i){return (i===0?'M':'L')+p[0]+' '+p[1];}).join(' ');
-  var area='M'+pts[0][0]+' '+plotB+' '+pts.map(function(p){return 'L'+p[0]+' '+p[1];}).join(' ')+' L'+pts[n-1][0]+' '+plotB+' Z';
-  var gid='spark-'+String(props.id||'g').replace(/[^a-z0-9]/gi,'');
-  var lblStyle={fill:'var(--text3)',fontSize:9,fontFamily:"'Cascadia Code','Consolas',monospace"};
-  var hGrid=[0.25,0.5,0.75].map(function(f){return Math.round((plotT+f*(plotB-plotT))*10)/10;});
-  // Tooltip interactivo: geometria del punto activo, anclada para NO salirse de la caja.
-  var dense=n>14,rBase=dense?2:3.4,mono="'Cascadia Code','Consolas',monospace",tip=null;
-  if(hoveredIndex!=null&&pts[hoveredIndex]){
-    var cx=pts[hoveredIndex][0],cy=pts[hoveredIndex][1];
-    var tLab=tipLabels[hoveredIndex]||labels[hoveredIndex]||('#'+(hoveredIndex+1));
-    var tVal=fmt(data[hoveredIndex]);
-    // Anclaje NATIVO con text-anchor (el motor de fuentes resuelve el ancho; sin medir tw).
-    // rect de ancho FIJO; mitad derecha -> tooltip a la IZQ, mitad izq -> a la DER. Auto-acotado.
-    var rightHalf=cx>w/2,anchor=rightHalf?'end':'start',rectW=78,rectH=26;
-    var textX=rightHalf?cx-12:cx+12;
-    var rectX=rightHalf?textX-(rectW-8):textX-5;
-    var rectY=(cy<30)?cy+12:cy-12-rectH;                 // punto alto (cerca del techo) -> tooltip ABAJO; si no, arriba
-    rectY=Math.max(2,Math.min(rectY,hgt-rectH-2));        // clamp vertical (textos relativos a rectY -> sin desync)
-    tip={cx:cx,cy:cy,tLab:tLab,tVal:tVal,anchor:anchor,textX:textX,rectX:rectX,rectW:rectW,rectH:rectH,rectY:rectY};
-  }
-  return h('svg',{width:w,height:hgt,viewBox:'0 0 '+w+' '+hgt,style:Object.assign({display:'block',overflow:'hidden'},props.style||{})},
-    h('defs',null,
-      h('linearGradient',{id:gid,x1:'0',y1:'0',x2:'0',y2:'1'},
-        h('stop',{offset:'0%',style:{stopColor:stroke,stopOpacity:.24}}),
-        h('stop',{offset:'100%',style:{stopColor:stroke,stopOpacity:0}}))),
-    hGrid.map(function(y,i){return h('line',{key:'h'+i,x1:plotL,y1:y,x2:plotR,y2:y,stroke:'var(--border)',strokeWidth:1,strokeDasharray:'2,4',opacity:.5});}),
-    pts.map(function(p,i){return (!labels.length||labels[i])?h('line',{key:'v'+i,x1:p[0],y1:plotT,x2:p[0],y2:plotB,stroke:'var(--border)',strokeWidth:1,strokeDasharray:'2,4',opacity:.5}):null;}),
-    h('path',{d:area,fill:'url(#'+gid+')',stroke:'none'}),
-    h('line',{x1:plotL,y1:plotT,x2:plotL,y2:plotB,stroke:'var(--border)',strokeWidth:1}),
-    h('line',{x1:plotL,y1:plotB,x2:plotR,y2:plotB,stroke:'var(--border)',strokeWidth:1}),
-    h('path',{d:line,fill:'none',stroke:stroke,strokeWidth:2,strokeLinecap:'round',strokeLinejoin:'round'}),
-    tip&&h('line',{x1:tip.cx,y1:tip.cy,x2:tip.cx,y2:plotB,stroke:stroke,strokeWidth:1,strokeDasharray:'2,2',opacity:.55}),
-    pts.map(function(p,i){
-      var act=i===hoveredIndex,on=data[i]>0;   // on = periodo con actividad (>0) -> dorado; si es 0 -> invisible pero interactivo
-      return on
-        ? h('circle',{key:'pt'+i,cx:p[0],cy:p[1],r:act?rBase+2:rBase,fill:'var(--gold)',stroke:'var(--bg2)',strokeWidth:act?1.5:1,opacity:act?1:(dense?.6:.9),pointerEvents:'all',style:{cursor:'pointer'},onMouseEnter:function(){setHoveredIndex(i);},onMouseLeave:function(){setHoveredIndex(null);}})
-        : h('circle',{key:'pt'+i,cx:p[0],cy:p[1],r:dense?3.2:4,fill:'transparent',pointerEvents:'all',style:{cursor:'pointer'},onMouseEnter:function(){setHoveredIndex(i);},onMouseLeave:function(){setHoveredIndex(null);}});
-    }),
-    h('text',{x:plotL-4,y:plotT+3,textAnchor:'end',style:lblStyle},fmtSpark(max)),
-    h('text',{x:plotL-4,y:plotB,textAnchor:'end',style:lblStyle},fmtSpark(min)),
-    labels.length===n&&pts.map(function(p,i){return labels[i]?h('text',{key:'m'+i,x:p[0],y:plotB+13,textAnchor:'middle',style:lblStyle},labels[i]):null;}),
-    tip&&h('g',{style:{pointerEvents:'none'}},
-      h('rect',{x:tip.rectX,y:tip.rectY,width:tip.rectW,height:tip.rectH,rx:4,ry:4,fill:'var(--bg4)',stroke:'var(--border)',strokeWidth:1}),
-      h('text',{x:tip.textX,y:tip.rectY+10,textAnchor:tip.anchor,style:{fill:'var(--text3)',fontSize:8.5,fontFamily:mono}},tip.tLab),
-      h('text',{x:tip.textX,y:tip.rectY+21,textAnchor:tip.anchor,style:{fill:'var(--text)',fontSize:10,fontWeight:700,fontFamily:mono}},tip.tVal)));
-}
 
 function DashView(props){
   var metrics=props.metrics,isEmpty=props.isEmpty,onNav=props.onNav,loans=props.loans||[],pays=props.pays||[],onNameClick=props.onNameClick,onNewLoan=props.onNewLoan;
@@ -5584,25 +5469,6 @@ function DevView(props){
         h(Ico,{name:'refresh',size:13,color:'var(--text2)'}),'Sincronizar manualmente')));
 }
 
-// ── Shared ────────────────────────────────────────────────────────────────────
-function Modal(props){
-  var children=props.children,onClose=props.onClose,tall=props.tall,wide=props.wide;
-  // QA3: el backdrop ya NO cierra el modal (proteccion contra perdida de datos). Solo cierran la X o los botones de accion.
-  return h('div',{style:{position:'fixed',inset:0,background:'rgba(0,0,0,.75)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100,backdropFilter:'blur(4px)'}},
-    h('div',{className:'modal-sheet',style:{background:'var(--bg2)',border:'1px solid var(--border)',width:'90%',maxWidth:wide?700:560,borderRadius:16,maxHeight:tall?'90vh':'80vh',display:'flex',flexDirection:'column',boxShadow:'0 8px 32px rgba(0,0,0,.4)'}},
-      h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'16px 20px 0',flexShrink:0}},
-        h('div',null),
-        h('button',{onClick:onClose,style:{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:99,width:30,height:30,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer'}},
-          h(Ico,{name:'x',size:14,color:'var(--text2)',sw:2.5}))),
-      h('div',{style:{overflowY:'auto',padding:'12px 20px 24px',display:'flex',flexDirection:'column',gap:12,flex:1}},children)));
-}
-function Fld(props){return h('div',{style:{marginTop:6}},h('div',{style:{fontSize:12,fontWeight:600,color:'var(--text2)',marginBottom:5}},props.label),props.children);}
-// v1.18.1 — prop opcional `disabled` (para las guardas anti doble-submit). Sin ella el
-// componente se comporta exactamente igual que antes, asi que los usos existentes no cambian.
-function ABtn(props){
-  var dis=!!props.disabled;
-  return h('button',{onClick:dis?undefined:props.onClick,disabled:dis,style:{flex:1,background:dis?'var(--bg3)':props.color,color:dis?'var(--text3)':'white',border:'none',borderRadius:12,padding:'12px 8px',fontSize:13,fontWeight:700,cursor:dis?'not-allowed':'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:6,opacity:dis?.75:1}},h(Ico,{name:props.icon,size:15,color:dis?'var(--text3)':'white',sw:2.2}),props.label);
-}
 // ── ConfirmUndoModal (v2.1 — "La Bestia" Fase 2) ──────────────────────────────
 // Confirmacion de deshacer. NUNCA se revierte con un solo clic: deshacer una operacion
 // financiera puede contradecir un documento que el deudor ya tiene en la mano, asi que el

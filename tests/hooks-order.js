@@ -123,11 +123,20 @@ function extraerLinea(texto, idx) {
 }
 
 // Localiza los componentes React: `function Nombre(` con Nombre en MayusculaInicial.
+//
+// Acepta el prefijo `export` (y `export default`). Sin eso, en cuanto el refactor
+// movio los primeros componentes a modulos, el analizador dejo de verlos EN
+// SILENCIO: paso de 29 a 24 componentes y siguio reportando 8/8 OK. El piso de
+// ">= 20 componentes" tampoco salta, porque la caida es gradual — habria ido
+// quedandose ciego justo en B7, que mueve las 23 vistas y modales. Es la misma
+// clase de fallo que el `const` invisible en el contexto vm (ver load-frontend.js).
+const RE_COMPONENTE = /^(?:export\s+(?:default\s+)?)?function\s+([A-Z][A-Za-z0-9_]*)\s*\(/;
+
 function extraerComponentes(codigo, offset) {
   const lineas = codigo.split('\n');
   const comps = [];
   for (let i = 0; i < lineas.length; i++) {
-    const m = /^function\s+([A-Z][A-Za-z0-9_]*)\s*\(/.exec(lineas[i]);
+    const m = RE_COMPONENTE.exec(lineas[i]);
     if (!m) continue;
     let depth = 0, empezo = false, fin = i;
     for (let j = i; j < lineas.length; j++) {
@@ -177,6 +186,17 @@ function autoPrueba(R) {
       esperado: 1,
       src: [
         'function Cebo(props){',
+        '  var s = useState(0);',
+        '  if (props.loading) return h("div", null, "cargando");',
+        '  var t = useCallback(function(){}, []);',
+        '  return h("div", null, t);',
+        '}'].join('\n'),
+    },
+    {
+      nombre: 'MALO: idem pero como `export function` (forma de los modulos)',
+      esperado: 1,
+      src: [
+        'export function CeboExportado(props){',
         '  var s = useState(0);',
         '  if (props.loading) return h("div", null, "cargando");',
         '  var t = useCallback(function(){}, []);',
