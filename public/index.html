@@ -1814,7 +1814,7 @@ function App(){
     '1.8.3': [
       'Recibo PDF ahora incluye el monto del prestamo en el nombre del archivo',
       'Util cuando un deudor tiene varios prestamos activos: identificas a cual corresponde el recibo',
-      'Formato: "Recibo Prestamo $1.500.000 - Sebastian Reyes - Cuota 3.pdf"',
+      'Formato: "Recibo Prestamo $1.500.000 - Nombre del Cliente - Cuota 3.pdf"',
       'Ajuste tipografico general: jerarquia visual mas clara entre totales y valores individuales',
       'Inicio: totales de cada seccion en semibold, montos individuales mas ligeros',
       'Pagos: totales mas grandes (15px) y montos individuales mas pequeños (14px)',
@@ -2060,7 +2060,7 @@ function App(){
       'Corregido un error que podia registrar el MISMO abono dos veces cuando el boton recibia un doble clic (o un doble evento): se guardaba dos veces con milisegundos de diferencia y descontaba el doble del capital. Ahora el boton se bloquea y muestra "Registrando..." mientras se guarda el abono.',
       'El modal de abono tiene un nuevo check "Generar recibo de abono" para decidir si quieres el PDF o no, igual que ya existia al registrar un pago.',
       'El recibo de abono ahora incluye, entre el impacto y el cronograma, el valor exacto para liquidar la deuda hoy: "¿Quieres liquidar la deuda hoy?". Se calcula igual que el modal "Liquidar deuda" (capital pendiente + intereses en mora - abonos parciales en curso, sin los intereses futuros del cronograma), asi que las dos cifras siempre coinciden.',
-      'El recibo de abono se descarga con el monto en el nombre del archivo (ej. "AB David Pichott - $560.000") en vez de un consecutivo, para que sea mas facil de encontrar.'
+      'El recibo de abono se descarga con el monto en el nombre del archivo (ej. "AB Nombre del Cliente - $560.000") en vez de un consecutivo, para que sea mas facil de encontrar.'
     ],
     '1.18.0': [
       'Todos los cronogramas de la app y de los PDF usan ahora las MISMAS columnas y los mismos nombres: # / Vence / Interes / Abono a capital / Valor cuota / Saldo / Estado. Antes cada pantalla usaba terminos distintos ("Fecha" o "Vence", "Capital" o "Abono a capital", "Deuda" o "Saldo") y costaba comparar un documento con otro.',
@@ -3854,7 +3854,7 @@ function DebtorModal(props){
             // Fase 2: los tres rubros salen de la IMPUTACION, no de filtrar por estadoPago==='Pagado'.
             // Antes un parcial en curso era INVISIBLE aqui: el cliente abonaba $400.000 y ni el
             // capital, ni los intereses, ni el total se movian — mientras el panel de Flujo de Caja,
-            // justo debajo, si contaba el dinero. En el caso real de Luisa la contradiccion entre
+            // justo debajo, si contaba el dinero. En el caso real que lo destapo, la contradiccion entre
             // los dos bloques del MISMO recuadro fue de $400.000 exactos.
             var recCapHoy=Math.round(impLoan.capital);   // capital recuperado (incluye parciales)
             var recIntHoy=Math.round(impLoan.interes);   // intereses cobrados (incluye parciales)
