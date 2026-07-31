@@ -21,16 +21,11 @@ const {
 const { aplicarEsquema } = require('./db/schema');
 const { ClientError }    = require('./core/errors');
 
-// Fecha local (no UTC) en formato YYYY-MM-DD
-function hoyStr() {
-  const d = new Date();
-  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-}
+// Helpers puros, statements y housekeeping — Etapa 2/A3 del refactor.
+const { hoyStr, genId }     = require('./core/util');
+const { crearStatements }   = require('./db/statements');
+const { crearHousekeeping } = require('./db/housekeeping');
 
-// ID unico estilo timestamp + sufijo aleatorio (mismo formato que los IDs de loans)
-function genId() {
-  return Date.now().toString() + Math.random().toString(36).slice(2, 6);
-}
 
 module.exports = function createApp(dbPath) {
 
@@ -59,24 +54,13 @@ module.exports = function createApp(dbPath) {
   // `insPayment` nombra 6 columnas que solo existen despues de los ALTER.
   aplicarEsquema(db);
 
-  const logAction = db.prepare('INSERT INTO activity_log(tipo, mensaje) VALUES (?, ?)');
+  // ── Sentencias preparadas ─────────────────────────────────────────────────
+  // Viven en db/statements.js (Etapa 2/A3). DESPUES de aplicarEsquema(db): 6 de las
+  // columnas que nombra `insPayment` solo existen tras los ALTER.
+  const { logAction, insPayment, runPayment, insertSchedule, insUndo, logActionUndo } = crearStatements(db);
 
-
-  // ── Motor financiero ──────────────────────────────────────────────────────
-  // Vive en core/engine.js (Etapa 2/A1). Es PURO: no toca `db` ni el closure,
-  // asi que se importa a nivel de modulo y queda en scope para todo `createApp`.
-
-  const insPayment = db.prepare(`
-    INSERT OR REPLACE INTO payments(id,prestamoId,nombreCliente,cuotaN,fechaPago,saldoInicial,
-      interesPeriodo,abonoCapital,cuotaTotal,saldoFinal,estadoPago,fechaRecaudo,observaciones,montoCOPRecibido,montoUSDRecibido,partialPaid,extraConsolidado,recibos)
-    VALUES (@id,@prestamoId,@nombreCliente,@cuotaN,@fechaPago,@saldoInicial,
-      @interesPeriodo,@abonoCapital,@cuotaTotal,@saldoFinal,@estadoPago,@fechaRecaudo,@observaciones,@montoCOPRecibido,@montoUSDRecibido,@partialPaid,@extraConsolidado,@recibos)
-  `);
-  // `recibos` es INSERT OR REPLACE: si no se lista, REPLACE borra la fila y la reinserta con el
-  // DEFAULT '[]' -> el ledger de caja se pierde en silencio al regenerar. Se normaliza aqui, en
-  // un solo punto, para que ningun constructor de filas tenga que acordarse de la columna.
-  const runPayment = r => insPayment.run(Object.assign({}, r, { recibos: r.recibos == null ? '[]' : r.recibos }));
-  const insertSchedule = db.transaction(rows => rows.forEach(r => runPayment(r)));
+  // Normalizaciones deterministas de arranque (auto-mora + cuotas en mora de Prestamo).
+  const { aplicarHousekeepingArranque, reHousekeepLoan } = crearHousekeeping(db);
 
   // ── Durabilidad de lo COBRADO al regenerar un cronograma ───────────────────
   // Varios endpoints borran las cuotas Pendientes (y en un caso las En Mora) y las vuelven a
@@ -127,23 +111,7 @@ module.exports = function createApp(dbPath) {
     );
   }
 
-  // ── Auto-mora al arrancar ─────────────────────────────────────────────────
-  db.prepare(`UPDATE payments SET estadoPago='En Mora' WHERE estadoPago='Pendiente' AND fechaPago < ?`)
-    .run(hoyStr());
-
-  // ── Corregir cuotas en mora de Prestamo: cuotaTotal debe = saldo actual (montoCOP) ──
-  // Solo para Prestamo (sin intereses, 1 cuota de capital). NO para Intereses (cuota = interés mensual fijo).
-  // v1.18.2 (Bug #30): tambien abonoCapital = montoCOP, simetrico con el housekeeping de /recalculate
-  // (L~518) y de /abono (L~955). Antes solo tocaba cuotaTotal/saldoFinal -> dejaba abonoCapital=0 en
-  // la cuota En Mora, y al pagarse (PUT /payments no recalcula abonoCapital) el capital no contaba.
-  const fixPrestamos = db.prepare("SELECT * FROM loans WHERE estado = 'Activo' AND modalidad = 'Prestamo'").all();
-  fixPrestamos.forEach(fl => {
-    const nsFix = Math.round(fl.montoCOP);
-    db.prepare(`UPDATE payments SET saldoInicial = ?, abonoCapital = ?, cuotaTotal = ?, saldoFinal = 0
-      WHERE prestamoId = ? AND estadoPago = 'En Mora'
-      AND id NOT LIKE '%-ab-%'`)
-      .run(nsFix, nsFix, nsFix, fl.id);
-  });
+  aplicarHousekeepingArranque();
 
 
   let APP_VERSION = 'desconocida';
@@ -208,24 +176,6 @@ module.exports = function createApp(dbPath) {
       (snap.payments || []).forEach(p => restoreRow('payments', p));
     }
   }
-  // Housekeeping determinista re-aplicado tras restaurar (Candado B): deja el estado
-  // consistente con la fecha de HOY, igual que el arranque, sin caducar el undo.
-  function reHousekeepLoan(id) {
-    db.prepare("UPDATE payments SET estadoPago='En Mora' WHERE prestamoId=? AND estadoPago='Pendiente' AND fechaPago < ?").run(id, hoyStr());
-    const l = db.prepare('SELECT * FROM loans WHERE id = ?').get(id);
-    if (l && l.estado === 'Activo' && l.modalidad === 'Prestamo') {
-      const ns = Math.round(l.montoCOP);
-      db.prepare("UPDATE payments SET saldoInicial=?, abonoCapital=?, cuotaTotal=?, saldoFinal=0 WHERE prestamoId=? AND estadoPago='En Mora' AND id NOT LIKE '%-ab-%'").run(ns, ns, ns, id);
-    }
-  }
-
-  const insUndo = db.prepare(`
-    INSERT INTO undo_journal(id, accion, endpoint, descripcion, scope_tipo, scope_id, snapshot, pre_hash, post_hash, app_version, afecta_caja)
-    VALUES (@id, @accion, @endpoint, @descripcion, @scope_tipo, @scope_id, @snapshot, @pre_hash, @post_hash, @app_version, @afecta_caja)
-  `);
-  // El log se escribe con el id de su entrada de undo para que el Historial sepa que fila es
-  // reversible (enlace 1:1, no apareo por texto).
-  const logActionUndo = db.prepare('INSERT INTO activity_log(tipo, mensaje, undo_id) VALUES (?, ?, ?)');
 
   // Retencion: conservar las 200 mas recientes y descartar > 90 dias (lo que ocurra
   // primero). Borra el TAIL (mas viejo), nunca el head, asi que no rompe el LIFO.
