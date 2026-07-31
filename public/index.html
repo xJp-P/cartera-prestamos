@@ -127,12 +127,23 @@ var useMemo = React.useMemo;
 var useCallback = React.useCallback;
 var createRoot = ReactDOM.createRoot;
 
-// Variable global para mostrar errores en la UI (se setea desde App)
-var _showError = null;
-function handleApiError(err) {
-  var msg = err && err.message ? err.message : 'Error de conexion con el servidor';
-  if (_showError) _showError(msg);
+// ── Canal de errores hacia la UI ────────────────────────────────────────────
+// `App` conecta su toast con `setErrorHandler` al renderizar; hasta que lo haga
+// (y en los arneses de test, que no montan la UI) los errores caen a la consola.
+//
+// POR QUE UN SETTER Y NO UNA VARIABLE REASIGNABLE: esto era `var _showError = null`
+// reasignado desde el cuerpo de render de `App`. Bajo modulos ES un `import` es un
+// binding de SOLO LECTURA, asi que esa reasignacion seria un TypeError en el primer
+// render — es decir, pantalla negra, la misma clase de fallo del Bug #40. El handler
+// queda encapsulado aca y se cambia llamando a una funcion, que si cruza modulos.
+var _errorHandler = null;
+function setErrorHandler(fn) { _errorHandler = typeof fn === 'function' ? fn : null; }
+function showError(msg) {
+  if (_errorHandler) _errorHandler(msg);
   else console.error(msg);
+}
+function handleApiError(err) {
+  showError(err && err.message ? err.message : 'Error de conexion con el servidor');
 }
 function handleRes(r) {
   if (!r.ok) return r.text().then(function(t) { try { var j=JSON.parse(t); throw new Error(j.error||'Error del servidor'); } catch(e) { if(e.message) throw e; throw new Error('Error del servidor ('+r.status+')'); }});
@@ -1567,8 +1578,8 @@ function App(){
   var isMac=platform==='darwin';
   var sWide=useState(window.innerWidth>=768); var isDesktop=sWide[0]; var setIsDesktop=sWide[1];
   useEffect(function(){function onR(){setIsDesktop(window.innerWidth>=768);} window.addEventListener('resize',onR); return function(){window.removeEventListener('resize',onR);};},[]);
-  // Conectar _showError global para errores de API
-  _showError = function(msg){ showToast(msg, 'error'); };
+  // Conectar el canal de errores de API con el toast de la UI
+  setErrorHandler(function(msg){ showToast(msg, 'error'); });
   // Chequear errores de arranque
   useEffect(function(){
     if(typeof window.electronAPI==='undefined'||!window.electronAPI.getStartupErrors) return;
@@ -3723,7 +3734,7 @@ function DebtorModal(props){
       // extra, reescribiendo la cuota transitoria con un prorrateo inflado.
       h('button',{onClick:function(){
         if(cfSending) return;
-        if(!validNuevo){_showError('Ingresa un dia valido (1-31, distinto al actual)');return;}
+        if(!validNuevo){showError('Ingresa un dia valido (1-31, distinto al actual)');return;}
         setCfSending(true);
         API.post('/api/loans/'+cfLoan.id+'/cambiar-dia-pago',{
           nuevoDia:nuevoDia
@@ -3732,7 +3743,7 @@ function DebtorModal(props){
           // pasan por aqui: liberamos siempre antes de decidir que hacer.
           setCfSending(false);
           if(!r)return;
-          if(r.error){_showError(r.error);return;}
+          if(r.error){showError(r.error);return;}
           setCambioFecha(Object.assign({},cambioFecha,{step:'success',resultado:r}));
           if(onReload)onReload();
         },function(){setCfSending(false);});
@@ -4638,7 +4649,7 @@ function CalcView(props){
   function limpiar(){setMonto('');setModalidad('Intereses');setTasa('');setPlazo('');setShowCrono(false);setMoneda('COP');setTrmCalc('');setFrecCalc('Mensual');}
 
   function confirmar(){
-    if(!sim){_showError('Ingresa datos validos para simular');return;}
+    if(!sim){showError('Ingresa datos validos para simular');return;}
     var data={montoOrigen:+monto,modalidad:modalidad,tasaMensual:+tasa,plazoMeses:+plazo||12,frecuencia:frecCalc};
     if(moneda==='USD'){data.moneda='USD';data.trmAcordada=+trmCalc||1;}
     onConfirm(data);
@@ -4761,8 +4772,8 @@ function PayModal(props){
   function submitParcial(){
     if(sending) return;
     var m=+montoParcial||0;
-    if(m<=0){_showError('Ingresa el monto del pago parcial');return;}
-    if(m>restante){_showError('El monto supera el saldo pendiente ('+fmt(restante)+')');return;}
+    if(m<=0){showError('Ingresa el monto del pago parcial');return;}
+    if(m>restante){showError('El monto supera el saldo pendiente ('+fmt(restante)+')');return;}
     // v2.3.0: el recibo se emite DESPUES de confirmar la escritura. Antes se imprimia primero, asi
     // que un fallo de red dejaba en manos del deudor el comprobante de un pago NUNCA registrado.
     // `allPays` se captura aqui a proposito: es el estado PREVIO, que es el que generateRecibo
@@ -4774,7 +4785,7 @@ function PayModal(props){
   }
   function submitCompleto(){
     if(sending) return;
-    if(esUSD&&(!copRec||+copRec<=0)){_showError('Ingresa el monto COP recibido para prestamos en USD');return;}
+    if(esUSD&&(!copRec||+copRec<=0)){showError('Ingresa el monto COP recibido para prestamos en USD');return;}
     if(yaPagado>0){
       // Habia pagos parciales: el recibo es "Pago final" que completa la cuota
       _run(function(){return onPartial(pay.id,restante,fecha,obs,+usdRec||0).then(function(r){
@@ -5023,21 +5034,21 @@ function AbonoModal(props){
     if(sending) return;
     // v2.0.0 — USD exige DOS entradas: los dolares definen el capital, los COP la caja real.
     if(esUSD){
-      if(!(+montoUSD>0)){_showError('Ingresa el monto del abono en USD (define el capital que se descuenta)');return;}
-      if(!(copRecNum>0)){_showError('Ingresa los COP realmente recibidos (miden el efecto de la TRM)');return;}
-    } else if(!monto||+monto<=0){_showError('Ingresa un monto valido');return;}
+      if(!(+montoUSD>0)){showError('Ingresa el monto del abono en USD (define el capital que se descuenta)');return;}
+      if(!(copRecNum>0)){showError('Ingresa los COP realmente recibidos (miden el efecto de la TRM)');return;}
+    } else if(!monto||+monto<=0){showError('Ingresa un monto valido');return;}
     // v2.0.0 — el techo es saldoAbonable (capital del cronograma futuro), NO saldoActual.
     // Defense-in-depth: el boton ya se deshabilita, pero si algo fallara el submit tampoco
     // debe enviar un monto que el backend rechazaria con 400.
     if(montoCapCOP>saldoAbonable){
       var _techo=esUSD?copToUsd(saldoAbonable,loan.trmAcordada):fmt(saldoAbonable);
       var _mora=esUSD?copToUsd(capEnMora,loan.trmAcordada):fmt(capEnMora);
-      _showError(capEnMora>0
+      showError(capEnMora>0
         ?'El abono maximo a capital es '+_techo+'. Los '+_mora+' restantes estan en '+moraCount+' cuota'+(moraCount!==1?'s':'')+' en mora: se cobran liquidando la deuda o pagando esas cuotas.'
         :'El abono maximo es '+_techo+' (solo capital). Los intereses en mora se cobran por separado.');
       return;
     }
-    if(esCapInt&&preview&&preview.error){_showError(preview.error);return;}
+    if(esCapInt&&preview&&preview.error){showError(preview.error);return;}
     var mode=esCapInt?recalcMode:null;
     var valor=null;
     if(mode==='modificarPlazo') valor=parseInt(nuevoPlazo,10);
@@ -5349,12 +5360,12 @@ function RestructureModal(props){
   }();
   function submit(){
     if(isSubmitting) return;
-    if(saldoActual<=0){_showError('El prestamo no tiene saldo pendiente');return;}
-    if(preview&&preview.error){_showError(preview.error);return;}
+    if(saldoActual<=0){showError('El prestamo no tiene saldo pendiente');return;}
+    if(preview&&preview.error){showError(preview.error);return;}
     var valor=null;
     if(recalcMode==='modificarPlazo') valor=parseInt(nuevoPlazo,10);
     else if(recalcMode==='fijarCuota') valor=cuotaFijaEfectivaCOP;
-    if(!valor||valor<=0){_showError('Completa el valor');return;}
+    if(!valor||valor<=0){showError('Completa el valor');return;}
     // v1.18.1 — la liberacion se ata a la PROMESA, no a un setTimeout de 5s. El timer era
     // una guarda con fecha de caducidad: si el POST tardaba mas de 5 segundos el boton se
     // rehabilitaba con la peticion aun en vuelo y el doble submit volvia a ser posible.
@@ -5595,15 +5606,15 @@ function LoanModal(props){
     if(!f.nombre.trim()) errores.push('Nombre');
     if(!f.montoOrigen||+f.montoOrigen<=0) errores.push('Monto');
     if(needsPlazo&&(!f.plazoMeses||+f.plazoMeses<=0)) errores.push('Plazo');
-    if(errores.length>0){_showError('Falta completar: '+errores.join(', '));return;}
-    if(aplicaFracc&&comprasValidas.length===0){_showError('Agrega al menos una compra valida o desactiva las compras fraccionadas');return;}
-    if(aplicaFracc&&excedeMonto){_showError('El total de compras ('+Math.round(totalUSDComprado).toLocaleString('es-CO')+' USD) excede el monto del prestamo');return;}
+    if(errores.length>0){showError('Falta completar: '+errores.join(', '));return;}
+    if(aplicaFracc&&comprasValidas.length===0){showError('Agrega al menos una compra valida o desactiva las compras fraccionadas');return;}
+    if(aplicaFracc&&excedeMonto){showError('El total de compras ('+Math.round(totalUSDComprado).toLocaleString('es-CO')+' USD) excede el monto del prestamo');return;}
     var esPrestamo=f.modalidad==='Prestamo';
     var esPagoUnico=f.modalidad==='Pago Unico';
     var esUnaCuotaSubmit=esPrestamo||esPagoUnico;
-    if(esUnaCuotaSubmit&&!f.fechaDevolucion){_showError('Falta la fecha de pago');return;}
+    if(esUnaCuotaSubmit&&!f.fechaDevolucion){showError('Falta la fecha de pago');return;}
     // v1.10.0 — Pago Unico debe tener ganancia >= 0 (puede ser 0 si el user quiere sin ganancia)
-    if(esPagoUnico&&(+f.gananciaInput||0)<0){_showError('La ganancia no puede ser negativa');return;}
+    if(esPagoUnico&&(+f.gananciaInput||0)<0){showError('La ganancia no puede ser negativa');return;}
     var base=isNew?{}:(loan||{});
     var diaPagoAuto=new Date(f.fechaInicio+'T12:00:00').getDate();
     var trmFinal=aplicaFracc&&tasaPromedio>0?tasaPromedio:(+f.trmAcordada||0);
@@ -6153,9 +6164,9 @@ function DebtModal(props){
     var tit=titulo.trim();
     var acr=acreedor.trim();
     var m=Math.round(+monto||0);
-    if(!tit){_showError('Ingresa el titulo de la deuda');return;}
-    if(!acr){_showError('Ingresa el acreedor');return;}
-    if(m<=0){_showError('Ingresa un monto original valido');return;}
+    if(!tit){showError('Ingresa el titulo de la deuda');return;}
+    if(!acr){showError('Ingresa el acreedor');return;}
+    if(m<=0){showError('Ingresa un monto original valido');return;}
     // UX: no hay columna de interes en la BD -> concatenamos "Tasa - Descripcion" en concepto.
     // El titulo viaja limpio en su propio campo.
     var conceptoFinal=[interes.trim(),concepto.trim()].filter(Boolean).join(' - ');
@@ -6214,8 +6225,8 @@ function DebtPayModal(props){
     // de idempotencia) y el saldo se RECALCULA desde ese ledger. Un doble clic duplicaba el
     // movimiento y dejaba el saldo mal de verdad, no solo la vista.
     if(sending) return;
-    if(m<=0){_showError('Ingresa el monto del movimiento');return;}
-    if(excede){_showError('El abono supera el saldo pendiente ('+fmt(saldo)+')');return;}
+    if(m<=0){showError('Ingresa el monto del movimiento');return;}
+    if(excede){showError('El abono supera el saldo pendiente ('+fmt(saldo)+')');return;}
     _submitGuard(sending,setSending,function(){return onSave(debt.id,{monto_pagado:m,fecha_pago:fecha,notas:notas.trim(),tipo:tipo});});
   }
   function tipoBtn(val,label,activeColor){
@@ -6356,10 +6367,10 @@ function DevView(props){
           onNeedsRestart();
         } else {
           setLoading(false);
-          if(_showError) _showError(res && res.error ? res.error : 'Error al mover la base de datos');
+          showError(res && res.error ? res.error : 'Error al mover la base de datos');
         }
       });
-    }).catch(function(){setLoading(false);if(_showError) _showError('Error al mover la base de datos');});
+    }).catch(function(){setLoading(false);showError('Error al mover la base de datos');});
   }
 
   function resetPath(){
@@ -6370,7 +6381,7 @@ function DevView(props){
           setDbPath(res.path);
           onNeedsRestart();
         } else {
-          if(_showError) _showError(res && res.error ? res.error : 'Error al restaurar la base de datos');
+          showError(res && res.error ? res.error : 'Error al restaurar la base de datos');
         }
       });
     }});
