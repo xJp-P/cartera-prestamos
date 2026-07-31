@@ -1,0 +1,60 @@
+{
+  "version": 2,
+  "caso": "crono-pagounico-usd",
+  "generador": "generateCronogramaPDF",
+  "tema": "dark",
+  "entradaHash": "5ab8e3b2410cd0c2dc2f6f0d0804d94f0936d555",
+  "estructura": {
+    "docTitle": "Cronograma de Pagos",
+    "h1": [
+      "Cronograma de Pagos"
+    ],
+    "cabeceras": [
+      "#",
+      "Vence",
+      "Interes",
+      "Abono a capital",
+      "Valor cuota",
+      "Saldo",
+      "Estado"
+    ],
+    "etiquetas": [
+      "Deudor",
+      "Nombre",
+      "Telefono",
+      "Prestamo",
+      "Monto prestado",
+      "Modalidad",
+      "Frecuencia",
+      "Tasa",
+      "Fecha inicio",
+      "Fecha de finalizacion",
+      "Cuotas",
+      "Cronograma"
+    ]
+  },
+  "valores": {
+    "bytes": 4922,
+    "nFilas": 2,
+    "nCeldas": 14,
+    "celdasPorTr": [
+      7,
+      7
+    ],
+    "nMontos": 7,
+    "hashMontos": "f8bb84b72e145364ecfd7f81e3e1ea4227885f86",
+    "hashFname": "ab88c8867d1a3d709dc0d20d4a94f8c5670fec3b",
+    "hashTexto": "9a54c3429fcb9c926f1a4146907704a8cd552c43",
+    "clases": [
+      "badge badge-pendiente",
+      "footer",
+      "header",
+      "label",
+      "pendiente",
+      "row",
+      "section",
+      "section-title",
+      "value"
+    ]
+  }
+}

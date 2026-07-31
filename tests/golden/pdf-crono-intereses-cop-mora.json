@@ -1,0 +1,72 @@
+{
+  "version": 2,
+  "caso": "crono-intereses-cop-mora",
+  "generador": "generateCronogramaPDF",
+  "tema": "light",
+  "entradaHash": "e8fb494940dca9bade872e5a290d0f672269b26e",
+  "estructura": {
+    "docTitle": "Cronograma de Pagos",
+    "h1": [
+      "Cronograma de Pagos"
+    ],
+    "cabeceras": [
+      "#",
+      "Vence",
+      "Interes",
+      "Abono a capital",
+      "Valor cuota",
+      "Saldo",
+      "Estado"
+    ],
+    "etiquetas": [
+      "Deudor",
+      "Nombre",
+      "Cedula / ID",
+      "Telefono",
+      "Prestamo",
+      "Monto prestado",
+      "Modalidad",
+      "Frecuencia",
+      "Tasa",
+      "Fecha inicio",
+      "Fecha de finalizacion",
+      "Cronograma"
+    ]
+  },
+  "valores": {
+    "bytes": 6976,
+    "nFilas": 10,
+    "nCeldas": 70,
+    "celdasPorTr": [
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7
+    ],
+    "nMontos": 38,
+    "hashMontos": "3e21f8ad35301951bcfc82485d6d7e6b006cad1f",
+    "hashFname": "86933b024c97bc51aa78ce889fdb10270541f7b9",
+    "hashTexto": "661aced52195ecf244a384010b43a196fd7f8e22",
+    "clases": [
+      "badge badge-mora",
+      "badge badge-pagado",
+      "footer",
+      "header",
+      "label",
+      "mora",
+      "nota",
+      "pagado",
+      "row",
+      "section",
+      "section-title",
+      "total-row",
+      "value"
+    ]
+  }
+}

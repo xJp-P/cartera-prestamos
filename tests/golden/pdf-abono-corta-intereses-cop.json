@@ -1,0 +1,61 @@
+{
+  "version": 2,
+  "caso": "abono-corta-intereses-cop",
+  "generador": "generateReciboAbono",
+  "tema": "light",
+  "entradaHash": "e383f426470fe597befc3abf358c046cd6237b1f",
+  "estructura": {
+    "docTitle": "Recibo de Abono a Capital",
+    "h1": [],
+    "cabeceras": [],
+    "etiquetas": [
+      "Recibo de Abono a Capital",
+      "Abono realizado por",
+      "Abono recibido a capital",
+      "Resumen",
+      "Modalidad",
+      "Monto original del prestamo",
+      "Saldo anterior",
+      "Abono aplicado",
+      "Nuevo saldo pendiente",
+      "Quieres liquidar la deuda hoy?"
+    ]
+  },
+  "valores": {
+    "bytes": 6452,
+    "nFilas": 0,
+    "nCeldas": 0,
+    "celdasPorTr": [],
+    "nMontos": 9,
+    "hashMontos": "bdc5ea9848a47b6726a39bb8cadac346ec06d4ea",
+    "hashFname": "f5577f210993122fba65e3caa1d2b2c6dbd54512",
+    "hashTexto": "a1ea505c18d8fc8b4c8ef7df79c9a7390fd9acf7",
+    "clases": [
+      "ab-brand",
+      "ab-cc",
+      "ab-chip",
+      "ab-date",
+      "ab-foot",
+      "ab-head",
+      "ab-lab",
+      "ab-liq",
+      "ab-liq-q",
+      "ab-liq-s",
+      "ab-liq-v",
+      "ab-meta",
+      "ab-name",
+      "ab-num",
+      "ab-panel",
+      "ab-row",
+      "ab-row ab-row-tot",
+      "ab-st",
+      "ab-sub",
+      "ab-ta",
+      "ab-tl",
+      "ab-total",
+      "ab-type",
+      "ab-val",
+      "ab-wm"
+    ]
+  }
+}

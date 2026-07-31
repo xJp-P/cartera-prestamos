@@ -1,0 +1,60 @@
+{
+  "version": 2,
+  "caso": "abono-paz-y-salvo",
+  "generador": "generateReciboAbono",
+  "tema": "light",
+  "entradaHash": "9e8992b4fe134312f7d7275982007ff6812d231c",
+  "estructura": {
+    "docTitle": "Paz y Salvo",
+    "h1": [],
+    "cabeceras": [],
+    "etiquetas": [
+      "Paz y Salvo",
+      "Abono realizado por",
+      "Abono recibido a capital",
+      "PAZ Y SALVO",
+      "Resumen",
+      "Modalidad",
+      "Monto original del prestamo",
+      "Saldo anterior",
+      "Abono aplicado",
+      "Nuevo saldo pendiente"
+    ]
+  },
+  "valores": {
+    "bytes": 6339,
+    "nFilas": 0,
+    "nCeldas": 0,
+    "celdasPorTr": [],
+    "nMontos": 5,
+    "hashMontos": "b206a4a6b833355f7688661879169ac2d6aaa833",
+    "hashFname": "f23766d697ef28e15cdacfec4fdf4f3b4ec0457a",
+    "hashTexto": "e277f9d672fbb4276276352913dc187bdd136361",
+    "clases": [
+      "ab-brand",
+      "ab-cc",
+      "ab-chip",
+      "ab-date",
+      "ab-foot",
+      "ab-head",
+      "ab-lab",
+      "ab-meta",
+      "ab-name",
+      "ab-num",
+      "ab-panel",
+      "ab-paz",
+      "ab-paz-s",
+      "ab-paz-t",
+      "ab-row",
+      "ab-row ab-row-tot",
+      "ab-st",
+      "ab-sub",
+      "ab-ta",
+      "ab-tl",
+      "ab-total",
+      "ab-type",
+      "ab-val",
+      "ab-wm"
+    ]
+  }
+}

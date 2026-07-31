@@ -1,0 +1,60 @@
+{
+  "version": 2,
+  "caso": "recibo-parcial-cop",
+  "generador": "generateRecibo",
+  "tema": "light",
+  "entradaHash": "ace819b260cf4e2ec3c90492c34b5885305d79a8",
+  "estructura": {
+    "docTitle": "Recibo de Pago",
+    "h1": [
+      "Recibo de Abono Parcial"
+    ],
+    "cabeceras": [],
+    "etiquetas": [
+      "Deudor",
+      "Nombre",
+      "Telefono",
+      "Prestamo",
+      "Modalidad",
+      "Monto original",
+      "Tasa mensual",
+      "Detalle del pago",
+      "Tipo",
+      "Cuota",
+      "Fecha vencimiento",
+      "Fecha recaudo",
+      "Abono a capital",
+      "Monto cuota",
+      "Abonado previamente",
+      "Estado de la cuota",
+      "Total cuota",
+      "Total abonado (con este pago)",
+      "Restante por pagar",
+      "Proximas cuotas (quedan # de #)",
+      "Cuota ## - # de M de #",
+      "Cuota ## - # de M de #",
+      "Cuota ## - # de M de #"
+    ]
+  },
+  "valores": {
+    "bytes": 4318,
+    "nFilas": 0,
+    "nCeldas": 0,
+    "celdasPorTr": [],
+    "nMontos": 11,
+    "hashMontos": "ccd311bf37c57341c581af4aefec25a5619344ac",
+    "hashFname": "0ceb9cc7f46746e94e6d4fd86d0b2433858be2f2",
+    "hashTexto": "e73d135623bdd17826b11a206a3de7eebad0ec8b",
+    "clases": [
+      "amount",
+      "footer",
+      "header",
+      "label",
+      "row",
+      "section",
+      "section-title",
+      "total-box",
+      "value"
+    ]
+  }
+}

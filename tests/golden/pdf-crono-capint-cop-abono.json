@@ -1,0 +1,82 @@
+{
+  "version": 2,
+  "caso": "crono-capint-cop-abono",
+  "generador": "generateCronogramaPDF",
+  "tema": "light",
+  "entradaHash": "e6d04e301c4ab9c8d8de68f7acc06d561377d603",
+  "estructura": {
+    "docTitle": "Cronograma de Pagos",
+    "h1": [
+      "Cronograma de Pagos"
+    ],
+    "cabeceras": [
+      "#",
+      "Vence",
+      "Interes",
+      "Abono a capital",
+      "Valor cuota",
+      "Saldo",
+      "Estado"
+    ],
+    "etiquetas": [
+      "Deudor",
+      "Nombre",
+      "Cedula / ID",
+      "Telefono",
+      "Prestamo",
+      "Monto prestado",
+      "Modalidad",
+      "Frecuencia",
+      "Tasa",
+      "Fecha inicio",
+      "Fecha de finalizacion",
+      "Cuotas",
+      "Cronograma"
+    ]
+  },
+  "valores": {
+    "bytes": 8907,
+    "nFilas": 18,
+    "nCeldas": 126,
+    "celdasPorTr": [
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7
+    ],
+    "nMontos": 64,
+    "hashMontos": "a00cc7c855dabfdddcc22ad7d819d5fc39c3a130",
+    "hashFname": "6eedc0e2b21b5be89e0743781cb7495d501b9a13",
+    "hashTexto": "23a09d092360817b30f080a4c3716bc1fa285246",
+    "clases": [
+      "abono",
+      "badge badge-abono",
+      "badge badge-pagado",
+      "badge badge-pendiente",
+      "footer",
+      "header",
+      "label",
+      "pagado",
+      "pendiente",
+      "row",
+      "section",
+      "section-title",
+      "total-row",
+      "value"
+    ]
+  }
+}

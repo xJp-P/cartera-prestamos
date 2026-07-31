@@ -1,0 +1,98 @@
+[
+  {
+    "acreedor": "Pablo Herrera",
+    "concepto": "Concepto de prueba 5",
+    "estado": "Activa",
+    "fecha_creacion": "2026-06-16",
+    "id": "17815907822621ouj",
+    "monto_original": 2000000,
+    "saldo_pendiente": 2000000,
+    "titulo": "Deuda de prueba 5",
+    "total_abonos": 0,
+    "total_cargos": 0
+  },
+  {
+    "acreedor": "Pablo Herrera",
+    "concepto": "Concepto de prueba 3",
+    "estado": "Activa",
+    "fecha_creacion": "2026-06-16",
+    "id": "1781589563523ytp4",
+    "monto_original": 900000,
+    "saldo_pendiente": 900000,
+    "titulo": "Deuda de prueba 3",
+    "total_abonos": 0,
+    "total_cargos": 0
+  },
+  {
+    "acreedor": "Pablo Herrera",
+    "concepto": "Concepto de prueba 1",
+    "estado": "Activa",
+    "fecha_creacion": "2026-06-16",
+    "id": "1781589504971un48",
+    "monto_original": 1346000,
+    "saldo_pendiente": 1346000,
+    "titulo": "Deuda de prueba 1",
+    "total_abonos": 0,
+    "total_cargos": 0
+  },
+  {
+    "acreedor": "Rosa Cardenas",
+    "concepto": "Concepto de prueba 4",
+    "estado": "Activa",
+    "fecha_creacion": "2026-05-25",
+    "id": "1781590745919arbh",
+    "monto_original": 6000000,
+    "saldo_pendiente": 6000000,
+    "titulo": "Deuda de prueba 4",
+    "total_abonos": 0,
+    "total_cargos": 0
+  },
+  {
+    "acreedor": "Quintin Abad",
+    "concepto": "Concepto de prueba 2",
+    "estado": "Activa",
+    "fecha_creacion": "2025-12-11",
+    "id": "1781589517850cxcw",
+    "monto_original": 640000,
+    "saldo_pendiente": 640000,
+    "titulo": "Deuda de prueba 2",
+    "total_abonos": 0,
+    "total_cargos": 0
+  },
+  {
+    "acreedor": "Pablo Herrera",
+    "concepto": "Concepto de prueba 6",
+    "estado": "Activa",
+    "fecha_creacion": "2025-12-05",
+    "id": "1781632230844f1mr",
+    "monto_original": 1000000,
+    "saldo_pendiente": 1000000,
+    "titulo": "Deuda de prueba 6",
+    "total_abonos": 0,
+    "total_cargos": 0
+  },
+  {
+    "acreedor": "Pablo Herrera",
+    "concepto": "Concepto de prueba 7",
+    "estado": "Activa",
+    "fecha_creacion": "<TS>",
+    "id": "17816979358979v44wb",
+    "monto_original": 0,
+    "saldo_pendiente": 5438780,
+    "titulo": "Deuda de prueba 7",
+    "total_abonos": 15061220,
+    "total_cargos": 20500000
+  },
+  {
+    "acreedor": "Simon Toro",
+    "concepto": "Concepto de prueba 8",
+    "estado": "Pagada",
+    "fecha_creacion": "2026-06-01",
+    "id": "1782442733215vtpf",
+    "monto_original": 1000000,
+    "saldo_pendiente": 0,
+    "titulo": "Deuda de prueba 8",
+    "total_abonos": 1000000,
+    "total_cargos": 0
+  }
+]

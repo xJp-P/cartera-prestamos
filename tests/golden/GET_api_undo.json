@@ -1,0 +1,50 @@
+{
+  "filtrada": [
+    {
+      "accion": "pago_parcial",
+      "afecta_caja": 1,
+      "created_at": "<TS>",
+      "descripcion": "Pago parcial final: Nicolas Duarte cuota #2 $50,000 (completo $450,000)",
+      "estado": "disponible",
+      "id": "uj-17854746691078ko1",
+      "scope_id": "17795544041379obc",
+      "scope_tipo": "loan",
+      "undone_at": null
+    }
+  ],
+  "todas": [
+    {
+      "accion": "pago_parcial",
+      "afecta_caja": 1,
+      "created_at": "<TS>",
+      "descripcion": "Pago parcial final: Nicolas Duarte cuota #2 $50,000 (completo $450,000)",
+      "estado": "disponible",
+      "id": "uj-17854746691078ko1",
+      "scope_id": "17795544041379obc",
+      "scope_tipo": "loan",
+      "undone_at": null
+    },
+    {
+      "accion": "abono",
+      "afecta_caja": 1,
+      "created_at": "<TS>",
+      "descripcion": "Registraste abono de $50,000 a prueba 2 — saldo: $450,000",
+      "estado": "deshecho",
+      "id": "uj-1785443175232ru4t",
+      "scope_id": "1785443161078sqbf",
+      "scope_tipo": "loan",
+      "undone_at": "<TS>"
+    },
+    {
+      "accion": "abono",
+      "afecta_caja": 1,
+      "created_at": "<TS>",
+      "descripcion": "Registraste abono de $100,000 a Prueba — saldo: $900,000",
+      "estado": "disponible",
+      "id": "uj-1785443036698qoa4",
+      "scope_id": "1785443024679gagp",
+      "scope_tipo": "loan",
+      "undone_at": null
+    }
+  ]
+}

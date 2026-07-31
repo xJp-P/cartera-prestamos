@@ -1,0 +1,76 @@
+{
+  "version": 2,
+  "caso": "crono-capint-cop-parcial",
+  "generador": "generateCronogramaPDF",
+  "tema": "light",
+  "entradaHash": "b574e0d79a6a4a2f2b234ea34b4f53795e43423a",
+  "estructura": {
+    "docTitle": "Cronograma de Pagos",
+    "h1": [
+      "Cronograma de Pagos"
+    ],
+    "cabeceras": [
+      "#",
+      "Vence",
+      "Interes",
+      "Abono a capital",
+      "Valor cuota",
+      "Saldo",
+      "Estado"
+    ],
+    "etiquetas": [
+      "Deudor",
+      "Nombre",
+      "Telefono",
+      "Prestamo",
+      "Monto prestado",
+      "Modalidad",
+      "Frecuencia",
+      "Tasa",
+      "Fecha inicio",
+      "Fecha de finalizacion",
+      "Cuotas",
+      "Cronograma"
+    ]
+  },
+  "valores": {
+    "bytes": 7427,
+    "nFilas": 12,
+    "nCeldas": 84,
+    "celdasPorTr": [
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7,
+      7
+    ],
+    "nMontos": 46,
+    "hashMontos": "e1da6bfe36c8830f60f4156c7b4ae86691a96ec8",
+    "hashFname": "5ddc46c656d9b878a1c7e44f220959c65ad0745d",
+    "hashTexto": "4310d9f0938d9d168f8529fa1f5b1fdda8b5c95f",
+    "clases": [
+      "badge badge-mora",
+      "badge badge-pagado",
+      "badge badge-parcial",
+      "badge badge-pendiente",
+      "footer",
+      "header",
+      "label",
+      "mora",
+      "pagado",
+      "pendiente",
+      "row",
+      "section",
+      "section-title",
+      "total-row",
+      "value"
+    ]
+  }
+}

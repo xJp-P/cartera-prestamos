@@ -1,0 +1,702 @@
+[
+  {
+    "fecha": "<TS>",
+    "id": 253,
+    "mensaje": "Pago parcial final: Nicolas Duarte cuota #2 $50,000 (completo $450,000)",
+    "tipo": "pago",
+    "undo_id": "uj-17854746691078ko1"
+  },
+  {
+    "fecha": "<TS>",
+    "id": 252,
+    "mensaje": "Eliminaste prestamo de prueba 2",
+    "tipo": "eliminacion",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 251,
+    "mensaje": "Deshiciste: Registraste abono de $50,000 a prueba 2 — saldo: $450,000",
+    "tipo": "deshacer",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 250,
+    "mensaje": "Registraste abono de $50,000 a prueba 2 — saldo: $450,000",
+    "tipo": "abono",
+    "undo_id": "uj-1785443175232ru4t"
+  },
+  {
+    "fecha": "<TS>",
+    "id": 249,
+    "mensaje": "Nuevo prestamo: prueba 2 por $500,000 (Intereses)",
+    "tipo": "prestamo",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 248,
+    "mensaje": "Eliminaste prestamo de Prueba",
+    "tipo": "eliminacion",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 247,
+    "mensaje": "Registraste abono de $100,000 a Prueba — saldo: $900,000",
+    "tipo": "abono",
+    "undo_id": "uj-1785443036698qoa4"
+  },
+  {
+    "fecha": "<TS>",
+    "id": 246,
+    "mensaje": "Nuevo prestamo: Prueba por $1,000,000 (Intereses)",
+    "tipo": "prestamo",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 245,
+    "mensaje": "Registraste pago: Bruno Salgado cuota #6 por $105,999",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 244,
+    "mensaje": "Registraste pago: Bruno Salgado cuota #5 por $265,000",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 243,
+    "mensaje": "Pago parcial: Nicolas Duarte cuota #2 $400,000 (faltan $50,000)",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 242,
+    "mensaje": "Abono a deuda con Ana Restrepo: $1.000.000 — saldo: $0 (PAGADA)",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 241,
+    "mensaje": "Nuevo prestamo: Hector Pardo por USD $217 (Pago Unico) [ganancia $107.481]",
+    "tipo": "prestamo",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 240,
+    "mensaje": "Registraste abono de $560,000 a Karina Lozano — saldo: $2,885,494",
+    "tipo": "abono",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 238,
+    "mensaje": "Registraste pago: Karina Lozano cuota #3 por $470,000",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 237,
+    "mensaje": "Registraste pago: Karina Lozano cuota #2 por $470,000",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 236,
+    "mensaje": "Cambiaste dia de pago de Bruno Salgado del 30 al 15 - 1a cuota transitoria de 46 dias (interes $42.712)",
+    "tipo": "cambio-fecha",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 235,
+    "mensaje": "Cambiaste dia de pago de Bruno Salgado del 30 al 15 - 1a cuota transitoria de 46 dias (interes $68.479)",
+    "tipo": "cambio-fecha",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 234,
+    "mensaje": "Registraste pago: Gabriela Rios cuota #1 por $1,472,407",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 233,
+    "mensaje": "Registraste pago: Gabriela Rios cuota #4 por $1,690,485",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 232,
+    "mensaje": "Nuevo prestamo: Olga Serrano por $500,000 (Pago Unico) [ganancia $35.000]",
+    "tipo": "prestamo",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 231,
+    "mensaje": "Editaste prestamo de Elena Vargas",
+    "tipo": "edicion",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 230,
+    "mensaje": "Saneo: prestamo Prestamo de Ana Restrepo ($2.300.000) pasado a Finalizado (residuo del bug de auto-finalizacion en modalidad 0%)",
+    "tipo": "cierre",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 229,
+    "mensaje": "Registraste pago: Ana Restrepo cuota #1 por $2.300.000",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 227,
+    "mensaje": "Registraste pago: Ana Restrepo cuota #22 por $105,000",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 226,
+    "mensaje": "Registraste pago: Olga Serrano cuota #1 por $520,000",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 225,
+    "mensaje": "Editaste prestamo de Olga Serrano",
+    "tipo": "edicion",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 224,
+    "mensaje": "Nuevo prestamo: Bruno Salgado por $400.000 (Capital + Intereses)",
+    "tipo": "prestamo",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 223,
+    "mensaje": "Registraste pago: Nicolas Duarte cuota #1 por $450.000",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 222,
+    "mensaje": "Registraste pago: Bruno Salgado cuota #4 por $265.000",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 221,
+    "mensaje": "Registraste pago: Bruno Salgado cuota #8 por $162.000",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 220,
+    "mensaje": "Saneo: eliminadas 4 cuotas duplicadas (#3-6) de Irene Bastidas; capital ya cubierto por el abono SALDADO",
+    "tipo": "edicion",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 219,
+    "mensaje": "Eliminaste prestamo de Prueba",
+    "tipo": "eliminacion",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 218,
+    "mensaje": "Registraste abono de $500 a Prueba — saldo: $500",
+    "tipo": "abono",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 217,
+    "mensaje": "Nuevo prestamo: Prueba por $1.000 (Intereses)",
+    "tipo": "prestamo",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 216,
+    "mensaje": "Nuevo prestamo: Ana Restrepo por $2.300.000 (Prestamo)",
+    "tipo": "prestamo",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 215,
+    "mensaje": "Nueva deuda \"Préstamo\" con Ana Restrepo por $1.000.000",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 214,
+    "mensaje": "Registraste pago: Hector Pardo cuota #1 por $1.259.300",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 213,
+    "mensaje": "Registraste pago: Gabriela Rios cuota #3 por $1.690.485",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 212,
+    "mensaje": "Registraste pago: Gabriela Rios cuota #3 por $1.690.485",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 211,
+    "mensaje": "Registraste pago: Gabriela Rios cuota #3 por $1.690.485",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 210,
+    "mensaje": "Reversion administrativa: Gabriela Rios cuota #3 (pago de $1.571.196 revertido a En Mora)",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 209,
+    "mensaje": "Registraste pago: Gabriela Rios cuota #3 por $1.690.485",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 208,
+    "mensaje": "Nuevo prestamo: Olga Serrano por $500.000 (Pago Unico) [ganancia $25.000]",
+    "tipo": "prestamo",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 207,
+    "mensaje": "Nuevo prestamo: Gabriela Rios por USD $1600 (Capital + Intereses)",
+    "tipo": "prestamo",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 206,
+    "mensaje": "Eliminaste prestamo de Gabriela Rios",
+    "tipo": "eliminacion",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 205,
+    "mensaje": "Registraste pago: Felipe Nunez cuota #6 por $40.000",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 204,
+    "mensaje": "Eliminaste la deuda con Prueba ($1.000.000)",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 203,
+    "mensaje": "Abono a deuda con Prueba: $3.000.000 — saldo: $0 (PAGADA)",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 202,
+    "mensaje": "Cargo a deuda con Prueba: $1.000.000 — saldo: $3.000.000",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 201,
+    "mensaje": "Abono a deuda con Prueba: $100.000 — saldo: $2.000.000",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 200,
+    "mensaje": "Cargo a deuda con Prueba: $1.000.000 — saldo: $2.100.000",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 199,
+    "mensaje": "Cargo a deuda con Prueba: $100.000 — saldo: $1.100.000",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 198,
+    "mensaje": "Nueva deuda \"Prueba\" con Prueba por $1.000.000",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 197,
+    "mensaje": "Editaste la deuda \"Bolsillo\" con Pablo Herrera (monto $1.346.000, saldo $1.346.000)",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 196,
+    "mensaje": "Editaste la deuda \"Transferencia\" con Pablo Herrera (monto $2.000.000, saldo $2.000.000)",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 195,
+    "mensaje": "Editaste la deuda \"Cadena\" con Quintin Abad (monto $640.000, saldo $640.000)",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 194,
+    "mensaje": "Editaste la deuda \"Bolsillo\" con Pablo Herrera (monto $900.000, saldo $900.000)",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 193,
+    "mensaje": "Nueva deuda \"Bolsillo\" con Pablo Herrera por $1.000.000",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 192,
+    "mensaje": "Editaste la deuda \"Bolsillo\" con Pablo Herrera (monto $1.346.000, saldo $1.346.000)",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 191,
+    "mensaje": "Editaste la deuda \"Préstamo\" con Rosa Cardenas (monto $6.000.000, saldo $6.000.000)",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 190,
+    "mensaje": "Editaste la deuda \"Préstamo\" con Rosa Cardenas (monto $6.000.000, saldo $6.000.000)",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 189,
+    "mensaje": "Eliminaste la deuda con Pablo Herrera ($100.000)",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 188,
+    "mensaje": "Abono a deuda con Pablo Herrera: $10.000 — saldo: $90.000",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 187,
+    "mensaje": "Editaste la deuda \"Bolsillo\" con Pablo Herrera (monto $900.000, saldo $900.000)",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 186,
+    "mensaje": "Nueva deuda \"Prueba\" con Pablo Herrera por $100.000",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 185,
+    "mensaje": "Eliminaste la deuda con Pablo Herrera ($1.000)",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 184,
+    "mensaje": "Editaste la deuda con Pablo Herrera (monto $900.000, saldo $900.000)",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 183,
+    "mensaje": "Editaste la deuda con Rosa Cardenas (monto $6.000.000, saldo $6.000.000)",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 182,
+    "mensaje": "Abono a deuda con Pablo Herrera: $500 — saldo: $500",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 181,
+    "mensaje": "Nueva deuda con Pablo Herrera (Prueba) por $1.000",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 180,
+    "mensaje": "Nueva deuda con Pablo Herrera (Pago a la tarjeta de crédito) por $2.000.000",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 179,
+    "mensaje": "Nueva deuda con Yamil Salgado27 (5% - Préstamos realizados a: Marta Quintero, Gabriela Rios, Nicolas Duarte.) por $6.000.000",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 178,
+    "mensaje": "Nueva deuda con Pablo Herrera (Préstamo a Bruno Salgado) por $900.000",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 177,
+    "mensaje": "Nueva deuda con Quintin Abad (Cadena) por $640.000",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 176,
+    "mensaje": "Nueva deuda con Pablo Herrera (Bolsillo) por $1.346.000",
+    "tipo": "deuda",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 175,
+    "mensaje": "Registraste pago: Marta Quintero cuota #1 por $1.100.000",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 174,
+    "mensaje": "Registraste pago: Bruno Salgado cuota #1 por $300.000",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 173,
+    "mensaje": "Registraste pago: Bruno Salgado cuota #5 por $105.999",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 172,
+    "mensaje": "Cerraste a la fuerza el préstamo de Carla Ossa — pérdida: $100.000 (capital $0 + intereses mora $100.000)",
+    "tipo": "cierre",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 171,
+    "mensaje": "Registraste abono de $200.000 a Carla Ossa (SALDADO)",
+    "tipo": "abono",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 170,
+    "mensaje": "Registraste pago: Julian Correa cuota #1 por $343.750",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 169,
+    "mensaje": "Editaste prestamo de Bruno Salgado",
+    "tipo": "edicion",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 168,
+    "mensaje": "Nuevo prestamo: Bruno Salgado por $100.000 (Prestamo)",
+    "tipo": "prestamo",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 167,
+    "mensaje": "Eliminaste prestamo de Hector Pardo",
+    "tipo": "eliminacion",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 166,
+    "mensaje": "Nuevo prestamo: Hector Pardo por USD $100 (Capital + Intereses)",
+    "tipo": "prestamo",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 165,
+    "mensaje": "Eliminaste prestamo de Nicolas Duarte",
+    "tipo": "eliminacion",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 164,
+    "mensaje": "Nuevo prestamo: Nicolas Duarte por $100.000 (Intereses)",
+    "tipo": "prestamo",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 163,
+    "mensaje": "Nuevo prestamo: Hector Pardo por USD $300 (Pago Unico) [ganancia $179.900]",
+    "tipo": "prestamo",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 162,
+    "mensaje": "Registraste pago: Ana Restrepo cuota #21 por $161.000",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 161,
+    "mensaje": "Registraste pago: Bruno Salgado cuota #3 por $265.000",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 160,
+    "mensaje": "Registraste pago: Bruno Salgado cuota #7 por $162.000",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 159,
+    "mensaje": "Eliminaste prestamo de prueba1",
+    "tipo": "eliminacion",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 158,
+    "mensaje": "Nuevo prestamo: prueba1 por $1.000.000 (Capital + Intereses)",
+    "tipo": "prestamo",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 157,
+    "mensaje": "Limpieza manual post-test v1.10.0: eliminado Prueba USD (Pago Unico de prueba)",
+    "tipo": "eliminacion",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 156,
+    "mensaje": "Limpieza manual post-test v1.10.0: eliminado Prueba COP (Pago Unico de prueba)",
+    "tipo": "eliminacion",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 155,
+    "mensaje": "Registraste pago: Prueba USD cuota #1 por $1.396.500",
+    "tipo": "pago",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 154,
+    "mensaje": "Registraste abono de $300.000 a Prueba COP — saldo: $700.000",
+    "tipo": "abono",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 153,
+    "mensaje": "Nuevo prestamo: Prueba USD por USD $300 (Pago Unico) [ganancia $294.000]",
+    "tipo": "prestamo",
+    "undo_id": null
+  },
+  {
+    "fecha": "<TS>",
+    "id": 152,
+    "mensaje": "Nuevo prestamo: Prueba COP por $1.000.000 (Pago Unico) [ganancia $250.000]",
+    "tipo": "prestamo",
+    "undo_id": null
+  }
+]

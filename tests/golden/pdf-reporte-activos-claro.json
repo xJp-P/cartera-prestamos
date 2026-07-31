@@ -1,0 +1,73 @@
+{
+  "version": 2,
+  "caso": "reporte-activos-claro",
+  "generador": "generateReportePrestamosPDF",
+  "tema": "light",
+  "entradaHash": "e0dbd88cf280df5b4c044c76d2c74b35cdd320f0",
+  "estructura": {
+    "docTitle": "Reporte de Prestamos Activos",
+    "h1": [
+      "Reporte de Prestamos Activos"
+    ],
+    "cabeceras": [
+      "Vencimiento",
+      "Deudor",
+      "Modalidad",
+      "Tasa",
+      "Cuota",
+      "Valor cuota",
+      "Saldo Pendiente",
+      "Estado"
+    ],
+    "etiquetas": []
+  },
+  "valores": {
+    "bytes": 11626,
+    "nFilas": 22,
+    "nCeldas": 176,
+    "celdasPorTr": [
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8
+    ],
+    "nMontos": 44,
+    "hashMontos": "1f8939edcf8f0c4f2906b796eca885ee08ca2622",
+    "hashFname": "b8f8233920e5bcdeee9079ac1b2c17fa72f8fa34",
+    "hashTexto": "3af038c121092b0fe00b069aea9f4cb5c2770f69",
+    "clases": [
+      "badge badge-mora",
+      "badge badge-pagado",
+      "badge badge-pend",
+      "footer",
+      "header",
+      "loan-row",
+      "loan-row mora",
+      "mora-detalle",
+      "mora-sub",
+      "summary",
+      "tran-detalle",
+      "tran-sub",
+      "usd-i",
+      "usd-sub"
+    ]
+  }
+}

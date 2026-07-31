@@ -1,0 +1,59 @@
+{
+  "version": 2,
+  "caso": "recibo-usd-oscuro",
+  "generador": "generateRecibo",
+  "tema": "dark",
+  "entradaHash": "a8b5386d20797c96df286ea7ef877ed725f55301",
+  "estructura": {
+    "docTitle": "Recibo de Pago",
+    "h1": [
+      "Recibo de Pago"
+    ],
+    "cabeceras": [],
+    "etiquetas": [
+      "Deudor",
+      "Nombre",
+      "Cedula / ID",
+      "Telefono",
+      "Prestamo",
+      "Modalidad",
+      "Monto original",
+      "Tasa mensual",
+      "Detalle del pago",
+      "Tipo",
+      "Cuota",
+      "Fecha vencimiento",
+      "Fecha recaudo",
+      "Intereses",
+      "Abono a capital",
+      "Monto cuota",
+      "Saldo restante del prestamo",
+      "Proximas cuotas (quedan # de #)",
+      "Cuota ## - # de M de #",
+      "Cuota ## - # de M de #",
+      "Cuota ## - # de M de #"
+    ]
+  },
+  "valores": {
+    "bytes": 4404,
+    "nFilas": 0,
+    "nCeldas": 0,
+    "celdasPorTr": [],
+    "nMontos": 10,
+    "hashMontos": "3cc2668356d6e6b657ff969dca1b1a5dd7a5cc5d",
+    "hashFname": "02d3e2a5602ae8aa2a28ae65aa1236a40b2c9942",
+    "hashTexto": "66a4e7f1f7e56641d308af8d6e26df32b38b27a3",
+    "clases": [
+      "amount",
+      "footer",
+      "header",
+      "label",
+      "row",
+      "section",
+      "section-title",
+      "sub",
+      "total-box",
+      "value"
+    ]
+  }
+}

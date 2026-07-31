@@ -1,0 +1,79 @@
+{
+  "version": 2,
+  "caso": "abono-capint-usd-modificarplazo",
+  "generador": "generateReciboAbono",
+  "tema": "dark",
+  "entradaHash": "ebaa718f552eb857ecad4610159e155e5553d972",
+  "estructura": {
+    "docTitle": "Recibo de Abono a Capital",
+    "h1": [],
+    "cabeceras": [
+      "Cuota",
+      "Vence",
+      "Interes",
+      "Abono a capital",
+      "Valor cuota",
+      "Saldo"
+    ],
+    "etiquetas": [
+      "Recibo de Abono a Capital",
+      "Abono realizado por",
+      "Abono recibido a capital",
+      "Impacto del abono",
+      "Saldo de capital",
+      "Plazo restante",
+      "Cuota mensual",
+      "Quieres liquidar la deuda hoy?",
+      "Cronograma actualizado # cuotas restantes"
+    ]
+  },
+  "valores": {
+    "bytes": 7694,
+    "nFilas": 5,
+    "nCeldas": 30,
+    "celdasPorTr": [
+      6,
+      6,
+      6,
+      6,
+      6
+    ],
+    "nMontos": 25,
+    "hashMontos": "bf57009061d8f1ee368a9ae96c36555fef663d68",
+    "hashFname": "44d1bf28c4ecf8f81cce8fbb312f8940b47a2cf5",
+    "hashTexto": "e97b1a8284241ee056442f261cfedc912e0572e6",
+    "clases": [
+      "ab-brand",
+      "ab-card",
+      "ab-cc",
+      "ab-chip",
+      "ab-cl",
+      "ab-date",
+      "ab-delta",
+      "ab-foot",
+      "ab-head",
+      "ab-imp",
+      "ab-liq",
+      "ab-liq-q",
+      "ab-liq-s",
+      "ab-liq-v",
+      "ab-meta",
+      "ab-name",
+      "ab-new",
+      "ab-nota",
+      "ab-num",
+      "ab-old",
+      "ab-st",
+      "ab-sub",
+      "ab-t",
+      "ab-ta",
+      "ab-tl",
+      "ab-total",
+      "ab-type",
+      "ab-wm",
+      "c",
+      "r",
+      "tot"
+    ]
+  }
+}

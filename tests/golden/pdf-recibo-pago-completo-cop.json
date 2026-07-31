@@ -1,0 +1,58 @@
+{
+  "version": 2,
+  "caso": "recibo-pago-completo-cop",
+  "generador": "generateRecibo",
+  "tema": "light",
+  "entradaHash": "48fd02605e0d215331dea6c4b2d541325ed183d3",
+  "estructura": {
+    "docTitle": "Recibo de Pago",
+    "h1": [
+      "Recibo de Pago"
+    ],
+    "cabeceras": [],
+    "etiquetas": [
+      "Deudor",
+      "Nombre",
+      "Cedula / ID",
+      "Telefono",
+      "Prestamo",
+      "Modalidad",
+      "Monto original",
+      "Tasa mensual",
+      "Detalle del pago",
+      "Tipo",
+      "Cuota",
+      "Fecha vencimiento",
+      "Fecha recaudo",
+      "Intereses",
+      "Abono a capital",
+      "Monto cuota",
+      "Saldo restante del prestamo",
+      "Proximas cuotas (quedan # de #)",
+      "Cuota ## - # de M de #",
+      "Cuota ## - # de M de #",
+      "Cuota ## - # de M de #"
+    ]
+  },
+  "valores": {
+    "bytes": 4444,
+    "nFilas": 0,
+    "nCeldas": 0,
+    "celdasPorTr": [],
+    "nMontos": 9,
+    "hashMontos": "753f9fed750d81c261bd187b29b7c7bb1f33038f",
+    "hashFname": "d18755323cab824b23c5f37428cd51760d514dd3",
+    "hashTexto": "0c757a1a55e4c61b577d202a5cdab82319b7eb2f",
+    "clases": [
+      "amount",
+      "footer",
+      "header",
+      "label",
+      "row",
+      "section",
+      "section-title",
+      "total-box",
+      "value"
+    ]
+  }
+}

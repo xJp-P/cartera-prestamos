@@ -6,25 +6,33 @@
 
 const fs   = require('fs');
 const path = require('path');
-const { PROD_DB, WORK } = require('./paths');
+const { PROD_DB, FIXTURE_DB, WORK } = require('./paths');
 
 function asegurarWork() {
   if (!fs.existsSync(WORK)) fs.mkdirSync(WORK, { recursive: true });
   return WORK;
 }
 
-// Copia la BD de produccion a una ruta temporal unica y la devuelve.
-// `etiqueta` solo sirve para poder identificar el archivo si algo falla.
+// Copia la BD FIXTURE a una ruta temporal unica y la devuelve.
+//
+// Conserva el nombre `copiaDeProduccion` porque el origen sigue siendo la cartera
+// real —mismos importes, fechas, ids y casos borde—, pero con las identidades
+// sustituidas (ver tests/fixture/crear-fixture.js). NINGUN test abre la BD del
+// usuario: hacerlo arrastraba nombres, cedulas, telefonos, notas privadas y hasta
+// los datos bancarios del propio usuario hasta los golden de un repo PUBLICO.
+//
+// Efecto lateral bueno: la suite deja de depender de que exista una BD concreta
+// en una maquina concreta. Corre igual en cualquier clone.
 function copiaDeProduccion(etiqueta) {
   asegurarWork();
-  if (!fs.existsSync(PROD_DB)) {
+  if (!fs.existsSync(FIXTURE_DB)) {
     throw new Error(
-      `No se encuentra la BD de produccion en ${PROD_DB}.\n` +
-      `Los tests que dependen de datos reales no pueden correr.`
+      `No se encuentra la BD fixture en ${FIXTURE_DB}.\n` +
+      `Regenerala con: node tests/fixture/crear-fixture.js`
     );
   }
   const destino = path.join(WORK, `${etiqueta || 'copia'}-${process.pid}-${Date.now()}.db`);
-  fs.copyFileSync(PROD_DB, destino);
+  fs.copyFileSync(FIXTURE_DB, destino);
   guardarContraProduccion(destino);
   return destino;
 }

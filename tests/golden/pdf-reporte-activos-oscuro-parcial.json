@@ -1,0 +1,73 @@
+{
+  "version": 2,
+  "caso": "reporte-activos-oscuro-parcial",
+  "generador": "generateReportePrestamosPDF",
+  "tema": "dark",
+  "entradaHash": "b4be2f21722525d7f01e06e6e55e56b89b0fb183",
+  "estructura": {
+    "docTitle": "Reporte de Prestamos Activos",
+    "h1": [
+      "Reporte de Prestamos Activos"
+    ],
+    "cabeceras": [
+      "Vencimiento",
+      "Deudor",
+      "Modalidad",
+      "Tasa",
+      "Cuota",
+      "Valor cuota",
+      "Saldo Pendiente",
+      "Estado"
+    ],
+    "etiquetas": []
+  },
+  "valores": {
+    "bytes": 11781,
+    "nFilas": 22,
+    "nCeldas": 176,
+    "celdasPorTr": [
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8
+    ],
+    "nMontos": 48,
+    "hashMontos": "453a457d61bab52ccafd88de7be094f2e38d8a3c",
+    "hashFname": "b8f8233920e5bcdeee9079ac1b2c17fa72f8fa34",
+    "hashTexto": "f811a8d70fa200e823d2b12a11ce562fd1bcff15",
+    "clases": [
+      "badge badge-mora",
+      "badge badge-pagado",
+      "badge badge-pend",
+      "footer",
+      "header",
+      "loan-row",
+      "loan-row mora",
+      "mora-detalle",
+      "mora-sub",
+      "summary",
+      "tran-detalle",
+      "tran-sub",
+      "usd-i",
+      "usd-sub"
+    ]
+  }
+}

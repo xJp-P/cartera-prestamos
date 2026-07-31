@@ -1,0 +1,252 @@
+{
+  "1781589504971un48": {
+    "acreedor": "Pablo Herrera",
+    "concepto": "Concepto de prueba 1",
+    "estado": "Activa",
+    "fecha_creacion": "2026-06-16",
+    "id": "1781589504971un48",
+    "monto_original": 1346000,
+    "pagos": [],
+    "saldo_pendiente": 1346000,
+    "titulo": "Deuda de prueba 1"
+  },
+  "1781589517850cxcw": {
+    "acreedor": "Quintin Abad",
+    "concepto": "Concepto de prueba 2",
+    "estado": "Activa",
+    "fecha_creacion": "2025-12-11",
+    "id": "1781589517850cxcw",
+    "monto_original": 640000,
+    "pagos": [],
+    "saldo_pendiente": 640000,
+    "titulo": "Deuda de prueba 2"
+  },
+  "1781589563523ytp4": {
+    "acreedor": "Pablo Herrera",
+    "concepto": "Concepto de prueba 3",
+    "estado": "Activa",
+    "fecha_creacion": "2026-06-16",
+    "id": "1781589563523ytp4",
+    "monto_original": 900000,
+    "pagos": [],
+    "saldo_pendiente": 900000,
+    "titulo": "Deuda de prueba 3"
+  },
+  "1781590745919arbh": {
+    "acreedor": "Rosa Cardenas",
+    "concepto": "Concepto de prueba 4",
+    "estado": "Activa",
+    "fecha_creacion": "2026-05-25",
+    "id": "1781590745919arbh",
+    "monto_original": 6000000,
+    "pagos": [],
+    "saldo_pendiente": 6000000,
+    "titulo": "Deuda de prueba 4"
+  },
+  "17815907822621ouj": {
+    "acreedor": "Pablo Herrera",
+    "concepto": "Concepto de prueba 5",
+    "estado": "Activa",
+    "fecha_creacion": "2026-06-16",
+    "id": "17815907822621ouj",
+    "monto_original": 2000000,
+    "pagos": [],
+    "saldo_pendiente": 2000000,
+    "titulo": "Deuda de prueba 5"
+  },
+  "1781632230844f1mr": {
+    "acreedor": "Pablo Herrera",
+    "concepto": "Concepto de prueba 6",
+    "estado": "Activa",
+    "fecha_creacion": "2025-12-05",
+    "id": "1781632230844f1mr",
+    "monto_original": 1000000,
+    "pagos": [],
+    "saldo_pendiente": 1000000,
+    "titulo": "Deuda de prueba 6"
+  },
+  "17816979358979v44wb": {
+    "acreedor": "Pablo Herrera",
+    "concepto": "Concepto de prueba 7",
+    "estado": "Activa",
+    "fecha_creacion": "<TS>",
+    "id": "17816979358979v44wb",
+    "monto_original": 0,
+    "pagos": [
+      {
+        "deuda_id": "17816979358979v44wb",
+        "fecha_pago": "<TS>",
+        "id": "1781697935899jd61dz",
+        "monto_pagado": 780720,
+        "notas": "Pago Diplomado",
+        "tipo": "abono"
+      },
+      {
+        "deuda_id": "17816979358979v44wb",
+        "fecha_pago": "<TS>",
+        "id": "1781697935899bu1vkm",
+        "monto_pagado": 4615500,
+        "notas": "Pago Unisinu",
+        "tipo": "abono"
+      },
+      {
+        "deuda_id": "17816979358979v44wb",
+        "fecha_pago": "<TS>",
+        "id": "1781697935899nd5cv7",
+        "monto_pagado": 2000000,
+        "notas": "Devolución préstamo amiga Nicol",
+        "tipo": "cargo"
+      },
+      {
+        "deuda_id": "17816979358979v44wb",
+        "fecha_pago": "<TS>",
+        "id": "1781697935899r64fbc",
+        "monto_pagado": 50000,
+        "notas": "Transferencia",
+        "tipo": "abono"
+      },
+      {
+        "deuda_id": "17816979358979v44wb",
+        "fecha_pago": "<TS>",
+        "id": "17816979358994ytpfp",
+        "monto_pagado": 2000000,
+        "notas": "Devolución préstamo amiga Nicol",
+        "tipo": "cargo"
+      },
+      {
+        "deuda_id": "17816979358979v44wb",
+        "fecha_pago": "<TS>",
+        "id": "178169793589996c78u",
+        "monto_pagado": 250000,
+        "notas": "Transferencia a Mauricio",
+        "tipo": "abono"
+      },
+      {
+        "deuda_id": "17816979358979v44wb",
+        "fecha_pago": "<TS>",
+        "id": "1781697935899t5k1ly",
+        "monto_pagado": 1000000,
+        "notas": "Devolución préstamo amiga Nicol",
+        "tipo": "cargo"
+      },
+      {
+        "deuda_id": "17816979358979v44wb",
+        "fecha_pago": "<TS>",
+        "id": "1781697935899trjkty",
+        "monto_pagado": 1000000,
+        "notas": "Gasto en carro",
+        "tipo": "abono"
+      },
+      {
+        "deuda_id": "17816979358979v44wb",
+        "fecha_pago": "<TS>",
+        "id": "1781697935899b6goy4",
+        "monto_pagado": 2000000,
+        "notas": "Devolución préstamo amiga Nicol",
+        "tipo": "cargo"
+      },
+      {
+        "deuda_id": "17816979358979v44wb",
+        "fecha_pago": "<TS>",
+        "id": "1781697935899434uhz",
+        "monto_pagado": 390000,
+        "notas": "Compra silla PC",
+        "tipo": "abono"
+      },
+      {
+        "deuda_id": "17816979358979v44wb",
+        "fecha_pago": "<TS>",
+        "id": "1781697935899y6pwof",
+        "monto_pagado": 100000,
+        "notas": "Me regalaste",
+        "tipo": "abono"
+      },
+      {
+        "deuda_id": "17816979358979v44wb",
+        "fecha_pago": "<TS>",
+        "id": "178169793589962e0d0",
+        "monto_pagado": 1000000,
+        "notas": "Devolución préstamo amiga Nicol",
+        "tipo": "cargo"
+      },
+      {
+        "deuda_id": "17816979358979v44wb",
+        "fecha_pago": "<TS>",
+        "id": "17816979358999polnj",
+        "monto_pagado": 300000,
+        "notas": "Gasto en carro",
+        "tipo": "abono"
+      },
+      {
+        "deuda_id": "17816979358979v44wb",
+        "fecha_pago": "<TS>",
+        "id": "17816979358992488lb",
+        "monto_pagado": 500000,
+        "notas": "Gasto en carro",
+        "tipo": "abono"
+      },
+      {
+        "deuda_id": "17816979358979v44wb",
+        "fecha_pago": "<TS>",
+        "id": "1781697935899l3bfy1",
+        "monto_pagado": 2500000,
+        "notas": "Devolución préstamo amiga Nicol",
+        "tipo": "cargo"
+      },
+      {
+        "deuda_id": "17816979358979v44wb",
+        "fecha_pago": "<TS>",
+        "id": "17816979358999ux9xn",
+        "monto_pagado": 2700000,
+        "notas": "Pago Unisinu",
+        "tipo": "abono"
+      },
+      {
+        "deuda_id": "17816979358979v44wb",
+        "fecha_pago": "<TS>",
+        "id": "1781697935899ylaupe",
+        "monto_pagado": 4000000,
+        "notas": "Devolución préstamo amiga Nicol",
+        "tipo": "cargo"
+      },
+      {
+        "deuda_id": "17816979358979v44wb",
+        "fecha_pago": "<TS>",
+        "id": "1781697935899opauw2",
+        "monto_pagado": 4375000,
+        "notas": "Pago Unisinu",
+        "tipo": "abono"
+      },
+      {
+        "deuda_id": "17816979358979v44wb",
+        "fecha_pago": "<TS>",
+        "id": "1781697935899cvgrz3",
+        "monto_pagado": 6000000,
+        "notas": "Devolución préstamo trabajador Nicol",
+        "tipo": "cargo"
+      }
+    ],
+    "saldo_pendiente": 5438780,
+    "titulo": "Deuda de prueba 7"
+  },
+  "1782442733215vtpf": {
+    "acreedor": "Simon Toro",
+    "concepto": "Concepto de prueba 8",
+    "estado": "Pagada",
+    "fecha_creacion": "2026-06-01",
+    "id": "1782442733215vtpf",
+    "monto_original": 1000000,
+    "pagos": [
+      {
+        "deuda_id": "1782442733215vtpf",
+        "fecha_pago": "2026-06-30",
+        "id": "1784710118749se7o",
+        "monto_pagado": 1000000,
+        "notas": "",
+        "tipo": "abono"
+      }
+    ],
+    "saldo_pendiente": 0,
+    "titulo": "Deuda de prueba 8"
+  }
+}
