@@ -23,70 +23,24 @@
 
 import { CHANGELOGS } from './datos/changelogs.js';
 
+// Hubs del frontend — Etapa 3/B3 del refactor.
+// React y ReactDOM NO se importan: son globales que dejan los <script> clasicos
+// de /vendor (ver core/react.js).
+import { h, useState, useEffect, useMemo, useCallback, createRoot } from './core/react.js';
+import { API, setErrorHandler, showError } from './core/api.js';
+import {
+  fmt, fmtUSD, fmtN, copToUsd, fmtD,
+  fmtNumInput, parseNum, parseDecimalInput, parseIntInput,
+} from './core/format.js';
+import {
+  _submitGuard, properCase, freqLabel, freqCuotaLabel, nowStr, addDays,
+} from './core/ui.js';
+
 'use strict';
-var h = React.createElement;
-var useState = React.useState;
-var useEffect = React.useEffect;
-var useMemo = React.useMemo;
-var useCallback = React.useCallback;
-var createRoot = ReactDOM.createRoot;
 
-// ── Canal de errores hacia la UI ────────────────────────────────────────────
-// `App` conecta su toast con `setErrorHandler` al renderizar; hasta que lo haga
-// (y en los arneses de test, que no montan la UI) los errores caen a la consola.
-//
-// POR QUE UN SETTER Y NO UNA VARIABLE REASIGNABLE: esto era `var _showError = null`
-// reasignado desde el cuerpo de render de `App`. Bajo modulos ES un `import` es un
-// binding de SOLO LECTURA, asi que esa reasignacion seria un TypeError en el primer
-// render — es decir, pantalla negra, la misma clase de fallo del Bug #40. El handler
-// queda encapsulado aca y se cambia llamando a una funcion, que si cruza modulos.
-var _errorHandler = null;
-function setErrorHandler(fn) { _errorHandler = typeof fn === 'function' ? fn : null; }
-function showError(msg) {
-  if (_errorHandler) _errorHandler(msg);
-  else console.error(msg);
-}
-function handleApiError(err) {
-  showError(err && err.message ? err.message : 'Error de conexion con el servidor');
-}
-function handleRes(r) {
-  if (!r.ok) return r.text().then(function(t) { try { var j=JSON.parse(t); throw new Error(j.error||'Error del servidor'); } catch(e) { if(e.message) throw e; throw new Error('Error del servidor ('+r.status+')'); }});
-  return r.json();
-}
-var API = {
-  get:  function(url)   { return fetch(url).then(handleRes).catch(function(e){handleApiError(e);return null;}); },
-  post: function(url,b) { return fetch(url,{method:'POST',  headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(handleRes).catch(function(e){handleApiError(e);return null;}); },
-  put:  function(url,b) { return fetch(url,{method:'PUT',   headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(handleRes).catch(function(e){handleApiError(e);return null;}); },
-  del:  function(url)   { return fetch(url,{method:'DELETE'}).then(handleRes).catch(function(e){handleApiError(e);return null;}); }
-};
 
-// ── Guarda anti doble-submit (Bug #29) ───────────────────────────────────────
-// Ejecuta `fn` solo si no hay otra operacion en vuelo y libera SIEMPRE la bandera:
-// al resolver, al rechazar, si `fn` no devuelve promesa (rutas que ceden el control a
-// otro modal, como el pre-flight de mora) o si lanza de forma sincrona.
-//
-// La liberacion va en el .then y NO en un .catch a proposito: los helpers de API
-// (API.get/post/put/del) atrapan el error y RESUELVEN null, nunca rechazan, asi que un
-// .catch jamas correria y el boton quedaria bloqueado para siempre. El manejador de
-// rechazo se conserva por si esos helpers dejaran de atrapar en el futuro.
-//
-// Implementacion unica y compartida: los endpoints de escritura NO son idempotentes, y
-// cinco copias de esta logica serian cinco sitios donde equivocarse.
-function _submitGuard(sending,setSending,fn){
-  if(sending) return;
-  setSending(true);
-  var p;
-  try{ p=fn(); }catch(e){ setSending(false); throw e; }
-  if(p&&typeof p.then==='function') p.then(function(){setSending(false);},function(){setSending(false);});
-  else setSending(false);
-}
 
 function pmt(r,n,pv){ return r===0?pv/n:pv*r*Math.pow(1+r,n)/(Math.pow(1+r,n)-1); }
-function fmt(n)  { return new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(n||0); }
-function fmtUSD(n){ return 'USD $'+new Intl.NumberFormat('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}).format(n||0); }
-function fmtN(n) { return new Intl.NumberFormat('es-CO').format(Math.round(n||0)); }
-// Proper Case (Capitalizacion de Titulos): "pa"->"Pa", "juan PEREZ"->"Juan Perez"
-function properCase(s){ return String(s||'').trim().split(/\s+/).map(function(w){return w?w.charAt(0).toUpperCase()+w.slice(1).toLowerCase():w;}).join(' '); }
 // Saldo restante de una cuota considerando pagos parciales
 function pendCuota(p){ return Math.max(0,(p.cuotaTotal||0)-(p.partialPaid||0)); }
 // Codigo de Factura de Cobro: FC-[2 primeras letras del deudor]-[ultimos 3 del loanId]-[cuota 2 digitos]
@@ -102,8 +56,6 @@ function payMatchesQuery(p,q){
   if(ql.indexOf('fc-')===0) return facturaCode(p).toLowerCase().indexOf(ql)!==-1;
   return String(p.nombreCliente||'').toLowerCase().indexOf(ql)!==-1;
 }
-// Convierte COP a USD usando TRM del préstamo; retorna string "USD $X.XX"
-function copToUsd(cop,trm){ return trm>0?fmtUSD(cop/trm):''; }
 // v1.11.4: eventos de caja reales de un pago. Devuelve [{fecha:'YYYY-MM-DD', cop:int}].
 // Fuente de verdad = ledger payments.recibos (cada parcial en su fecha + el pago final). Si la fila
 // no tiene ledger (historico previo, abonos a capital, liquidaciones de mora) cae al FALLBACK: un
@@ -216,7 +168,6 @@ function pendienteDeCuota(pay){
   var imp=imputarCobros(pay).totales;
   return {interes:Math.max(0,intTot-imp.interes), capital:Math.max(0,capTot-imp.capital)};
 }
-function fmtD(s) { return s?new Date(s+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}):'-'; }
 
 // ── FLUJO DE CAJA REAL de un prestamo (v2.2.0) ────────────────────────────────
 // Reconstruye lo que REALMENTE entro, cuando entro, a partir de la unica fuente fiable:
@@ -320,38 +271,7 @@ function computeLiquidacion(loan, loanPays, opts){
 }
 
 // ── Input numérico con formato automático (1.000.000) ──
-function fmtNumInput(v){
-  if(!v&&v!==0)return '';
-  var s=String(v).replace(/[^\d,]/g,'');
-  var parts=s.split(',');
-  var ent=parts[0].replace(/^0+(?=\d)/,'');
-  if(!ent)ent='0';
-  ent=ent.replace(/\B(?=(\d{3})+(?!\d))/g,'.');
-  return parts.length>1?ent+','+parts[1]:ent;
-}
-function parseNum(v){
-  if(!v)return '';
-  var s=String(v).replace(/\./g,'').replace(',','.');
-  return s;
-}
 // Acepta coma o punto como decimal; solo deja digitos y un unico punto decimal.
-function parseDecimalInput(v){
-  var s=String(v||'').replace(',','.').replace(/[^\d.]/g,'');
-  var parts=s.split('.');
-  if(parts.length>2) s=parts[0]+'.'+parts.slice(1).join('');
-  return s;
-}
-// Solo deja digitos (para inputs enteros como plazo).
-function parseIntInput(v){return String(v||'').replace(/[^\d]/g,'');}
-function freqLabel(loan){
-  if(loan.modalidad==='Intereses') return '\u221E Indefinido';
-  var n=loan.plazoMeses;
-  var f=loan.frecuencia||'Mensual';
-  if(f==='Semanal') return n+' semanas';
-  if(f==='Quincenal') return n+' quincenas';
-  return n+' cuotas';
-}
-function freqCuotaLabel(f){return f==='Semanal'?'semanal':f==='Quincenal'?'quincenal':'mensual';}
 
 function generateCronogramaPDF(loan, payments, darkMode) {
   var esUSD = loan && loan.moneda === 'USD';
@@ -1380,8 +1300,6 @@ function generateReciboAbono(loan, allPays, opts) {
     w.onload = function() { w.print(); };
   }
 }
-function nowStr()    { var d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
-function addDays(s,n){ var d=new Date(s+'T12:00:00'); d.setDate(d.getDate()+n); return d.toISOString().split('T')[0]; }
 
 var ST = {
   'Pagado':   {bg:'#0f2b19',color:'#3fb950',bd:'#1b4332',icon:'OK'},
