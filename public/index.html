@@ -489,6 +489,12 @@ function generateReportePrestamosPDF(loans, pays, darkMode) {
   var fechaEmision = new Date().toLocaleDateString('es-CO', {day:'2-digit', month:'long', year:'numeric'});
   var hoy = new Date(); hoy.setHours(12, 0, 0, 0);
   function diasAtraso(iso) { if (!iso) return 0; var d = new Date(iso + 'T12:00:00'); return Math.max(0, Math.round((hoy - d) / 86400000)); }
+  // v2.1.2 — SALDO REAL de una cuota en mora: lo que FALTA por cobrar, no el valor original.
+  // Un pago parcial (POST /payments/:id/partial que no completa la cuota) deja la cuota En Mora
+  // con partialPaid > 0; imprimir cuotaTotal afirmaba que se debe el 100% cuando ya entro parte
+  // del dinero. Se usa en las 4 superficies del reporte (sub-fila, orden del mapa de riesgo,
+  // total vencido y su equivalente USD) para que no puedan divergir entre si.
+  function saldoMora(p) { return Math.max(0, (p.cuotaTotal || 0) - (p.partialPaid || 0)); }
 
   // Saldo (formula canonica: originalCOP - capital pagado) + cuotas en mora, por prestamo activo
   var rows = (loans || []).filter(function(l) { return l.estado === 'Activo'; }).map(function(l) {
@@ -500,7 +506,7 @@ function generateReportePrestamosPDF(loans, pays, darkMode) {
     var saldo = Math.max(0, originalCOP - capPagado);
     var moras = lp.filter(function(p) { return p.id.indexOf('-ab-') === -1 && p.estadoPago === 'En Mora'; })
                   .sort(function(a, b) { return a.cuotaN - b.cuotaN; });
-    var vencido = moras.reduce(function(s, p) { return s + p.cuotaTotal; }, 0);
+    var vencido = moras.reduce(function(s, p) { return s + saldoMora(p); }, 0);
     // Fila principal = proxima cuota PENDIENTE (el ciclo regular activo). Las En Mora NO van aqui:
     // se detallan en sub-filas rojas. Si no queda ninguna Pendiente (cronograma terminado) -> '—'.
     var pendientes = lp.filter(function(p) { return p.id.indexOf('-ab-') === -1 && p.estadoPago === 'Pendiente'; })
@@ -550,10 +556,10 @@ function generateReportePrestamosPDF(loans, pays, darkMode) {
   });
 
   var totalSaldo = rows.reduce(function(s, r) { return s + r.saldo; }, 0);
-  var totalVencido = rows.reduce(function(s, r) { return s + r.moras.reduce(function(a, p) { return a + p.cuotaTotal; }, 0); }, 0);
+  var totalVencido = rows.reduce(function(s, r) { return s + r.moras.reduce(function(a, p) { return a + saldoMora(p); }, 0); }, 0);
   var countMora = rows.filter(function(r) { return r.moras.length > 0; }).length;
   // Porcion en USD de los totales (solo prestamos en dolares) para mostrarla al lado del COP
-  var totalVencidoUSD = rows.reduce(function(s, r) { if (!r.esUSD || r.trm <= 0) return s; return s + r.moras.reduce(function(a, p) { return a + p.cuotaTotal; }, 0) / r.trm; }, 0);
+  var totalVencidoUSD = rows.reduce(function(s, r) { if (!r.esUSD || r.trm <= 0) return s; return s + r.moras.reduce(function(a, p) { return a + saldoMora(p); }, 0) / r.trm; }, 0);
   var totalSaldoUSD = rows.reduce(function(s, r) { if (!r.esUSD || r.trm <= 0) return s; return s + r.saldo / r.trm; }, 0);
 
   var filasHTML = rows.map(function(r) {
@@ -578,10 +584,17 @@ function generateReportePrestamosPDF(loans, pays, darkMode) {
     // Sub-filas rojas: cuotas En Mora. El valor USD va en azul (igual que el resto de valores USD).
     var moraTrs = r.moras.map(function(p) {
       var dias = diasAtraso(p.fechaPago);
-      var usdMora = r.esUSD ? ' &middot; <span class="usd-i">' + copToUsd(p.cuotaTotal, r.trm) + '</span>' : '';
+      // v2.1.2 — se imprime el SALDO PENDIENTE de la cuota, no su valor nominal: si ya entro un
+      // pago parcial, cobrar el 100% seria cobrar dos veces lo abonado.
+      var pend = saldoMora(p);
+      var abonado = Math.max(0, (p.cuotaTotal || 0) - pend);
+      var usdMora = r.esUSD ? ' &middot; <span class="usd-i">' + copToUsd(pend, r.trm) + '</span>' : '';
+      // Si hubo abono parcial se aclara, para que el deudor entienda por que la cifra es menor
+      // que el valor de la cuota (de lo contrario el documento parece tener un error).
+      var notaParcial = abonado > 0 ? ' &middot; abonado ' + fmt(abonado) + ' de ' + fmt(p.cuotaTotal) : '';
       return '<tr class="mora-sub"><td colspan="8"><div class="mora-detalle">' +
-        '<span>&#8627; Cuota #' + p.cuotaN + ' &middot; vencio el ' + fmtD(p.fechaPago) + ' &middot; ' + dias + ' dia' + (dias === 1 ? '' : 's') + ' de atraso</span>' +
-        '<span><strong>' + fmt(p.cuotaTotal) + '</strong>' + usdMora + '</span></div></td></tr>';
+        '<span>&#8627; Cuota #' + p.cuotaN + ' &middot; vencio el ' + fmtD(p.fechaPago) + ' &middot; ' + dias + ' dia' + (dias === 1 ? '' : 's') + ' de atraso' + notaParcial + '</span>' +
+        '<span><strong>' + fmt(pend) + '</strong>' + usdMora + '</span></div></td></tr>';
     }).join('');
     // Sub-fila ambar: cuota transitoria (interes prorrateado por cambio de fecha)
     var transTr = r.esTransitoria ? ('<tr class="tran-sub"><td colspan="8"><div class="tran-detalle">' +
@@ -1872,7 +1885,8 @@ function App(){
       'Abonos en dolares con doble entrada: ahora registras por separado los USD del abono (que definen cuanto capital se descuenta, a la TRM pactada) y los COP que realmente recibiste. La app calcula en vivo la TRM implicita y te muestra en verde o rojo la ganancia o perdida por el movimiento del dolar. Antes esa diferencia cambiaria no quedaba registrada en ninguna parte.',
       'Mensajes de error mas claros al abonar: te dicen cual es el maximo, por que lo es, y a que herramienta acudir para cobrar el resto.'
     ],
-    '2.1.1': [
+    '2.1.2': [
+      '[BUGFIX v2.1.2] Fix de botones deshacer huerfanos y correccion de saldos parciales en PDF de prestamos activos.',
       '[HOTFIX v2.1.1] Esta es la version corregida del despliegue 2.1.0, que no alcanzaba a abrir (se quedaba en pantalla negra al iniciar). Ya esta solucionado y todo lo de abajo llega funcionando.',
       'NUEVO: boton Deshacer en el Historial. Si registras un pago, un abono, una liquidacion, una reestructuracion, un cierre forzoso, un cambio de fecha o cualquier movimiento de Mis Deudas por error, ahora puedes revertirlo y la app restaura el estado EXACTO que tenia antes: las cuotas, el saldo, las fechas y hasta los recibos internos vuelven como estaban.',
       'Solo se puede deshacer la ultima operacion de cada prestamo o deuda. Las anteriores muestran el boton apagado y te dicen cual tienes que deshacer primero, para que nunca se destape un movimiento sobre el que ya construiste otro.',

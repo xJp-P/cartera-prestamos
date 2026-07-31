@@ -950,6 +950,14 @@ module.exports = function createApp(dbPath) {
     db.transaction(() => {
       db.prepare('DELETE FROM payments WHERE prestamoId = ?').run(req.params.id);
       db.prepare('DELETE FROM loans WHERE id = ?').run(req.params.id);
+      // v2.1.2 — UNDOS HUERFANOS. Como este endpoint NO esta journalizado, nada "tapa" en el LIFO
+      // a las entradas previas de este prestamo: seguian 'disponible' y el Historial mostraba su
+      // boton Deshacer activo apuntando a un agregado que ya no existe. Al intentarlo, el restore
+      // RESUCITARIA el prestamo borrado (el snapshot lo contiene entero), contradiciendo una
+      // eliminacion deliberada. Se invalidan dentro de la MISMA transaccion del borrado.
+      // No se borran: el journal es append-only, asi que quedan como 'invalidado' (la UI no
+      // ofrece boton para ese estado y POST /api/undo/:id lo rechaza).
+      db.prepare("UPDATE undo_journal SET estado = 'invalidado' WHERE scope_tipo = 'loan' AND scope_id = ? AND estado = 'disponible'").run(req.params.id);
     })();
     if (loan) logAction.run('eliminacion', 'Eliminaste prestamo de ' + loan.nombre);
     res.json({ ok: true });
