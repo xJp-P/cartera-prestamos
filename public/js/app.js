@@ -27,27 +27,13 @@ import { CHANGELOGS } from './datos/changelogs.js';
 // React y ReactDOM NO se importan: son globales que dejan los <script> clasicos
 // de /vendor (ver core/react.js).
 import { h, useState, useEffect, useMemo, useCallback, createRoot } from './core/react.js';
-import { API, setErrorHandler, showError } from './core/api.js';
-import {
-  fmt, fmtUSD, fmtN, copToUsd, fmtD,
-  fmtNumInput, parseNum, parseDecimalInput, parseIntInput,
-} from './core/format.js';
-import {
-  _submitGuard, properCase, freqLabel, freqCuotaLabel, nowStr, addDays,
-  facturaCode, payMatchesQuery,
-} from './core/ui.js';
-import {
-  cobrosDe, imputarCobros, saldoConCaja, pendienteDeCuota, flujoCajaDe, computeLiquidacion,
-  pendCuota,
-} from './core/dominio.js';
-import { ST, Ico } from './componentes/iconos.js';
-import { Modal, Fld, ABtn } from './componentes/base.js';
-import { SparklineChart } from './componentes/SparklineChart.js';
-import { generateCronogramaPDF }       from './pdf/cronograma.js';
-import { generateReportePrestamosPDF } from './pdf/reporte-activos.js';
-import { generateRecibo }              from './pdf/recibo-pago.js';
-import { generateFacturaCobro }        from './pdf/factura-cobro.js';
-import { generateReciboAbono }         from './pdf/recibo-abono.js';
+import { API, setErrorHandler } from './core/api.js';
+import { fmt, fmtD } from './core/format.js';
+import { properCase, nowStr, addDays, payMatchesQuery } from './core/ui.js';
+import { cobrosDe, imputarCobros, saldoConCaja, pendCuota } from './core/dominio.js';
+import { Ico } from './componentes/iconos.js';
+import { generateCronogramaPDF } from './pdf/cronograma.js';
+import { generateReciboAbono }   from './pdf/recibo-abono.js';
 
 // Vistas — Etapa 3/B7. El estado sigue en `App` y baja por props.
 import { DashView } from './vistas/DashView.js';

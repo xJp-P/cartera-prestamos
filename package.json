@@ -76,7 +76,9 @@
           "!dist",
           "!.git",
           "!.claude",
-          "!.github"
+          "!.github",
+          "!tests",
+          "!CLAUDE.md"
         ]
       }
     ]
