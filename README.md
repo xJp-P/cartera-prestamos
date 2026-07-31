@@ -72,9 +72,22 @@ Desde la seccion **Desarrollador** dentro de la app puedes cambiar la ubicacion 
 │   ├── main.js           # Ventana Electron + IPC handlers + auto-update
 │   └── preload.js        # Bridge seguro entre Electron y frontend
 ├── backend/
-│   └── server.js         # API Express + SQLite + motor financiero
+│   ├── server.js         # Factory: abre la BD, arma el contexto y monta los routers
+│   ├── core/             # engine (motor financiero puro) · atomic · cobros · errors · util
+│   ├── db/               # schema (esquema y migraciones) · statements · housekeeping
+│   └── routes/           # loans · payments · debts · recalculate · undo · vendor · config · activity
 ├── public/
-│   └── index.html        # UI completa en React
+│   ├── index.html        # Esqueleto HTML
+│   ├── css/styles.css    # Hoja de estilos (temas claro/oscuro)
+│   └── js/
+│       ├── app.js        # Orquestador: estado global y composicion de vistas
+│       ├── core/         # react · api · format · dominio · calculo · ui
+│       ├── componentes/  # Ico · Modal/Fld/ABtn · SparklineChart · FlujoCajaPanel
+│       ├── vistas/       # Las 9 vistas de la app
+│       ├── modales/      # Los 13 modales
+│       ├── pdf/          # Los 5 generadores de documentos
+│       └── datos/        # changelogs
+├── tests/                # Suite de verificacion (ver tests/README.md)
 ├── build/
 │   ├── icon.ico          # Icono Windows
 │   ├── icon.png          # Icono general
@@ -83,6 +96,9 @@ Desde la seccion **Desarrollador** dentro de la app puedes cambiar la ubicacion 
     └── workflows/
         └── build.yml     # CI/CD: compila y publica releases
 ```
+
+Modulos ES nativos, sin bundler ni paso de compilacion: la app se sirve por HTTP
+desde el propio backend, asi que el navegador resuelve los `import` por si solo.
 
 ## Desarrollo local
 

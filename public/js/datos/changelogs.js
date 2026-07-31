@@ -535,5 +535,10 @@ export const CHANGELOGS = {
     'RECIBO DE ABONO: el cronograma que imprime ya descuenta lo que el deudor abono parcialmente; antes lo volvia a cobrar en el TOTAL A PAGAR.',
     'REPORTE DE PRESTAMOS ACTIVOS y CRONOGRAMA en PDF: muestran el mismo saldo que ves en pantalla. Antes los documentos y la app podian dar cifras distintas del mismo prestamo.',
     'NUEVO en el flujo de caja de prestamos en dolares: columna Efecto TRM, que muestra cuanto se perdio o gano por el cambio en cada cobro. Interes + Capital + Efecto TRM = lo que entro.'
+  ],
+  '2.4.0': [
+    'Reorganizacion interna del codigo. La app funciona exactamente igual: no cambia ninguna cifra, ningun calculo ni ninguna pantalla.',
+    'El proyecto pasa de dos archivos gigantes a modulos separados, lo que hace mas rapido y seguro corregir errores y agregar cosas nuevas.',
+    'Se anadio una bateria de pruebas automaticas que revisa los saldos, los cobros, los 5 documentos PDF y los 25 servicios internos antes de cada entrega.'
   ]
 };
