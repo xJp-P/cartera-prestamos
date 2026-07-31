@@ -15,9 +15,10 @@
 // Ejecutando de verdad en un contexto se detectan los errores de carga, y de
 // paso no hay que mantener a mano la lista de 75 simbolos.
 
-const fs = require('fs');
-const vm = require('vm');
-const { INDEX_HTML } = require('./paths');
+const fs   = require('fs');
+const vm   = require('vm');
+const path = require('path');
+const { INDEX_HTML, PUBLIC_DIR } = require('./paths');
 
 // ── Extraccion ───────────────────────────────────────────────────────────────
 
@@ -41,6 +42,55 @@ function escanearScripts(html) {
     }
   }
   return { inline, externos };
+}
+
+// ── Resolucion del grafo de modulos ──────────────────────────────────────────
+// Aplana el grafo ES en UN solo texto ejecutable: recorre los `import` en
+// profundidad, concatena cada dependencia antes de quien la usa y le quita las
+// palabras `import`/`export`. Asi los simbolos de todos los modulos conviven en un
+// mismo ambito y el arnes los ve igual que cuando todo era un <script> inline.
+//
+// Por que aplanar y no `import()` de verdad: los tests necesitan los simbolos
+// INTERNOS (imputarCobros, saldoConCaja, los 5 generadores de PDF...), y un modulo
+// solo expone lo que exporta. Aplanar da acceso a todo sin obligar a exportar cosas
+// solo para poder probarlas.
+//
+// Es tolerable porque el proyecto no tiene colisiones de nombres entre modulos
+// (75 simbolos top-level, todos unicos). Si algun dia dos modulos declaran el mismo
+// nombre, esto lo delata con un SyntaxError de redeclaracion en vez de callarselo.
+
+const RE_IMPORT = /^[ \t]*import\s+(?:[\s\S]*?\s+from\s+)?['"]([^'"]+)['"]\s*;?[ \t]*$/gm;
+
+function resolverGrafo(entradaAbs, vistos, orden) {
+  const abs = path.resolve(entradaAbs);
+  if (vistos.has(abs)) return;
+  vistos.add(abs);
+
+  if (!fs.existsSync(abs)) {
+    throw new Error(`load-frontend: el modulo ${abs} no existe (import roto en el grafo).`);
+  }
+  let src = fs.readFileSync(abs, 'utf8');
+
+  // Primero las dependencias (orden topologico: la dependencia va antes).
+  const deps = [];
+  let m;
+  RE_IMPORT.lastIndex = 0;
+  while ((m = RE_IMPORT.exec(src)) !== null) deps.push(m[1]);
+  for (const d of deps) {
+    if (!d.startsWith('.') && !d.startsWith('/')) continue; // paquete externo: no aplica aca
+    const destino = d.startsWith('/')
+      ? path.join(PUBLIC_DIR, d.replace(/^\//, ''))
+      : path.resolve(path.dirname(abs), d);
+    resolverGrafo(destino, vistos, orden);
+  }
+
+  // Quitar los `import`, y desnudar los `export` dejando la declaracion.
+  src = src.replace(RE_IMPORT, '');
+  src = src.replace(/^[ \t]*export\s+default\s+/gm, 'var __default__ = ');
+  src = src.replace(/^[ \t]*export\s+(?=(?:const|let|var|function|class|async)\b)/gm, '');
+  src = src.replace(/^[ \t]*export\s*\{[^}]*\}\s*;?[ \t]*$/gm, '');
+
+  orden.push({ archivo: path.relative(PUBLIC_DIR, abs), codigo: src });
 }
 
 // ── Stubs del entorno de navegador ───────────────────────────────────────────
@@ -139,21 +189,34 @@ function cargarFrontend(opts) {
   const html = fs.readFileSync(INDEX_HTML, 'utf8');
   const { inline, externos } = escanearScripts(html);
 
-  // ---- Guarda anti "verde en vacio" -----------------------------------------
-  // Si un dia el inline desaparece porque el refactor ya migro a modulos, este
-  // arnes NO debe reportar exito con 0 simbolos: debe fallar y decir que hacer.
-  if (inline.length === 0) {
+  // ---- De donde sale el codigo ----------------------------------------------
+  // Pre-refactor: un <script> inline. Post-B1: <script type="module" src=...>.
+  // Se soportan los dos, y si no aparece NINGUNO se falla ruidosamente: un arnes
+  // que carga 0 simbolos y reporta exito es el modo de fallo que hay que impedir.
+  let script, meta;
+
+  const propios = externos.filter(e => e.src.startsWith('/') && !e.src.startsWith('/vendor/'));
+
+  if (inline.length > 0) {
+    // El script de la app es el inline mas grande.
+    const s = inline.slice().sort((a, b) => b.code.length - a.code.length)[0];
+    script = { code: s.code, start: s.start };
+    meta = { origen: 'inline', lineas: `${s.start}-${s.end}`, modulos: [] };
+  } else if (propios.length > 0) {
+    // Grafo de modulos ES, aplanado a un solo texto.
+    const vistos = new Set(), orden = [];
+    for (const e of propios) {
+      resolverGrafo(path.join(PUBLIC_DIR, e.src.replace(/^\//, '')), vistos, orden);
+    }
+    script = { code: orden.map(o => o.codigo).join('\n'), start: 0 };
+    meta = { origen: 'modulos', lineas: '-', modulos: orden.map(o => o.archivo) };
+  } else {
     throw new Error(
-      'load-frontend: `public/index.html` ya no tiene <script> inline.\n' +
-      `Scripts externos encontrados: ${externos.map(e => e.src).join(', ') || '(ninguno)'}\n` +
-      'El refactor a modulos ES ya ocurrio -> actualiza cargarFrontend() para\n' +
-      'que haga import() de los modulos en vez de evaluar el inline.'
+      'load-frontend: `public/index.html` no tiene ni <script> inline ni <script src> propio.\n' +
+      `Scripts vistos: ${externos.map(e => e.src).join(', ') || '(ninguno)'}\n` +
+      'Sin codigo que cargar, cualquier "OK" de esta suite seria mentira.'
     );
   }
-
-  // El script de la app es el inline mas grande (los otros, si existieran,
-  // serian arranques menores). Hoy hay exactamente uno.
-  const script = inline.slice().sort((a, b) => b.code.length - a.code.length)[0];
 
   const captura = { pdfs: [] };
   const { React, ReactDOM } = crearStubReact();
@@ -200,13 +263,11 @@ function cargarFrontend(opts) {
     simbolos,
     captura,
     sandbox,
-    meta: {
-      origen: 'inline',
-      lineas: `${script.start}-${script.end}`,
-      bytes:  script.code.length,
+    meta: Object.assign({}, meta, {
+      bytes: script.code.length,
       externos,
       nSimbolos: Object.keys(simbolos).length,
-    },
+    }),
   };
 }
 
