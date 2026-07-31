@@ -53,3 +53,11 @@ export function facturaCode(p){
   var ini=properCase(String(p.nombreCliente||'')).replace(/\s+/g,'').slice(0,2);
   return 'FC-'+ini+'-'+String(p.prestamoId||'').slice(-3)+'-'+String(p.cuotaN||0).padStart(2,'0');
 }
+
+// Match del buscador de Pagos: si el texto empieza por "fc-" filtra por codigo de factura; si no, por nombre.
+export function payMatchesQuery(p,q){
+  if(!q) return true;
+  var ql=String(q).toLowerCase().trim();
+  if(ql.indexOf('fc-')===0) return facturaCode(p).toLowerCase().indexOf(ql)!==-1;
+  return String(p.nombreCliente||'').toLowerCase().indexOf(ql)!==-1;
+}

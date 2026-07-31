@@ -252,3 +252,9 @@ export function computeLiquidacion(loan, loanPays, opts){
     total: total
   };
 }
+
+// Saldo restante de una cuota considerando pagos parciales.
+// Convive con `pendienteDeCuota` (arriba), que hace el mismo calculo por otra via.
+// NO se consolidan: la duplicacion es preexistente y unificarla seria cambiar logica.
+// Saldo restante de una cuota considerando pagos parciales
+export function pendCuota(p){ return Math.max(0,(p.cuotaTotal||0)-(p.partialPaid||0)); }
