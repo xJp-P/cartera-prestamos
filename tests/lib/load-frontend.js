@@ -251,12 +251,39 @@ function cargarFrontend(opts) {
     );
   }
 
-  // Todo lo declarado top-level quedo en el global del contexto.
+  // ---- Cosecha de simbolos --------------------------------------------------
+  // Los `var` y `function` de nivel superior SI quedan como propiedades del global
+  // del contexto...
   const reservados = new Set(['window','document','localStorage','navigator','location','console','fetch',
                               'setTimeout','clearTimeout','setInterval','clearInterval','globalThis','self']);
   const simbolos = {};
   for (const k of Object.getOwnPropertyNames(sandbox)) {
     if (!reservados.has(k)) simbolos[k] = sandbox[k];
+  }
+
+  // ...pero `const`, `let` y `class` NO: viven en el ambito lexico global, que no
+  // es el objeto global. Sin este segundo paso, todo lo que un modulo declare con
+  // `const` (o exporte con `export const`) resultaria INVISIBLE para el arnes, que
+  // seguiria reportando OK sobre los simbolos que si ve. Es un verde en vacio en
+  // camara lenta, y aparecio en cuanto B2 saco `CHANGELOGS` a su propio modulo.
+  //
+  // Se leen evaluando una expresion en el MISMO contexto: las declaraciones
+  // lexicas globales persisten entre llamadas a runInContext.
+  const declarados = new Set();
+  const RE_DECL = /^(?:const|let|class|var|function|async\s+function)\s+([A-Za-z_$][\w$]*)/gm;
+  let d;
+  while ((d = RE_DECL.exec(script.code)) !== null) declarados.add(d[1]);
+
+  const faltantes = [...declarados].filter(n => !(n in simbolos) && !reservados.has(n));
+  if (faltantes.length) {
+    const expr = '({' + faltantes.map(n => `${JSON.stringify(n)}: typeof ${n} === 'undefined' ? undefined : ${n}`).join(',') + '})';
+    let lexicos = {};
+    try {
+      lexicos = vm.runInContext(expr, ctx, { filename: 'load-frontend:cosecha-lexica' });
+    } catch (e) {
+      throw new Error(`load-frontend: no se pudieron cosechar los simbolos lexicos (${faltantes.length}): ${e.message}`);
+    }
+    for (const [k, v] of Object.entries(lexicos)) if (v !== undefined) simbolos[k] = v;
   }
 
   return {
