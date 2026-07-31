@@ -36,6 +36,8 @@ const {
 const crearRutasVendor   = require('./routes/vendor');
 const crearRutasConfig   = require('./routes/config');
 const crearRutasActivity = require('./routes/activity');
+const crearRutasUndo     = require('./routes/undo');
+const crearRutasRecalc   = require('./routes/recalculate');
 
 
 module.exports = function createApp(dbPath) {
@@ -83,168 +85,8 @@ module.exports = function createApp(dbPath) {
   } = crearAtomic({ db, insUndo, logActionUndo, appVersion: APP_VERSION });
   podarJournal();
 
-  // ── API: Deshacer ────────────────────────────────────────────────────────────
-  app.post('/api/undo/:id', (req, res) => {
-    const entry = db.prepare('SELECT * FROM undo_journal WHERE id = ?').get(req.params.id);
-    if (!entry) return res.status(404).json({ error: 'Operacion no encontrada en el historial' });
-    if (entry.estado !== 'disponible') {
-      return res.status(400).json({ error: 'Esta operacion ya fue ' + (entry.estado === 'deshecho' ? 'deshecha' : 'invalidada') + ' y no puede revertirse de nuevo' });
-    }
-    // Candado A — LIFO estricto por scope: solo la entrada disponible MAS reciente
-    // de este agregado puede deshacerse.
-    const top = db.prepare("SELECT id, descripcion, created_at FROM undo_journal WHERE scope_tipo=? AND scope_id=? AND estado='disponible' ORDER BY rowid DESC LIMIT 1").get(entry.scope_tipo, entry.scope_id);
-    if (top && top.id !== entry.id) {
-      return res.status(409).json({ error: 'Primero debes deshacer la operacion mas reciente de este ' + (entry.scope_tipo === 'debt' ? 'registro' : 'prestamo') + ': "' + top.descripcion + '" (' + top.created_at + ')' });
-    }
-    let snap;
-    try { snap = JSON.parse(entry.snapshot); } catch (_) { return res.status(500).json({ error: 'Snapshot corrupto: no se puede deshacer con seguridad' }); }
 
-    // Candado B (DETECTOR, no gate): si el estado ACTUAL del agregado ya no coincide
-    // con el post_hash del journal, algo lo cambio despues (housekeeping del arranque,
-    // o una mutacion aun NO cubierta por el journal en esta fase). Se restaura igual
-    // y se ADVIERTE — nunca se bloquea en silencio.
-    const drift = hashSnapshot(snapshotScope(entry.scope_tipo, entry.scope_id)) !== entry.post_hash;
 
-    const run = db.transaction(() => {
-      restoreScope(snap, entry.scope_id);
-      if (entry.scope_tipo === 'loan') reHousekeepLoan(entry.scope_id);
-      db.prepare("UPDATE undo_journal SET estado='deshecho', undone_at=datetime('now','localtime') WHERE id=?").run(entry.id);
-      logAction.run('deshacer', 'Deshiciste: ' + entry.descripcion);
-    });
-    run();
-
-    res.json({
-      ok: true, deshecho: entry.id, accion: entry.accion, scope_id: entry.scope_id,
-      warning: drift ? 'El estado habia cambiado desde esta operacion (housekeeping o una mutacion no journalizada). Se restauro el snapshot y se re-aplico el housekeeping; revisa el resultado.' : null
-    });
-  });
-
-  // ── API: Historial de undo (para la UI y diagnostico) ────────────────────────
-  app.get('/api/undo', (req, res) => {
-    const { scopeTipo, scopeId } = req.query;
-    const cols = 'id, created_at, accion, descripcion, scope_tipo, scope_id, estado, undone_at, afecta_caja';
-    const rows = (scopeTipo && scopeId)
-      ? db.prepare('SELECT ' + cols + " FROM undo_journal WHERE scope_tipo=? AND scope_id=? ORDER BY rowid DESC LIMIT 50").all(scopeTipo, scopeId)
-      : db.prepare('SELECT ' + cols + ' FROM undo_journal ORDER BY rowid DESC LIMIT 50').all();
-    res.json(rows);
-  });
-
-  // ── API: Recalcular cronogramas ───────────────────────────────────────────
-  // v1.9.0 FIX: solo borra Pendientes regulares. Cuotas Pagadas y En Mora se preservan
-  // intactas (son deuda historica / causada y no deben ser recalculadas). nextRegularN
-  // se deriva de las cuotas (Pagadas + Mora) existentes para que las nuevas Pendientes
-  // no colisionen con los cuotaN existentes.
-  app.post('/api/recalculate', (_req, res) => {
-    const activeLoans = db.prepare("SELECT * FROM loans WHERE estado = 'Activo'").all();
-    let updated = 0;
-    // ATOMICO por prestamo: el borrado de Pendientes y su regeneracion van juntos. Antes iban
-    // sueltos -> un fallo entre ambos dejaba al deudor SIN cronograma. Se envuelve cada iteracion
-    // (no el lote entero) para que un prestamo problematico no revierta el trabajo de los demas.
-    // NO se journaliza: /recalculate es reconstructivo por diseño y de alcance global.
-    const recalcularUno = db.transaction((loan) => {
-      const prev = db.prepare('SELECT * FROM payments WHERE prestamoId = ?').all(loan.id);
-      const prevRegulares = prev.filter(p => !p.id || p.id.indexOf('-ab-') === -1);
-      const prevPagadasYMora = prevRegulares.filter(p => p.estadoPago === 'Pagado' || p.estadoPago === 'En Mora');
-      const prevPendientes = prevRegulares.filter(p => p.estadoPago === 'Pendiente');
-
-      // Snapshot de lo cobrado sobre las Pendientes: monto parcial + ledger `recibos` (fechas
-      // reales del dinero) + observaciones, para restaurarlo tras regenerar.
-      const partialMap = snapshotCobros(prevPendientes);
-
-      // Borrar SOLO las Pendientes — Pagadas y Mora quedan intactas
-      prevPendientes.forEach(p => {
-        db.prepare('DELETE FROM payments WHERE id = ?').run(p.id);
-      });
-
-      const regularConsumed = prevPagadasYMora.length;
-      const nextRegularN = regularConsumed + 1;
-      const cuotaFija = Math.round(+loan.cuotaFijaPactada || 0);
-      const indefinido = loan.modalidad === 'Intereses';
-
-      // v1.9.x FIX (bug general de cuotas infladas): NO usar loan.montoCOP que puede
-      // estar stale (solo se actualiza con /abono, no al marcar pagos sin abono).
-      // Calcular saldo real desde formula confiable: originalCOP - capitalPagado total
-      // (cuotas Pagadas regulares + abonos a capital Pagados). Aplica solo a modalidades
-      // que necesitan amortizacion (Capital + Intereses, Intereses). Prestamo se mantiene
-      // con montoCOP porque su flujo es diferente.
-      const originalCOPRec = loan.moneda === 'USD' ? Math.round(loan.montoOrigen * loan.trmAcordada) : Math.round(loan.montoOrigen);
-      const capPorAbonos = prev.filter(p => p.id.indexOf('-ab-') !== -1 && p.estadoPago === 'Pagado').reduce((s, p) => s + p.abonoCapital, 0);
-      // v1.12.x FIX (bug de mora): restar tambien el capital de las cuotas EN MORA (deuda
-      // independiente, su capital NO se re-amortiza en las pendientes). prevPagadasYMora =
-      // Pagadas + Mora -> simetrico con regularConsumed (que tambien las cuenta). Antes solo Pagadas.
-      const capPorCuotasPagadas = prevPagadasYMora.reduce((s, p) => s + p.abonoCapital, 0);
-      const saldoReal = Math.max(0, originalCOPRec - capPorAbonos - capPorCuotasPagadas);
-      let schedule = [];
-
-      if (saldoReal > 0) {
-        if (cuotaFija > 0 && loan.modalidad === 'Capital + Intereses') {
-          try {
-            schedule = buildScheduleFixedPMT(loan, nextRegularN, saldoReal, cuotaFija);
-          } catch (e) {
-            const remaining = Math.max(0, (loan.plazoMeses || 12) - regularConsumed);
-            if (remaining > 0) schedule = buildSchedule(loan, nextRegularN, saldoReal, remaining);
-          }
-        } else if (loan.modalidad === 'Prestamo') {
-          // Para Prestamo (sin intereses, 1 cuota) seguimos usando montoCOP — su flujo
-          // no es PMT y montoCOP refleja el saldo correctamente tras abonos.
-          if (regularConsumed === 0 && loan.montoCOP > 0) schedule = buildSchedule(loan);
-        } else if (loan.modalidad === 'Pago Unico') {
-          // v1.10.0: espejo de Prestamo — 1 cuota unica, regenera si no se consumio
-          if (regularConsumed === 0 && loan.montoCOP > 0) schedule = buildSchedule(loan);
-        } else {
-          // Intereses o Capital+Intereses sin cuotaFija — usar saldoReal computado
-          const remaining = indefinido
-            ? Math.max(0, cuotasHastaHoy(loan.fechaInicio, nextRegularN, 3, loan.frecuencia || 'Mensual'))
-            : Math.max(0, (loan.plazoMeses || 12) - regularConsumed);
-          if (remaining > 0) schedule = buildSchedule(loan, nextRegularN, saldoReal, remaining);
-        }
-      }
-
-      // Aplicar extra del prorrateo (proximaCuotaExtra) a la cuota objetivo si aun esta pendiente
-      const extraLoan = Math.round(+loan.proximaCuotaExtra || 0);
-      const extraN = +loan.proximaCuotaExtraN || 0;
-      restaurarCobros(schedule, partialMap);
-      schedule.forEach(p => {
-        if (extraLoan !== 0 && p.cuotaN === extraN) {
-          p.interesPeriodo = Math.round(p.interesPeriodo + extraLoan);
-          p.cuotaTotal = Math.round(p.cuotaTotal + extraLoan);
-          p.extraConsolidado = extraLoan;
-          if (!p.observaciones) p.observaciones = 'Cuota transitoria por cambio de fecha de pago (' + (extraLoan >= 0 ? '+$' : '-$') + Math.abs(extraLoan).toLocaleString('es-CO') + ')';
-        }
-      });
-      if (schedule.length > 0) insertSchedule(schedule);
-    });
-    for (const loan of activeLoans) {
-      recalcularUno(loan);
-      updated++;
-    }
-    // Re-aplicar auto-mora a Pendientes que cruzaron la fecha
-    db.prepare(`UPDATE payments SET estadoPago='En Mora' WHERE estadoPago='Pendiente' AND fechaPago < ?`)
-      .run(hoyStr());
-    // Fix cuotas en mora de Prestamo (sin intereses): cuotaTotal = saldo actual
-    // v1.10.0 fix housekeeping: tambien saldoInicial y abonoCapital para mantener
-    // consistencia interna de la cuota tras abonos previos.
-    const fixP = db.prepare("SELECT * FROM loans WHERE estado = 'Activo' AND modalidad = 'Prestamo'").all();
-    fixP.forEach(fl => {
-      const ns = Math.round(fl.montoCOP);
-      db.prepare(`UPDATE payments SET saldoInicial = ?, abonoCapital = ?, cuotaTotal = ?, saldoFinal = 0
-        WHERE prestamoId = ? AND estadoPago = 'En Mora'
-        AND id NOT LIKE '%-ab-%'`)
-        .run(ns, ns, ns, fl.id);
-    });
-    // v1.10.0 — Fix cuotas en mora de Pago Unico: cuotaTotal = saldo + ganancia
-    // (la ganancia pactada se mantiene aunque el deudor caiga en mora)
-    const fixPU = db.prepare("SELECT * FROM loans WHERE estado = 'Activo' AND modalidad = 'Pago Unico'").all();
-    fixPU.forEach(fl => {
-      const gPU = Math.round(+fl.gananciaFija || 0);
-      const nsPU = Math.round(fl.montoCOP);
-      db.prepare(`UPDATE payments SET saldoInicial = ?, abonoCapital = ?, cuotaTotal = ?, saldoFinal = 0
-        WHERE prestamoId = ? AND estadoPago = 'En Mora'
-        AND id NOT LIKE '%-ab-%'`)
-        .run(nsPU, nsPU, nsPU + gPU, fl.id);
-    });
-    res.json({ ok: true, updated });
-  });
 
 
   // ── API: Loans ────────────────────────────────────────────────────────────
@@ -1271,6 +1113,8 @@ module.exports = function createApp(dbPath) {
 
   app.use(crearRutasConfig(ctx));
   app.use(crearRutasActivity(ctx));
+  app.use(crearRutasUndo(ctx));
+  app.use(crearRutasRecalc(ctx));
 
   return app;
 };
