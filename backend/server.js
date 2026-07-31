@@ -26,6 +26,12 @@ const { hoyStr, genId }     = require('./core/util');
 const { crearStatements }   = require('./db/statements');
 const { crearHousekeeping } = require('./db/housekeeping');
 
+// Mutacion atomica/journal y durabilidad de cobros — Etapa 2/A4 del refactor.
+const { crearAtomic } = require('./core/atomic');
+const {
+  snapshotCobros, restaurarCobros, abortarSiHuerfanos,
+} = require('./core/cobros');
+
 
 module.exports = function createApp(dbPath) {
 
@@ -63,53 +69,8 @@ module.exports = function createApp(dbPath) {
   const { aplicarHousekeepingArranque, reHousekeepLoan } = crearHousekeeping(db);
 
   // ── Durabilidad de lo COBRADO al regenerar un cronograma ───────────────────
-  // Varios endpoints borran las cuotas Pendientes (y en un caso las En Mora) y las vuelven a
-  // generar. Si una de esas cuotas llevaba un PAGO PARCIAL encima, regenerarla destruye el
-  // registro del dinero: el cliente pago y el sistema lo olvida (misma clase de falla que el
-  // Bug #38, cuya guarda solo protege las cuotas Pagadas). Estos 3 helpers son la unica
-  // implementacion del snapshot/restauracion; no duplicar la logica en cada endpoint.
-  function snapshotCobros(filas) {
-    const map = {};
-    (filas || []).forEach(p => {
-      const tieneLedger = p.recibos && p.recibos !== '[]';
-      if ((p.partialPaid || 0) > 0 || p.observaciones || tieneLedger) {
-        map[p.cuotaN] = {
-          partialPaid: p.partialPaid || 0,
-          observaciones: p.observaciones || '',
-          recibos: p.recibos || '[]'
-        };
-      }
-    });
-    return map;
-  }
-  function restaurarCobros(schedule, map) {
-    (schedule || []).forEach(p => {
-      const s = map[p.cuotaN];
-      if (!s) return;
-      p.partialPaid = s.partialPaid;
-      p.recibos = s.recibos;
-      if (s.observaciones) p.observaciones = s.observaciones;
-    });
-  }
-  // Cuotas con DINERO encima cuyo cuotaN no existe en el cronograma nuevo (p.ej. al acortar el
-  // plazo): restaurarlas es imposible y dejarlas caer seria perder plata en silencio. El endpoint
-  // debe abortar en FASE 1 -> 4xx con la BD intacta. Las observaciones sin dinero no cuentan.
-  function cobrosHuerfanos(schedule, map) {
-    const nuevos = new Set((schedule || []).map(p => p.cuotaN));
-    return Object.keys(map)
-      .filter(n => (map[n].partialPaid || 0) > 0 && !nuevos.has(+n))
-      .map(n => ({ cuotaN: +n, partialPaid: map[n].partialPaid }));
-  }
-  function abortarSiHuerfanos(schedule, map) {
-    const h = cobrosHuerfanos(schedule, map);
-    if (h.length === 0) return;
-    const det = h.map(x => 'cuota ' + x.cuotaN + ' ($' + Math.round(x.partialPaid).toLocaleString('es-CO') + ')').join(', ');
-    throw new ClientError(
-      'La operacion eliminaria el registro de un pago parcial ya recibido: ' + det + '. ' +
-      'El nuevo cronograma no incluye esa(s) cuota(s), asi que el dinero quedaria sin donde figurar. ' +
-      'Completa o revierte ese pago parcial antes de continuar.'
-    );
-  }
+  // Vive en core/cobros.js (Etapa 2/A4). Unica implementacion del snapshot/
+  // restauracion de pagos parciales; no duplicar la logica en cada endpoint.
 
   aplicarHousekeepingArranque();
 
@@ -117,118 +78,13 @@ module.exports = function createApp(dbPath) {
   let APP_VERSION = 'desconocida';
   try { APP_VERSION = require('../package.json').version; } catch (_) {}
 
-  // Serializacion canonica (claves ordenadas, recursiva) -> hash estable e
-  // independiente del orden de columnas que devuelva el driver.
-  function stableStringify(v) {
-    if (v === null || typeof v !== 'object') return JSON.stringify(v);
-    if (Array.isArray(v)) return '[' + v.map(stableStringify).join(',') + ']';
-    return '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + stableStringify(v[k])).join(',') + '}';
-  }
-  function hashSnapshot(obj) {
-    return crypto.createHash('sha256').update(stableStringify(obj)).digest('hex');
-  }
-
-  // Columnas vigentes de una tabla (cache). Base del restore por INTERSECCION:
-  // restaurar solo las columnas que existen hoy -> un snapshot viejo con menos
-  // columnas deja las nuevas en su default (Candado E, drift de esquema).
-  const _colsCache = {};
-  function tableCols(t) {
-    if (!_colsCache[t]) _colsCache[t] = db.prepare('PRAGMA table_info(' + t + ')').all().map(c => c.name);
-    return _colsCache[t];
-  }
-  function restoreRow(table, row) {
-    const cols = tableCols(table).filter(c => Object.prototype.hasOwnProperty.call(row, c));
-    const vals = {}; cols.forEach(c => { vals[c] = row[c]; });
-    db.prepare('INSERT OR REPLACE INTO ' + table + '(' + cols.join(',') + ') VALUES (' + cols.map(c => '@' + c).join(',') + ')').run(vals);
-  }
-
-  // ── Snapshot del AGREGADO (todo lo que una mutacion podria tocar) ────────────
-  // Por que el agregado ENTERO y no solo la fila tocada: casi toda operacion tiene
-  // efectos colaterales (p.ej. PUT /payments dispara la auto-finalizacion, que muta
-  // loans.estado/montoCOP). Snapshotear solo la cuota dejaria el prestamo corrupto
-  // al deshacer. El agregado elimina esa clase de bug por construccion.
-  function snapshotScope(tipo, id) {
-    if (tipo === 'debt') {
-      return {
-        v: 1, tipo: 'debt',
-        deuda: db.prepare('SELECT * FROM mis_deudas WHERE id = ?').get(id) || null,
-        pagos: db.prepare('SELECT * FROM pagos_deudas WHERE deuda_id = ? ORDER BY id').all(id)
-      };
-    }
-    return {
-      v: 1, tipo: 'loan',
-      loan: db.prepare('SELECT * FROM loans WHERE id = ?').get(id) || null,
-      payments: db.prepare('SELECT * FROM payments WHERE prestamoId = ? ORDER BY cuotaN, id').all(id)
-    };
-  }
-  // Restaurar reemplaza el agregado ENTERO (no parchea filas sueltas). Los IDs de
-  // cuota son deterministas (`${loanId}-${cuotaN}`), asi que reinsertar es exacto.
-  function restoreScope(snap, id) {
-    if (snap.tipo === 'debt') {
-      db.prepare('DELETE FROM pagos_deudas WHERE deuda_id = ?').run(id);
-      db.prepare('DELETE FROM mis_deudas WHERE id = ?').run(id);
-      if (snap.deuda) restoreRow('mis_deudas', snap.deuda);
-      (snap.pagos || []).forEach(p => restoreRow('pagos_deudas', p));
-    } else {
-      db.prepare('DELETE FROM payments WHERE prestamoId = ?').run(id);
-      if (snap.loan) restoreRow('loans', snap.loan);
-      else db.prepare('DELETE FROM loans WHERE id = ?').run(id);
-      (snap.payments || []).forEach(p => restoreRow('payments', p));
-    }
-  }
-
-  // Retencion: conservar las 200 mas recientes y descartar > 90 dias (lo que ocurra
-  // primero). Borra el TAIL (mas viejo), nunca el head, asi que no rompe el LIFO.
-  function podarJournal() {
-    db.prepare("DELETE FROM undo_journal WHERE created_at < datetime('now','localtime','-90 days')").run();
-    db.prepare("DELETE FROM undo_journal WHERE rowid NOT IN (SELECT rowid FROM undo_journal ORDER BY rowid DESC LIMIT 200)").run();
-  }
+  // ── Mutacion atomica + journal de undo ────────────────────────────────────
+  // Vive en core/atomic.js (Etapa 2/A4). Es una FACTORY porque `_colsCache` debe
+  // ser por instancia de createApp (una cache de columnas por BD), no de modulo.
+  const {
+    hashSnapshot, snapshotScope, restoreScope, podarJournal, mutacionAtomica,
+  } = crearAtomic({ db, insUndo, logActionUndo, appVersion: APP_VERSION });
   podarJournal();
-
-  // ── HELPER UNIVERSAL: mutacion atomica con journal de undo ───────────────────
-  // FASE 0: snapshot del agregado (solo lectura) + pre_hash.
-  // FASE 1: compute() valida + computa TODO en memoria; si lanza ClientError -> 4xx,
-  //         BD intacta (ni una escritura).
-  // FASE 2: UNA sola transaccion -> aplicar() + INSERT journal (post_hash releido
-  //         DENTRO de la tx) + activity_log + poda. Todo o nada.
-  // compute() debe devolver { descripcion, payload, aplicar }.
-  // La respuesta HTTP sale de: (lo que devuelva aplicar()) || payload || {ok:true}. Devolver el
-  // payload desde aplicar() permite responder con la fila YA MUTADA (p.ej. la deuda actualizada),
-  // que solo puede leerse despues de escribir y dentro de la misma transaccion.
-  // descripcion tambien acepta funcion: se evalua tras aplicar(), para textos que dependen del
-  // estado final (p.ej. el saldo recalculado desde el ledger).
-  function mutacionAtomica(req, res, meta, compute) {
-    const pre = snapshotScope(meta.scopeTipo, meta.scopeId);
-    const preHash = hashSnapshot(pre);
-    let computed;
-    try {
-      computed = compute();
-    } catch (e) {
-      if (e instanceof ClientError) return res.status(e.code).json({ error: e.message });
-      throw e;
-    }
-    let payload = null;
-    const run = db.transaction(() => {
-      payload = computed.aplicar() || computed.payload || { ok: true };
-      const desc = typeof computed.descripcion === 'function' ? computed.descripcion() : computed.descripcion;
-      const postHash = hashSnapshot(snapshotScope(meta.scopeTipo, meta.scopeId));
-      const ujId = 'uj-' + genId();
-      // afectaCaja lo declara compute() (puede depender de los datos: PUT /payments solo mueve
-      // dinero cuando se marca Pagado, no al revertir a Pendiente / marcar En Mora).
-      const afectaCaja = computed.afectaCaja ? 1 : 0;
-      insUndo.run({
-        id: ujId, accion: meta.accion, endpoint: meta.endpoint,
-        descripcion: desc, scope_tipo: meta.scopeTipo, scope_id: meta.scopeId,
-        snapshot: JSON.stringify(pre), pre_hash: preHash, post_hash: postHash,
-        app_version: APP_VERSION, afecta_caja: afectaCaja
-      });
-      logActionUndo.run(meta.logTipo || meta.accion, desc, ujId);
-      podarJournal();
-      return ujId;
-    });
-    const undoId = run();
-    res.json(Object.assign({ undoId: undoId }, payload));
-  }
 
   // ── API: Deshacer ────────────────────────────────────────────────────────────
   app.post('/api/undo/:id', (req, res) => {
