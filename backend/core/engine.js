@@ -14,6 +14,14 @@
 // funcion y la parte impura se queda en su router. Perder la pureza de este modulo
 // es perder la unica parte del backend que se puede probar sin levantar nada.
 
+// Nombre canonico de la modalidad de credito abierto (interes diario). Vive aqui
+// —y no en un literal disperso— porque el motor es el unico punto por el que pasan
+// las cinco rutas que generan cronograma, y una modalidad mal escrita en un `===`
+// no falla: simplemente no entra en la rama y el credito acaba amortizado a la
+// francesa. Sin tilde, igual que 'Pago Unico', porque asi viajan ya los valores
+// persistidos en la columna `loans.modalidad`.
+const MODALIDAD_DIARIA = 'Interes Diario';
+
 // ── Motor financiero ──────────────────────────────────────────────────────
 function pmt(r, n, pv) {
   if (r === 0) return pv / n;
@@ -68,6 +76,21 @@ function cuotasHastaHoy(fechaInicio, startN, periodosAdelante, frecuencia) {
 }
 
 function buildSchedule(loan, startN, startSaldo, numCuotas) {
+  // ── INTERES DIARIO: credito abierto, SIN cronograma ────────────────────────
+  // Un credito de capital vivo no tiene cuotas: el interes se devenga por dias y
+  // solo se materializa una fila cuando ocurre un evento economico real (el corte).
+  // Este `return []` va como PRIMERA linea a proposito: `buildSchedule` es el
+  // sumidero comun de POST /loans, PUT /loans, /abono, /reestructurar y
+  // /recalculate, asi que una sola linea deja inertes las cinco rutas.
+  //
+  // Sin el, la cascada de abajo NO es inerte ante una modalidad que no reconoce:
+  // cae en el bucle de amortizacion francesa con `plazoMeses || 12` — y como el
+  // centinela de esta modalidad es `plazoMeses = 0`, que es falsy, le fabricaria
+  // DOCE cuotas PMT en silencio, con capital repartido. Esas filas entrarian en la
+  // formula canonica de saldo, en `saldoReal` (techo del abono) y en la
+  // auto-finalizacion. El motor no rechaza lo que no entiende: lo inventa.
+  if (loan && loan.modalidad === MODALIDAD_DIARIA) return [];
+
   startN = startN || 1;
   const { id, nombre, tasaMensual, modalidad, fechaInicio, diaPago } = loan;
   const freq = loan.frecuencia || 'Mensual';
@@ -267,6 +290,7 @@ function buildScheduleFixedPMT(loan, startN, saldoInicial, cuotaFija) {
 }
 
 module.exports = {
+  MODALIDAD_DIARIA,
   pmt,
   getPayDate,
   tasaPeriodo,
