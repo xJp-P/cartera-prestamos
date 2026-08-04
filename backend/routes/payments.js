@@ -24,6 +24,10 @@
 
 const express = require('express');
 
+// Predicados de clasificacion de filas de `payments` (core/ids.js): unica fuente
+// de verdad de que es un abono. Antes cada sitio repetia el literal indexOf('-ab-').
+const { esAbono } = require('../core/ids');
+
 module.exports = function crearRutasPayments(ctx) {
   const { db, mutacionAtomica, ClientError, hoyStr, buildSchedule, runPayment } = ctx;
   const router = express.Router();
@@ -34,14 +38,14 @@ module.exports = function crearRutasPayments(ctx) {
     const activeIndefinidos = db.prepare("SELECT * FROM loans WHERE estado = 'Activo' AND modalidad = 'Intereses'").all();
     for (const loan of activeIndefinidos) {
       const allPays = db.prepare('SELECT * FROM payments WHERE prestamoId = ? ORDER BY cuotaN DESC').all(loan.id);
-      const regulares = allPays.filter(p => p.id.indexOf('-ab-') === -1);
+      const regulares = allPays.filter(p => !esAbono(p));
       // Si quedan menos de 3 cuotas pendientes futuras, generar más
       const pendFuturas = regulares.filter(p => p.estadoPago === 'Pendiente');
       if (pendFuturas.length < 3) {
         const maxN = regulares.length > 0 ? Math.max(...regulares.map(p => p.cuotaN)) : 0;
         const nextN = maxN + 1;
         // Calcular saldo actual (considerando abonos)
-        const abonos = allPays.filter(p => p.id.indexOf('-ab-') !== -1 && p.estadoPago === 'Pagado');
+        const abonos = allPays.filter(p => esAbono(p) && p.estadoPago === 'Pagado');
         const totalAbonado = abonos.reduce((s, p) => s + p.abonoCapital, 0);
         const saldo = Math.max(0, loan.montoCOP - totalAbonado);
         if (saldo > 0) {
@@ -123,7 +127,7 @@ module.exports = function crearRutasPayments(ctx) {
         // NO usar la heuristica interes===0 && capital>0: la cuota unica de un Prestamo (o Pago Unico
         // sin ganancia) tambien la cumple -> quedaba fuera de 'regulares', 'todasPagadas' nunca era
         // true y el prestamo no auto-finalizaba al pagar (gemelo backend del Bug #26).
-        const regulares = allPays.filter(p => p.id.indexOf('-ab-') === -1);
+        const regulares = allPays.filter(p => !esAbono(p));
         const todasPagadas = regulares.length > 0 && regulares.every(p => p.estadoPago === 'Pagado');
         if (todasPagadas) {
           db.prepare("UPDATE loans SET estado = 'Finalizado', cuotaFijaPactada = 0 WHERE id = ? AND estado = 'Activo'").run(pay.prestamoId);
@@ -156,7 +160,7 @@ module.exports = function crearRutasPayments(ctx) {
     // de proximaCuotaExtra), asi que el agregado entero es la unidad de undo.
     return mutacionAtomica(req, res, { accion: 'pago_parcial', logTipo: 'pago', endpoint: 'POST /api/payments/:id/partial', scopeTipo: 'loan', scopeId: pay.prestamoId }, () => {
     if (pay.estadoPago === 'Pagado') throw new ClientError('La cuota ya está pagada');
-    if (pay.id.indexOf('-ab-') !== -1) throw new ClientError('No se pueden aplicar pagos parciales sobre un abono a capital');
+    if (esAbono(pay)) throw new ClientError('No se pueden aplicar pagos parciales sobre un abono a capital');
     const montoNum = Math.round(+monto || 0);
     if (montoNum <= 0) throw new ClientError('El monto debe ser mayor a 0');
     const yaPagado = pay.partialPaid || 0;
@@ -208,7 +212,7 @@ module.exports = function crearRutasPayments(ctx) {
       }
       // Auto-finalización del préstamo
       const allPays = db.prepare('SELECT * FROM payments WHERE prestamoId = ?').all(pay.prestamoId);
-      const regulares = allPays.filter(p => p.id.indexOf('-ab-') === -1); // abono = id con '-ab-' (canonico, ver Bug #26)
+      const regulares = allPays.filter(p => !esAbono(p)); // abono = id con '-ab-' (canonico, ver Bug #26)
       const todasPagadas = regulares.length > 0 && regulares.every(p => p.estadoPago === 'Pagado');
       if (todasPagadas) {
         db.prepare("UPDATE loans SET estado = 'Finalizado', cuotaFijaPactada = 0 WHERE id = ? AND estado = 'Activo'").run(pay.prestamoId);

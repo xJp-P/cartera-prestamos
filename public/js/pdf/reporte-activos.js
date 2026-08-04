@@ -16,6 +16,7 @@
 
 import { fmt, fmtUSD, fmtD, copToUsd } from '../core/format.js';
 import { saldoConCaja } from '../core/dominio.js';
+import { esAbono } from '../core/ids.js';
 
 // ── Reporte de Prestamos Activos (PDF) ────────────────────────────────────
 // Reusa el pipeline printToPDF (electronAPI.printPDF) con fallback a window.print,
@@ -53,12 +54,12 @@ export function generateReportePrestamosPDF(loans, pays, darkMode) {
     // la calle" eran ciegos al capital ya cubierto por un parcial en curso, mientras las sub-filas
     // de mora SI lo descontaban (helper saldoMora, v2.1.2) -> el documento se contradecia solo.
     var saldo = saldoConCaja(l, lp);
-    var moras = lp.filter(function(p) { return p.id.indexOf('-ab-') === -1 && p.estadoPago === 'En Mora'; })
+    var moras = lp.filter(function(p) { return !esAbono(p) && p.estadoPago === 'En Mora'; })
                   .sort(function(a, b) { return a.cuotaN - b.cuotaN; });
     var vencido = moras.reduce(function(s, p) { return s + saldoMora(p); }, 0);
     // Fila principal = proxima cuota PENDIENTE (el ciclo regular activo). Las En Mora NO van aqui:
     // se detallan en sub-filas rojas. Si no queda ninguna Pendiente (cronograma terminado) -> '—'.
-    var pendientes = lp.filter(function(p) { return p.id.indexOf('-ab-') === -1 && p.estadoPago === 'Pendiente'; })
+    var pendientes = lp.filter(function(p) { return !esAbono(p) && p.estadoPago === 'Pendiente'; })
                        .sort(function(a, b) { return a.cuotaN - b.cuotaN; });
     var mainCuota = pendientes.length ? pendientes[0] : null;
     // Cuota transitoria (cambio de fecha): extraConsolidado != 0. La fila principal muestra su valor

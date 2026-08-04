@@ -15,6 +15,7 @@ import { copToUsd, fmt, fmtD, fmtN, fmtUSD } from '../core/format.js';
 import { h, useState } from '../core/react.js';
 import { freqLabel } from '../core/ui.js';
 import { generateCronogramaPDF } from '../pdf/cronograma.js';
+import { esAbono } from '../core/ids.js';
 
 // ── DebtorModal ───────────────────────────────────────────────────────────────
 export function DebtorModal(props){
@@ -224,7 +225,6 @@ export function DebtorModal(props){
       d.loans.filter(function(l){return l.estado==='Activo';}).length===0&&h('div',{style:{fontSize:12,color:'var(--text3)',padding:'8px 0',fontStyle:'italic'}},'Sin prestamos activos'),
       d.loans.filter(function(l){return l.estado==='Activo';}).slice().sort(function(a,b){return b.fechaInicio.localeCompare(a.fechaInicio);}).map(function(l){
         var lp=pays.filter(function(p){return p.prestamoId===l.id;});
-        var esAbono=function(p){return p.id.indexOf('-ab-')!==-1;};
         var regulares=lp.filter(function(p){return !esAbono(p);});
         var abonosList=lp.filter(function(p){return esAbono(p);});
         var pagadas=regulares.filter(function(p){return p.estadoPago==='Pagado';}).length;
@@ -258,7 +258,7 @@ export function DebtorModal(props){
         //   - Cuotas regulares: montoCOPRecibido - cuotaTotal (cuotaTotal ya esta en COP con TRM acordada)
         //   - Abonos a capital: montoCOPRecibido - (montoUSDRecibido * trmAcordada) — solo si el abono se registro con USD
         var gananciaTRMReg=esUSD?regulares.filter(function(p){return p.estadoPago==='Pagado'&&p.montoCOPRecibido&&p.montoCOPRecibido>0;}).reduce(function(s,p){return s+(p.montoCOPRecibido-p.cuotaTotal);},0):0;
-        var gananciaTRMAb=esUSD?lp.filter(function(p){return p.id.indexOf('-ab-')!==-1&&p.estadoPago==='Pagado'&&p.montoUSDRecibido&&p.montoUSDRecibido>0;}).reduce(function(s,p){return s+(p.montoCOPRecibido-(p.montoUSDRecibido*l.trmAcordada));},0):0;
+        var gananciaTRMAb=esUSD?lp.filter(function(p){return esAbono(p)&&p.estadoPago==='Pagado'&&p.montoUSDRecibido&&p.montoUSDRecibido>0;}).reduce(function(s,p){return s+(p.montoCOPRecibido-(p.montoUSDRecibido*l.trmAcordada));},0):0;
         var gananciaTRM=Math.round(gananciaTRMReg+gananciaTRMAb);
         var gananciaTotal=intCobrados+gananciaTRM;
         var isExp=expLoan===l.id;
@@ -494,7 +494,7 @@ export function DebtorModal(props){
                 var ajs=[h('div',{key:'lbl',style:labelStyle},'Ajustar cronograma')];
                 if(canReestructurar) ajs.push(h('button',{key:'r',onClick:function(e){e.stopPropagation();onReestructurar(l);},style:btnNeutral},
                   h(Ico,{name:'calc',size:14,color:'var(--text2)',sw:2}),'Reestructurar cuotas'));
-                if(canCambiarFecha) ajs.push(h('button',{key:'f',onClick:function(e){e.stopPropagation();var _pg=lp.filter(function(p){return p.id.indexOf('-ab-')===-1&&p.estadoPago==='Pagado';});var _pgf=_pg.map(function(p){return p.fechaPago;}).sort();setCambioFecha({loan:l,saldo:saldo,intMora:imora,moraCount:enMora.length,lastSettled:_pgf.length?_pgf[_pgf.length-1]:l.fechaInicio,regularConsumed:_pg.length,step:'form',nuevoDia:''});},style:Object.assign({},btnNeutral,{marginTop:canReestructurar?6:0})},
+                if(canCambiarFecha) ajs.push(h('button',{key:'f',onClick:function(e){e.stopPropagation();var _pg=lp.filter(function(p){return !esAbono(p)&&p.estadoPago==='Pagado';});var _pgf=_pg.map(function(p){return p.fechaPago;}).sort();setCambioFecha({loan:l,saldo:saldo,intMora:imora,moraCount:enMora.length,lastSettled:_pgf.length?_pgf[_pgf.length-1]:l.fechaInicio,regularConsumed:_pg.length,step:'form',nuevoDia:''});},style:Object.assign({},btnNeutral,{marginTop:canReestructurar?6:0})},
                   h(Ico,{name:'calendar',size:14,color:'var(--text2)',sw:2}),'Cambiar fecha de pago'));
                 sects.push(h('div',{key:'g2',style:{marginTop:14}},ajs));
               }
@@ -533,7 +533,7 @@ export function DebtorModal(props){
                   h('span',{style:{textAlign:'center'}},'Estado')),
                 timeline.map(function(p,idx){
                   // Fila de ABONO intercalada; espejo de la del PDF y de la de CarteraView.
-                  if(p.id.indexOf('-ab-')!==-1){
+                  if(esAbono(p)){
                     return h('div',{key:p.id,style:{display:'grid',gridTemplateColumns:cronoCols,padding:'5px 8px',fontSize:11,gap:4,borderTop:'1px solid var(--blue-bd)',background:'var(--blue-bg)'}},
                       h('span',{style:{color:'var(--blue)',fontWeight:600}},'-'),
                       h('span',{style:{color:'var(--blue)',fontStyle:'italic'}},fmtD(p.fechaPago),
@@ -575,8 +575,8 @@ export function DebtorModal(props){
         h('div',{style:{flex:1,height:1,background:'var(--border)'}})),
       d.loans.filter(function(l){return l.estado==='Finalizado'||l.estado==='Cancelado';}).slice().sort(function(a,b){return b.fechaInicio.localeCompare(a.fechaInicio);}).map(function(l){
         var lPays=pays.filter(function(p){return p.prestamoId===l.id;});
-        var regulares=lPays.filter(function(p){return p.id.indexOf('-ab-')===-1;});
-        var abonos=lPays.filter(function(p){return p.id.indexOf('-ab-')!==-1&&p.estadoPago==='Pagado';});
+        var regulares=lPays.filter(function(p){return !esAbono(p);});
+        var abonos=lPays.filter(function(p){return esAbono(p)&&p.estadoPago==='Pagado';});
         var totalCuotas=regulares.length;
         var cuotasPagadas=regulares.filter(function(p){return p.estadoPago==='Pagado';}).length;
         var intPagados=regulares.filter(function(p){return p.estadoPago==='Pagado';}).reduce(function(s,p){return s+p.interesPeriodo;},0);
@@ -592,7 +592,7 @@ export function DebtorModal(props){
         // Desglose USD: ganancia/perdida TRM y ganancia total real
         // Ganancia/Perdida TRM: cuotas regulares + abonos USD (ambos con registro de COP/USD recibido)
         var gananciaTRMRegHist=esUSD?regulares.filter(function(p){return p.estadoPago==='Pagado'&&p.montoCOPRecibido&&p.montoCOPRecibido>0;}).reduce(function(s,p){return s+(p.montoCOPRecibido-p.cuotaTotal);},0):0;
-        var gananciaTRMAbHist=esUSD?lPays.filter(function(p){return p.id.indexOf('-ab-')!==-1&&p.estadoPago==='Pagado'&&p.montoUSDRecibido&&p.montoUSDRecibido>0;}).reduce(function(s,p){return s+(p.montoCOPRecibido-(p.montoUSDRecibido*l.trmAcordada));},0):0;
+        var gananciaTRMAbHist=esUSD?lPays.filter(function(p){return esAbono(p)&&p.estadoPago==='Pagado'&&p.montoUSDRecibido&&p.montoUSDRecibido>0;}).reduce(function(s,p){return s+(p.montoCOPRecibido-(p.montoUSDRecibido*l.trmAcordada));},0):0;
         var gananciaTRMHist=Math.round(gananciaTRMRegHist+gananciaTRMAbHist);
         var gananciaTotalHist=Math.round(intPagados+gananciaTRMHist);
         var bandaColor=esCancelado?'var(--red)':'var(--green)';

@@ -11,6 +11,7 @@ import { cobrosDe, imputarCobros, pendCuota } from '../core/dominio.js';
 import { copToUsd, fmt, fmtD, fmtN, fmtUSD } from '../core/format.js';
 import { h, useMemo, useState } from '../core/react.js';
 import { nowStr } from '../core/ui.js';
+import { esAbono } from '../core/ids.js';
 
 export function DashView(props){
   var metrics=props.metrics,isEmpty=props.isEmpty,onNav=props.onNav,loans=props.loans||[],pays=props.pays||[],onNameClick=props.onNameClick,onNewLoan=props.onNewLoan;
@@ -32,7 +33,7 @@ export function DashView(props){
   // de transaccion (fechaRecaudo) -> la mora vieja cobrada este mes cuenta este mes; los
   // parciales EN CURSO se cuentan por fechaPago (unica fecha disponible para un parcial).
   var recaudoMes=useMemo(function(){
-    var noAb=function(p){return p.id.indexOf('-ab-')===-1;};
+    var noAb=function(p){return !esAbono(p);};
     var dueMes=pays.filter(function(p){return noAb(p)&&p.fechaPago.startsWith(selMonth);});
     var paidMes=pays.filter(function(p){return noAb(p)&&p.estadoPago==='Pagado'&&p.fechaRecaudo&&p.fechaRecaudo.startsWith(selMonth);});
     var esperado=dueMes.reduce(function(s,p){return s+p.cuotaTotal;},0);
@@ -46,7 +47,7 @@ export function DashView(props){
   var hayMeta=recaudoMes.esperado>0;
   var pctMes=hayMeta?Math.round(recaudoMes.recibido/recaudoMes.esperado*100):0;
   var pctTxt=hayMeta?pctMes+'%':'—';
-  var hayReg=pays.some(function(p){return p.id.indexOf('-ab-')===-1;});
+  var hayReg=pays.some(function(p){return !esAbono(p);});
   // v1.9.x — Metricas adicionales calculadas desde loans/pays
   var activos=loans.filter(function(l){return l.estado==='Activo';});
   var capOriginal=activos.reduce(function(s,l){return s+(l.moneda==='USD'?Math.round(l.montoOrigen*l.trmAcordada):Math.round(l.montoOrigen));},0);
@@ -95,7 +96,7 @@ export function DashView(props){
     var moneda={};loans.forEach(function(l){moneda[l.id]=l.moneda;});
     var byMonth={};
     pays.forEach(function(p){
-      if(p.estadoPago!=='Pagado'||!p.fechaRecaudo||p.id.indexOf('-ab-')!==-1) return;
+      if(p.estadoPago!=='Pagado'||!p.fechaRecaudo||esAbono(p)) return;
       var ym=p.fechaRecaudo.slice(0,7);
       var g=(moneda[p.prestamoId]==='USD'&&p.montoCOPRecibido>0)?(p.montoCOPRecibido-(p.cuotaTotal-p.interesPeriodo)):p.interesPeriodo;
       byMonth[ym]=(byMonth[ym]||0)+g;
@@ -149,7 +150,7 @@ export function DashView(props){
   var chipStyle={display:'inline-flex',alignItems:'center',gap:5,padding:'5px 10px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:99,fontSize:11,fontWeight:600,color:'var(--text2)'};
   // Helper: tipo de transaccion para mostrar en Transacciones Recientes
   function tipoTx(p,l){
-    if(p.id&&p.id.indexOf('-ab-')!==-1) return 'Abono a capital';
+    if(esAbono(p)) return 'Abono a capital';
     if(!l) return 'Cuota '+p.cuotaN;
     if(l.modalidad==='Intereses') return 'Cuota intereses #'+p.cuotaN;
     if(l.modalidad==='Prestamo') return 'Devolucion capital';
@@ -334,20 +335,20 @@ export function DashView(props){
             : monthTxs.map(function(t,i){
                 var p=t.pay;
                 var pl=loanMap[p.prestamoId];var isU=pl&&pl.moneda==='USD';
-                var esAbono=p.id&&p.id.indexOf('-ab-')!==-1;
+                var filaEsAbono=esAbono(p);
                 // Parcial EN CURSO: hubo caja pero la cuota sigue sin saldarse -> se marca en ambar
                 // para no leerse como una cuota ya cubierta.
-                var esParcial=!esAbono&&p.estadoPago!=='Pagado';
+                var esParcial=!filaEsAbono&&p.estadoPago!=='Pagado';
                 var monto=t.cop;      // monto del EVENTO, no el acumulado de la cuota
                 var fecha=t.fecha;    // fecha REAL en que entro el dinero
-                var iconAccent=esAbono?'blue':(esParcial?'yellow':'green');
+                var iconAccent=filaEsAbono?'blue':(esParcial?'yellow':'green');
                 // USD: si la cuota tiene un solo evento se muestra el USD realmente recibido
                 // (doctrina del Bug #23); con varios eventos se convierte el monto de ESTE evento
                 // para no repetir el total en cada fila.
                 var usdTxt=(t.nEv===1&&+p.montoUSDRecibido>0)?fmtUSD(p.montoUSDRecibido):copToUsd(monto,pl&&pl.trmAcordada);
                 return h('div',{key:p.id+'|'+t.fecha+'|'+t.k,style:{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderTop:i>0?'1px solid var(--border)':'none'}},
                   h('div',{style:{width:24,height:24,borderRadius:6,background:'var(--'+iconAccent+'-bg)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}},
-                    h(Ico,{name:esAbono?'dollar':'check',size:11,color:'var(--'+iconAccent+')',sw:2.4})),
+                    h(Ico,{name:filaEsAbono?'dollar':'check',size:11,color:'var(--'+iconAccent+')',sw:2.4})),
                   h('div',{style:{flex:1,minWidth:0}},
                     h('div',{style:{fontSize:13,fontWeight:600,color:'var(--text)',cursor:'pointer',textOverflow:'ellipsis',overflow:'hidden',whiteSpace:'nowrap'},onClick:function(){onNameClick(p.nombreCliente);}},p.nombreCliente),
                     h('div',{style:{fontSize:11,color:'var(--text3)',marginTop:2}},tipoTx(p,pl)+(esParcial?' · abono parcial':'')+' · '+fmtD(fecha))),

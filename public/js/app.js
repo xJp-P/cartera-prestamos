@@ -60,6 +60,7 @@ import { DebtHistoryModal } from './modales/DebtHistoryModal.js';
 import { DeleteDebtModal } from './modales/DeleteDebtModal.js';
 import { ConfirmUndoModal } from './modales/ConfirmUndoModal.js';
 import { ConfirmModal } from './modales/ConfirmModal.js';
+import { esAbono } from './core/ids.js';
 
 'use strict';
 
@@ -339,7 +340,7 @@ function App(){
     var origCOP=loan.moneda==='USD'?Math.round(loan.montoOrigen*loan.trmAcordada):Math.round(loan.montoOrigen);
     var capPag=lp.filter(function(p){return p.estadoPago==='Pagado';}).reduce(function(s,p){return s+p.abonoCapital;},0);
     var capPerd=Math.max(0,Math.round(origCOP-capPag));
-    var intPerd=Math.round(lp.filter(function(p){return p.estadoPago==='En Mora'&&p.id.indexOf('-ab-')===-1;}).reduce(function(s,p){return s+p.interesPeriodo;},0));
+    var intPerd=Math.round(lp.filter(function(p){return p.estadoPago==='En Mora'&&!esAbono(p);}).reduce(function(s,p){return s+p.interesPeriodo;},0));
     var total=capPerd+intPerd;
     var msg='Cerrar a la fuerza el prestamo de '+loan.nombre+'. Se daran por perdidos:\n'
       +'• Capital pendiente: $'+capPerd.toLocaleString('es-CO')+'\n'
@@ -401,7 +402,7 @@ function App(){
     var esUSD=l.moneda==='USD',trm=l.trmAcordada||1;
     var orig=esUSD?Math.round(l.montoOrigen*trm):Math.round(l.montoOrigen);
     var capPag=lp.filter(function(p){return p.estadoPago==='Pagado';}).reduce(function(s,p){return s+p.abonoCapital;},0);
-    var pend=lp.filter(function(p){return p.id.indexOf('-ab-')===-1&&p.estadoPago==='Pendiente';}).sort(function(a,b){return a.cuotaN-b.cuotaN;});
+    var pend=lp.filter(function(p){return !esAbono(p)&&p.estadoPago==='Pendiente';}).sort(function(a,b){return a.cuotaN-b.cuotaN;});
     // `saldo` (MOTOR) se conserva a proposito: la liquidacion envia `monto = L.capitalPendiente`,
     // que esta en esa misma base; parearlo con el saldo con caja imprimiria un Paz y Salvo con
     // "saldo anterior < monto aplicado". `saldoCaja` es el que se MUESTRA como "Saldo anterior".
@@ -489,7 +490,7 @@ function App(){
   var metrics=useMemo(function(){
     var td=nowStr(),thisM=td.slice(0,7),nxtW=addDays(td,7);
     var active=loans.filter(function(l){return l.estado==='Activo';});
-    var noAbono=function(p){return p.id.indexOf('-ab-')===-1;};
+    var noAbono=function(p){return !esAbono(p);};
     var mp=pays.filter(function(p){return p.fechaPago.startsWith(thisM)&&noAbono(p);});
     var mora=pays.filter(function(p){return p.estadoPago==='En Mora'&&noAbono(p);});
     // v1.9.x — Recaudo del mes con logica de flujo de caja estricta. Mora arrastrada
@@ -508,7 +509,7 @@ function App(){
     // contaria el capital como ganancia fantasma — Bug #25). Para COP usa interesPeriodo. Excluye abonos.
     // Misma definicion que loanMetrics.ganancia en PortfolioView -> ambas vistas cuadran.
     var loanCurrency={};loans.forEach(function(l){loanCurrency[l.id]=l.moneda;});
-    var totalInteresesRecibidos=pays.filter(function(p){return p.estadoPago==='Pagado'&&p.id.indexOf('-ab-')===-1;})
+    var totalInteresesRecibidos=pays.filter(function(p){return p.estadoPago==='Pagado'&&!esAbono(p);})
       .reduce(function(s,p){
         var esUSD=loanCurrency[p.prestamoId]==='USD';
         if(esUSD&&p.montoCOPRecibido&&p.montoCOPRecibido>0){
@@ -877,7 +878,7 @@ function _cuotasEnRiesgo(allPays,loanId){
   return allPays.filter(function(p){
     if(String(p.prestamoId)!==String(loanId)) return false;
     if(p.estadoPago!=='Pendiente') return false;
-    if(p.id&&p.id.indexOf('-ab-')!==-1) return false;
+    if(esAbono(p)) return false;
     var t=new Date(p.fechaPago+'T12:00:00').getTime();
     return t>=hoy&&t<=limite;
   }).sort(function(a,b){return a.cuotaN-b.cuotaN;});

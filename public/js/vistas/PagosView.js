@@ -11,6 +11,7 @@ import { copToUsd, fmt, fmtD, fmtUSD } from '../core/format.js';
 import { h, useState } from '../core/react.js';
 import { nowStr, payMatchesQuery } from '../core/ui.js';
 import { generateFacturaCobro } from '../pdf/factura-cobro.js';
+import { esAbono } from '../core/ids.js';
 
 // ── Pagos ─────────────────────────────────────────────────────────────────────
 export function PagosView(props){
@@ -36,7 +37,7 @@ export function PagosView(props){
   var mesFilter=fMonth||nowStr().slice(0,7);
   var cobrados=allPays.filter(function(p){
     if(p.estadoPago!=='Pagado') return false;
-    if(p.id.indexOf('-ab-')!==-1) return false;
+    if(esAbono(p)) return false;
     var fRef=p.fechaRecaudo||p.fechaPago;
     if(fRef.indexOf(mesFilter)!==0) return false;
     if(searchQ&&!payMatchesQuery(p,searchQ)) return false;

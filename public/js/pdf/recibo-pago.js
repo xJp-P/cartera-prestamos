@@ -17,6 +17,7 @@
 import { fmt, fmtUSD, fmtD, copToUsd } from '../core/format.js';
 import { nowStr } from '../core/ui.js';
 import { saldoConCaja, pendienteDeCuota } from '../core/dominio.js';
+import { esAbono } from '../core/ids.js';
 
 export function generateRecibo(pay, loan, copRec, usdRec, allPays, opts) {
   opts = opts || {};
@@ -52,7 +53,7 @@ export function generateRecibo(pay, loan, copRec, usdRec, allPays, opts) {
   var totalPending = 0;
   if (allPays && loan.modalidad === 'Capital + Intereses' && saldoRestante > 0) {
     allProxCuotas = allPays.filter(function(p) {
-      return p.prestamoId === loan.id && p.estadoPago === 'Pendiente' && p.id.indexOf('-ab-') === -1 && p.cuotaN > pay.cuotaN;
+      return p.prestamoId === loan.id && p.estadoPago === 'Pendiente' && !esAbono(p) && p.cuotaN > pay.cuotaN;
     }).sort(function(a, b) { return a.cuotaN - b.cuotaN; });
     totalPending = allProxCuotas.length;
     proxCuotas = allProxCuotas.slice(0, 3);
@@ -63,7 +64,7 @@ export function generateRecibo(pay, loan, copRec, usdRec, allPays, opts) {
   // ¿Este pago liquida el prestamo? = pago completo (no parcial), modalidad con fin definido (no Intereses)
   // y no queda NINGUNA otra cuota regular sin pagar. allPays es snapshot pre-pago: excluimos este pay y miramos el resto.
   var otrasRegPend = Array.isArray(allPays) ? allPays.filter(function(p){
-    return p.prestamoId === loan.id && p.id.indexOf('-ab-') === -1 && p.id !== pay.id && p.estadoPago !== 'Pagado';
+    return p.prestamoId === loan.id && !esAbono(p) && p.id !== pay.id && p.estadoPago !== 'Pagado';
   }) : null;
   var esLiquidacion = !esParcial && loan.modalidad !== 'Intereses' && otrasRegPend !== null && otrasRegPend.length === 0;
   // Banner dinamico: liquidacion (prioridad absoluta) > puntualidad. Compara la fecha REAL de cobro
@@ -71,7 +72,7 @@ export function generateRecibo(pay, loan, copRec, usdRec, allPays, opts) {
   // mediodia local para evitar desfases por zona horaria. La puntualidad solo aplica a pagos COMPLETOS
   // (no parciales, no abonos a capital).
   var fechaRealPago = opts.fechaRecaudo || pay.fechaRecaudo || nowStr();
-  var diasRetraso = (pay.fechaPago && fechaRealPago && pay.id.indexOf('-ab-') === -1)
+  var diasRetraso = (pay.fechaPago && fechaRealPago && !esAbono(pay))
     ? Math.round((new Date(fechaRealPago + 'T12:00:00') - new Date(pay.fechaPago + 'T12:00:00')) / 86400000) : 0;
   function bannerBox(bg, bd, tx, titulo, sub) {
     return '<div style="margin:16px 0;padding:14px 16px;background:' + bg + ';border:1px solid ' + bd + ';border-radius:8px;text-align:center">' +
@@ -83,7 +84,7 @@ export function generateRecibo(pay, loan, copRec, usdRec, allPays, opts) {
     bannerHTML = bannerBox(dark ? '#0f2b19' : '#dafbe1', dark ? '#1b4332' : '#aceebb', dark ? '#3fb950' : '#166534',
       '¡Felicidades! Ha cancelado la totalidad de su prestamo',
       'Con este pago se salda el 100% del prestamo. ¡Gracias por tu cumplimiento!');
-  } else if (!esParcial && pay.fechaPago && pay.id.indexOf('-ab-') === -1) {
+  } else if (!esParcial && pay.fechaPago && !esAbono(pay)) {
     if (diasRetraso > 0) {
       bannerHTML = bannerBox(dark ? '#2d2410' : '#fff8c5', dark ? '#3d3115' : '#eac54f', dark ? '#d29922' : '#9a6700',
         'Pago recibido con ' + diasRetraso + ' ' + (diasRetraso === 1 ? 'dia' : 'dias') + ' de retraso',

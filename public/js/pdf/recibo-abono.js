@@ -17,6 +17,7 @@
 import { fmt, fmtUSD, fmtD, copToUsd } from '../core/format.js';
 import { nowStr, properCase } from '../core/ui.js';
 import { saldoConCaja, pendienteDeCuota, computeLiquidacion } from '../core/dominio.js';
+import { esAbono } from '../core/ids.js';
 
 // ── Recibo de Abono a Capital (v1.17.0) ──────────────────────────────────────
 // Se genera automaticamente tras registrar un abono. Los 3 puntos de entrada
@@ -48,9 +49,9 @@ export function generateReciboAbono(loan, allPays, opts) {
   // Fase 3: el "Saldo anterior" que se IMPRIME usa la base con caja aplicada, para no contradecir
   // al perfil del deudor. Se cae a `pre.saldo` (motor) si el snapshot es de una version anterior.
   var saldoAntes = (pre.saldoCaja != null) ? pre.saldoCaja : ((pre.saldo != null) ? pre.saldo : (saldoDespues + monto));
-  var pend = lp.filter(function(p){ return p.id.indexOf('-ab-') === -1 && p.estadoPago === 'Pendiente'; })
+  var pend = lp.filter(function(p){ return !esAbono(p) && p.estadoPago === 'Pendiente'; })
                .sort(function(a, b){ return a.cuotaN - b.cuotaN; });
-  var nAbonos = lp.filter(function(p){ return p.id.indexOf('-ab-') !== -1; }).length;
+  var nAbonos = lp.filter(function(p){ return esAbono(p); }).length;
 
   var esPazYSalvo = saldoDespues <= 0 || loan.estado === 'Finalizado';
   // Si el prestamo quedo saldado/Finalizado el saldo mostrado es 0 por definicion (el backend

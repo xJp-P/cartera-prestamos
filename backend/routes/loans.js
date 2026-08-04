@@ -37,6 +37,10 @@
 
 const express = require('express');
 
+// Predicados de clasificacion de filas de `payments` (core/ids.js): unica fuente
+// de verdad de que es un abono. Antes cada sitio repetia el literal indexOf('-ab-').
+const { esAbono } = require('../core/ids');
+
 module.exports = function crearRutasLoans(ctx) {
   const {
     db, logAction, insPayment, runPayment, insertSchedule, mutacionAtomica,
@@ -95,8 +99,8 @@ module.exports = function crearRutasLoans(ctx) {
     // intactas (deuda historica/causada). Esto garantiza que un edit nunca afecta cuotas
     // ya pactadas con el deudor.
     const prev = db.prepare('SELECT * FROM payments WHERE prestamoId = ?').all(loan.id);
-    const prevAbonos = prev.filter(p => p.id.indexOf('-ab-') !== -1);
-    const prevRegulares = prev.filter(p => p.id.indexOf('-ab-') === -1);
+    const prevAbonos = prev.filter(p => esAbono(p));
+    const prevRegulares = prev.filter(p => !esAbono(p));
     const prevPagadasYMora = prevRegulares.filter(p => p.estadoPago === 'Pagado' || p.estadoPago === 'En Mora');
     const prevPendientes = prevRegulares.filter(p => p.estadoPago === 'Pendiente');
 
@@ -266,7 +270,7 @@ module.exports = function crearRutasLoans(ctx) {
     // Un registro de abono se identifica por la regla canonica: id con '-ab-'.
     const regularConsumed = allPays.filter(p =>
       (p.estadoPago === 'Pagado' || p.estadoPago === 'En Mora') &&
-      p.id.indexOf('-ab-') === -1
+      !esAbono(p)
     ).length;
     const maxExistingN = allPays.reduce((max, p) => Math.max(max, p.cuotaN), 0);
 
@@ -322,7 +326,7 @@ module.exports = function crearRutasLoans(ctx) {
     // (el cliente pago y el sistema lo olvida). Se restaura sobre el cronograma en memoria,
     // antes de escribir. La guarda de huerfanos NO aplica cuando el prestamo queda saldado:
     // ahi el cronograma vacio es correcto y el parcial ya se conto en la liquidacion.
-    const cobrosPrevAb = snapshotCobros(allPays.filter(p => p.id.indexOf('-ab-') === -1 && p.estadoPago === 'Pendiente'));
+    const cobrosPrevAb = snapshotCobros(allPays.filter(p => !esAbono(p) && p.estadoPago === 'Pendiente'));
     if (nuevoSaldo > 0) abortarSiHuerfanos(nuevasCuotas, cobrosPrevAb);
     restaurarCobros(nuevasCuotas, cobrosPrevAb);
 
@@ -347,7 +351,7 @@ module.exports = function crearRutasLoans(ctx) {
       // valores quedaban con el monto original e inflaban marginalmente el KPI de
       // "capital recuperado" cuando se pagaba la cuota en mora.
       if (loan.modalidad === 'Prestamo') {
-        const moraRegulares = allPays.filter(p => p.estadoPago === 'En Mora' && p.id.indexOf('-ab-') === -1);
+        const moraRegulares = allPays.filter(p => p.estadoPago === 'En Mora' && !esAbono(p));
         const ns = Math.max(0, nuevoSaldo);
         moraRegulares.forEach(p => {
           db.prepare('UPDATE payments SET saldoInicial = ?, abonoCapital = ?, cuotaTotal = ?, saldoFinal = ? WHERE id = ?')
@@ -358,7 +362,7 @@ module.exports = function crearRutasLoans(ctx) {
       // (cuotaTotal = capital restante + ganancia; abonoCapital solo el capital)
       if (loan.modalidad === 'Pago Unico') {
         const gPU2 = Math.round(+loan.gananciaFija || 0);
-        const moraRegularesPU = allPays.filter(p => p.estadoPago === 'En Mora' && p.id.indexOf('-ab-') === -1);
+        const moraRegularesPU = allPays.filter(p => p.estadoPago === 'En Mora' && !esAbono(p));
         const nsPU = Math.max(0, nuevoSaldo);
         moraRegularesPU.forEach(p => {
           db.prepare('UPDATE payments SET saldoInicial = ?, abonoCapital = ?, cuotaTotal = ?, saldoFinal = ? WHERE id = ?')
@@ -457,14 +461,14 @@ module.exports = function crearRutasLoans(ctx) {
     // gated a Capital + Intereses, asi que Prestamo/Pago Unico no llegan aqui).
     const todoCapPagado = allPays.filter(p =>
       p.estadoPago === 'Pagado' ||
-      (p.estadoPago === 'En Mora' && p.id.indexOf('-ab-') === -1)
+      (p.estadoPago === 'En Mora' && !esAbono(p))
     ).reduce((s, p) => s + p.abonoCapital, 0);
     const saldoReal = Math.max(0, originalCOP - todoCapPagado);
     if (saldoReal <= 0) throw new ClientError('El prestamo no tiene saldo de capital pendiente para reestructurar');
 
     const regularConsumed = allPays.filter(p =>
       (p.estadoPago === 'Pagado' || p.estadoPago === 'En Mora') &&
-      p.id.indexOf('-ab-') === -1
+      !esAbono(p)
     ).length;
     const nextRegularN = regularConsumed + 1;
     const updatedLoan = Object.assign({}, loan, { montoCOP: saldoReal });
@@ -506,7 +510,7 @@ module.exports = function crearRutasLoans(ctx) {
     // snapshot un pago parcial en curso desapareceria. Aqui el plazo PUEDE acortarse, asi que la
     // guarda de huerfanos es especialmente pertinente: si la cuota que llevaba dinero ya no
     // existe en el cronograma nuevo, se aborta con 4xx y la BD queda intacta.
-    const cobrosPrevRe = snapshotCobros(allPays.filter(p => p.id.indexOf('-ab-') === -1 && p.estadoPago === 'Pendiente'));
+    const cobrosPrevRe = snapshotCobros(allPays.filter(p => !esAbono(p) && p.estadoPago === 'Pendiente'));
     abortarSiHuerfanos(nuevasCuotas, cobrosPrevRe);
     restaurarCobros(nuevasCuotas, cobrosPrevRe);
 
@@ -540,7 +544,7 @@ module.exports = function crearRutasLoans(ctx) {
       const todoCapPagado = allPays.filter(p => p.estadoPago === 'Pagado').reduce((s, p) => s + p.abonoCapital, 0);
       const capitalPerdido = Math.max(0, Math.round(originalCOP - todoCapPagado));
       const interesesPerdidos = Math.round(allPays
-        .filter(p => p.estadoPago === 'En Mora' && p.id.indexOf('-ab-') === -1)
+        .filter(p => p.estadoPago === 'En Mora' && !esAbono(p))
         .reduce((s, p) => s + p.interesPeriodo, 0));
       const totalPerdido = capitalPerdido + interesesPerdidos;
 
@@ -578,7 +582,7 @@ module.exports = function crearRutasLoans(ctx) {
 
     // ── FASE 1: LECTURA + VALIDACION + COMPUTO (sin escrituras) ───────────────
     const allPays = db.prepare('SELECT * FROM payments WHERE prestamoId = ? ORDER BY cuotaN').all(req.params.id);
-    const regularesTodas = allPays.filter(p => p.id.indexOf('-ab-') === -1); // regla canonica '-ab-'
+    const regularesTodas = allPays.filter(p => !esAbono(p)); // regla canonica '-ab-'
 
     // Mora a consolidar: intereses de las cuotas En Mora regulares -> se suman a la 1a cuota nueva
     const morasRegulares = regularesTodas.filter(p => p.estadoPago === 'En Mora');

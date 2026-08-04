@@ -14,6 +14,7 @@ import {
 } from '../core/format.js';
 import { h, useState } from '../core/react.js';
 import { _submitGuard } from '../core/ui.js';
+import { esAbono } from '../core/ids.js';
 
 // ── RestructureModal (v1.9.0) ─────────────────────────────────────────────────
 // Permite reestructurar el cronograma de cuotas FUTURAS sin necesidad de hacer un
@@ -35,9 +36,9 @@ export function RestructureModal(props){
   var loanPays=allPays.filter(function(p){return String(p.prestamoId)===String(loan.id);});
   var todoCapPagado=loanPays.filter(function(p){return p.estadoPago==='Pagado';}).reduce(function(s,p){return s+p.abonoCapital;},0);
   var saldoActual=Math.max(0,originalCOP-todoCapPagado);
-  var intMora=loanPays.filter(function(p){return p.estadoPago==='En Mora'&&p.id.indexOf('-ab-')===-1;}).reduce(function(s,p){return s+p.interesPeriodo;},0);
+  var intMora=loanPays.filter(function(p){return p.estadoPago==='En Mora'&&!esAbono(p);}).reduce(function(s,p){return s+p.interesPeriodo;},0);
   // Cuotas consumidas (Pagado + Mora, excluyendo abonos) — define el nextRegularN
-  var regulares=loanPays.filter(function(p){return p.id.indexOf('-ab-')===-1;});
+  var regulares=loanPays.filter(function(p){return !esAbono(p);});
   var regularConsumed=regulares.filter(function(p){return p.estadoPago==='Pagado'||p.estadoPago==='En Mora';}).length;
   var plazoOriginal=+loan.plazoMeses||12;
   var cuotasRestantesActuales=Math.max(1,plazoOriginal-regularConsumed);

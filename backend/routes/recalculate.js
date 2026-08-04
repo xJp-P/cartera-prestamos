@@ -19,6 +19,10 @@
 
 const express = require('express');
 
+// Predicados de clasificacion de filas de `payments` (core/ids.js): unica fuente
+// de verdad de que es un abono. Antes cada sitio repetia el literal indexOf('-ab-').
+const { esAbono } = require('../core/ids');
+
 module.exports = function crearRutasRecalculate(ctx) {
   const {
     db, insertSchedule, snapshotCobros, restaurarCobros,
@@ -40,7 +44,7 @@ module.exports = function crearRutasRecalculate(ctx) {
     // NO se journaliza: /recalculate es reconstructivo por diseño y de alcance global.
     const recalcularUno = db.transaction((loan) => {
       const prev = db.prepare('SELECT * FROM payments WHERE prestamoId = ?').all(loan.id);
-      const prevRegulares = prev.filter(p => !p.id || p.id.indexOf('-ab-') === -1);
+      const prevRegulares = prev.filter(p => !esAbono(p));
       const prevPagadasYMora = prevRegulares.filter(p => p.estadoPago === 'Pagado' || p.estadoPago === 'En Mora');
       const prevPendientes = prevRegulares.filter(p => p.estadoPago === 'Pendiente');
 
@@ -65,7 +69,7 @@ module.exports = function crearRutasRecalculate(ctx) {
       // que necesitan amortizacion (Capital + Intereses, Intereses). Prestamo se mantiene
       // con montoCOP porque su flujo es diferente.
       const originalCOPRec = loan.moneda === 'USD' ? Math.round(loan.montoOrigen * loan.trmAcordada) : Math.round(loan.montoOrigen);
-      const capPorAbonos = prev.filter(p => p.id.indexOf('-ab-') !== -1 && p.estadoPago === 'Pagado').reduce((s, p) => s + p.abonoCapital, 0);
+      const capPorAbonos = prev.filter(p => esAbono(p) && p.estadoPago === 'Pagado').reduce((s, p) => s + p.abonoCapital, 0);
       // v1.12.x FIX (bug de mora): restar tambien el capital de las cuotas EN MORA (deuda
       // independiente, su capital NO se re-amortiza en las pendientes). prevPagadasYMora =
       // Pagadas + Mora -> simetrico con regularConsumed (que tambien las cuenta). Antes solo Pagadas.

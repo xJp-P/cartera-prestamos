@@ -16,6 +16,7 @@
 
 import { fmt, fmtUSD, fmtD, copToUsd } from '../core/format.js';
 import { imputarCobros, computeLiquidacion } from '../core/dominio.js';
+import { esAbono } from '../core/ids.js';
 
 export function generateCronogramaPDF(loan, payments, darkMode) {
   var esUSD = loan && loan.moneda === 'USD';
@@ -37,8 +38,8 @@ export function generateCronogramaPDF(loan, payments, darkMode) {
   var allCuotas = payments.filter(function(p) {
     return p.prestamoId === loan.id;
   }).sort(function(a, b) { return a.cuotaN - b.cuotaN; });
-  var cuotasAll = allCuotas.filter(function(p) { return p.id.indexOf('-ab-') === -1; });
-  var abonos = allCuotas.filter(function(p) { return p.id.indexOf('-ab-') !== -1; });
+  var cuotasAll = allCuotas.filter(function(p) { return !esAbono(p); });
+  var abonos = allCuotas.filter(function(p) { return esAbono(p); });
   // Para Intereses: excluir cuotas pendientes (evitar confusión con plazo indefinido)
   var cuotas = loan.modalidad === 'Intereses' ? cuotasAll.filter(function(p) { return p.estadoPago !== 'Pendiente'; }) : cuotasAll;
   var totalPagar = cuotas.reduce(function(s, p) { return s + p.cuotaTotal; }, 0);
@@ -138,11 +139,11 @@ export function generateCronogramaPDF(loan, payments, darkMode) {
     '<table>',
     '<tr><th>#</th><th>Vence</th><th>Interes</th><th>Abono a capital</th><th>Valor cuota</th><th>Saldo</th><th>Estado</th></tr>',
     filas.map(function(p) {
-      var esAbono = p.id.indexOf('-ab-') !== -1;
-      var isParcial = !esAbono && (p.partialPaid||0) > 0 && p.estadoPago !== 'Pagado';
-      var cls = esAbono ? ' class="abono"' : isParcial ? ' class="mora"' : p.estadoPago === 'Pagado' ? ' class="pagado"' : p.estadoPago === 'En Mora' ? ' class="mora"' : ' class="pendiente"';
-      var badge = esAbono ? '<span class="badge badge-abono">Abono</span>' : isParcial ? '<span class="badge badge-mora">'+(p.estadoPago==='En Mora'?'En Mora':'Pendiente')+'</span> <span class="badge badge-parcial">Parcial</span>' : p.estadoPago === 'Pagado' ? '<span class="badge badge-pagado">Pagado</span>' : p.estadoPago === 'En Mora' ? '<span class="badge badge-mora">En Mora</span>' : '<span class="badge badge-pendiente">Pendiente</span>';
-      if (esAbono) {
+      var filaEsAbono = esAbono(p);
+      var isParcial = !filaEsAbono && (p.partialPaid||0) > 0 && p.estadoPago !== 'Pagado';
+      var cls = filaEsAbono ? ' class="abono"' : isParcial ? ' class="mora"' : p.estadoPago === 'Pagado' ? ' class="pagado"' : p.estadoPago === 'En Mora' ? ' class="mora"' : ' class="pendiente"';
+      var badge = filaEsAbono ? '<span class="badge badge-abono">Abono</span>' : isParcial ? '<span class="badge badge-mora">'+(p.estadoPago==='En Mora'?'En Mora':'Pendiente')+'</span> <span class="badge badge-parcial">Parcial</span>' : p.estadoPago === 'Pagado' ? '<span class="badge badge-pagado">Pagado</span>' : p.estadoPago === 'En Mora' ? '<span class="badge badge-mora">En Mora</span>' : '<span class="badge badge-pendiente">Pendiente</span>';
+      if (filaEsAbono) {
         // Un abono no devenga interes: la columna INTERES va en guion (no "$0", que se
         // confundiria con un interes calculado en cero).
         return '<tr' + cls + '><td>-</td><td style="text-align:left">' + fmtD(p.fechaPago) + '</td><td>&mdash;</td>' +

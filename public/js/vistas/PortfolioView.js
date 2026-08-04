@@ -9,6 +9,7 @@ import { Ico } from '../componentes/iconos.js';
 import { imputarCobros } from '../core/dominio.js';
 import { copToUsd, fmt, fmtD, fmtN, fmtUSD } from '../core/format.js';
 import { h, useMemo, useState } from '../core/react.js';
+import { esAbono } from '../core/ids.js';
 
 // ── Rendimiento (Portfolio Performance) ───────────────────────────────────────
 export function PortfolioView(props){
@@ -19,8 +20,7 @@ export function PortfolioView(props){
       var lp=pays.filter(function(p){return p.prestamoId===loan.id;});
       var paid=lp.filter(function(p){return p.estadoPago==='Pagado';});
       var esUSD=loan.moneda==='USD';
-      // Identificar abonos reales (id contiene '-ab-')
-      var esAbono=function(p){return p.id.indexOf('-ab-')!==-1;};
+      // Identificar abonos reales: predicado unico de core/ids.js
       // Regulares = cuotas normales del cronograma (no abonos)
       var regulares=lp.filter(function(p){return !esAbono(p);});
       var regularesPaid=paid.filter(function(p){return !esAbono(p);});

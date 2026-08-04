@@ -15,6 +15,7 @@ import {
 } from '../core/format.js';
 import { h, useState } from '../core/react.js';
 import { _submitGuard, nowStr } from '../core/ui.js';
+import { esAbono } from '../core/ids.js';
 
 export function AbonoModal(props){
   var loan=props.loan,allPays=props.pays||[],onSave=props.onSave,onClose=props.onClose,onRequestLiquidar=props.onRequestLiquidar;
@@ -38,7 +39,7 @@ export function AbonoModal(props){
   var loanPays=allPays.filter(function(p){return String(p.prestamoId)===String(loan.id);});
   var todoCapPagado=loanPays.filter(function(p){return p.estadoPago==='Pagado';}).reduce(function(s,p){return s+p.abonoCapital;},0);
   var saldoActual=Math.max(0,originalCOP-todoCapPagado);
-  var intMora=loanPays.filter(function(p){return p.estadoPago==='En Mora'&&p.id.indexOf('-ab-')===-1;}).reduce(function(s,p){return s+p.interesPeriodo;},0);
+  var intMora=loanPays.filter(function(p){return p.estadoPago==='En Mora'&&!esAbono(p);}).reduce(function(s,p){return s+p.interesPeriodo;},0);
   // ── v2.0.0 — TECHO REAL DEL ABONO: espejo EXACTO del saldoReal que se computa dentro de POST /api/loans/:id/abono ──
   // saldoActual (identico al capitalPendienteLiq del backend) es TODO el capital que se debe:
   // el del cronograma futuro MAS el atrapado en cuotas En Mora. Pero un abono normal (no
@@ -50,7 +51,7 @@ export function AbonoModal(props){
   var esSingleCuota=loan.modalidad==='Prestamo'||loan.modalidad==='Pago Unico';
   var moraRows=loanPays.filter(function(p){return p.estadoPago==='En Mora';}); // sin filtro '-ab-': espejo del backend
   var moraCap=moraRows.reduce(function(s,p){return s+p.abonoCapital;},0);
-  var moraCount=moraRows.filter(function(p){return p.id.indexOf('-ab-')===-1;}).length;
+  var moraCount=moraRows.filter(function(p){return !esAbono(p);}).length;
   var saldoAbonable=esSingleCuota?Math.max(0,originalCOP-todoCapPagado):Math.max(0,originalCOP-todoCapPagado-moraCap);
   var capEnMora=Math.max(0,saldoActual-saldoAbonable); // capital que solo se cobra liquidando o pagando esas cuotas
   // v2.3.0 — puente con el saldo que muestra el perfil. `saldoActual` es capital CONTRACTUAL
@@ -60,7 +61,7 @@ export function AbonoModal(props){
   // no Pagadas. Ambas son de PRESENTACION; el techo del abono no depende de esto.
   var saldoCajaModal=saldoConCaja(loan,loanPays);
   var capImputadoVivo=Math.max(0,saldoActual-saldoCajaModal);
-  var parcialVivo=loanPays.filter(function(p){return p.id.indexOf('-ab-')===-1&&p.estadoPago!=='Pagado';})
+  var parcialVivo=loanPays.filter(function(p){return !esAbono(p)&&p.estadoPago!=='Pagado';})
     .reduce(function(s,p){return s+(p.partialPaid||0);},0);
   var liquidacion=computeLiquidacion(loan,loanPays,{}).total; // v1.19.0: helper centralizado
   // ── v2.0.0 — DOBLE ENTRADA OBLIGATORIA EN PRESTAMOS USD ──────────────────────────────
@@ -93,7 +94,7 @@ export function AbonoModal(props){
   var excedeAbonable=montoCapCOP>saldoAbonable;
   var ctaLiquidar=excedeAbonable&&capEnMora>0;
   // Cuotas regulares ya consumidas (pagadas + en mora, excluyendo abonos)
-  var regulares=loanPays.filter(function(p){return p.id.indexOf('-ab-')===-1;});
+  var regulares=loanPays.filter(function(p){return !esAbono(p);});
   var regularConsumed=regulares.filter(function(p){return p.estadoPago==='Pagado'||p.estadoPago==='En Mora';}).length;
   var plazoOriginal=+loan.plazoMeses||12;
   var cuotasRestantesActuales=Math.max(1,plazoOriginal-regularConsumed);

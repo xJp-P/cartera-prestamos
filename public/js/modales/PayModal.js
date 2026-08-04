@@ -14,6 +14,7 @@ import {
 import { h, useState } from '../core/react.js';
 import { _submitGuard, nowStr } from '../core/ui.js';
 import { generateRecibo } from '../pdf/recibo-pago.js';
+import { esAbono } from '../core/ids.js';
 
 // ── PayModal ──────────────────────────────────────────────────────────────────
 export function PayModal(props){
@@ -33,8 +34,8 @@ export function PayModal(props){
   var esUSD=loan&&loan.moneda==='USD';
   // Abono real = id con '-ab-' (regla canonica). NO usar la heuristica interes===0 && capital>0:
   // la cuota unica de un Prestamo (o un Pago Unico sin ganancia) tambien la cumple y bloqueaba el pago.
-  var esAbono=pay.id&&pay.id.indexOf('-ab-')!==-1;
-  if(esAbono) return h(Modal,{onClose:onClose},
+  var filaEsAbono=esAbono(pay);
+  if(filaEsAbono) return h(Modal,{onClose:onClose},
     h('div',{style:{fontWeight:700,fontSize:16,color:'var(--text)',marginBottom:12}},'Detalle Abono Capital'),
     h('div',{style:{background:'var(--bg3)',borderRadius:12,padding:'14px',border:'1px solid var(--border)'}},
       h('div',{style:{fontWeight:700,color:'var(--text)',marginBottom:4}},pay.nombreCliente),

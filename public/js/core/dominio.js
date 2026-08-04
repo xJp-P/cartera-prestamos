@@ -44,6 +44,8 @@
 // no tiene ledger (historico previo, abonos a capital, liquidaciones de mora) cae al FALLBACK: un
 // unico evento en fechaRecaudo por (montoCOPRecibido||cuotaTotal). metrics.recibido y sparkCobros
 // usan ESTA funcion -> el KPI y la suma del grafico cuadran por construccion, sin doble conteo.
+import { esAbono } from './ids.js';
+
 export function cobrosDe(p){
   if(!p) return [];
   if(p.recibos){
@@ -194,15 +196,15 @@ export function flujoCajaDe(loan, loanPays){
   var saldo=origCOP,ti=0,tc=0,tg=0,ta=0,inf=0;
   var out=evs.map(function(e,i){
     var p=e.pay;
-    var esAbono=p.id&&p.id.indexOf('-ab-')!==-1;
+    var filaEsAbono=esAbono(p);
     var saldado=p.estadoPago==='Pagado';
     // El capital ya viene imputado por evento -> el saldo baja con CADA peso que entra, no de
     // golpe en el evento que salda la cuota.
     saldo=Math.max(0,saldo-e.capital); ti+=e.interes; tc+=e.capital; tg+=e.cop; ta+=e.ajuste;
     if(e.inferido) inf++;
-    var atraso=(!esAbono&&p.fechaPago)?Math.round((new Date(e.fecha+'T12:00:00')-new Date(p.fechaPago+'T12:00:00'))/86400000):null;
+    var atraso=(!filaEsAbono&&p.fechaPago)?Math.round((new Date(e.fecha+'T12:00:00')-new Date(p.fechaPago+'T12:00:00'))/86400000):null;
     return {n:i+1,fecha:e.fecha,cop:e.cop,interes:e.interes,capital:e.capital,ajuste:e.ajuste,saldo:saldo,
-      esAbono:esAbono,parcialEnCurso:!saldado,inferido:e.inferido,
+      esAbono:filaEsAbono,parcialEnCurso:!saldado,inferido:e.inferido,
       cuotaN:p.cuotaN,vence:p.fechaPago,atraso:atraso,obs:p.observaciones||'',
       usd:p.montoUSDRecibido||0,nEv:e.nEv};
   });
@@ -223,7 +225,7 @@ export function computeLiquidacion(loan, loanPays, opts){
   var esUSD = loan.moneda === 'USD';
   var origCOP = esUSD ? Math.round(loan.montoOrigen * loan.trmAcordada) : Math.round(loan.montoOrigen);
   var pays = (loanPays||[]).filter(function(p){ return String(p.prestamoId) === String(loan.id); });
-  var regs = pays.filter(function(p){ return p.id.indexOf('-ab-') === -1; });
+  var regs = pays.filter(function(p){ return !esAbono(p); });
   var capPagadas = pays.filter(function(p){ return p.estadoPago === 'Pagado'; })
     .reduce(function(s,p){ return s + p.abonoCapital; }, 0);
   var capitalPendiente = Math.max(0, origCOP - capPagadas);

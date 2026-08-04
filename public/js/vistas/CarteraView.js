@@ -10,6 +10,7 @@ import { imputarCobros, saldoConCaja } from '../core/dominio.js';
 import { copToUsd, fmt, fmtD, fmtN, fmtUSD } from '../core/format.js';
 import { h, useState } from '../core/react.js';
 import { freqLabel } from '../core/ui.js';
+import { esAbono } from '../core/ids.js';
 
 // ── Cartera ───────────────────────────────────────────────────────────────────
 export function CarteraView(props){
@@ -47,7 +48,7 @@ export function CarteraView(props){
     h('div',{style:{display:'flex',flexDirection:'column',gap:10}},
       filtered.slice().sort(function(a,b){return b.fechaInicio.localeCompare(a.fechaInicio);}).map(function(loan){
         var lp=pays.filter(function(p){return p.prestamoId===loan.id;});
-        var regs=lp.filter(function(p){return p.id.indexOf('-ab-')===-1;});
+        var regs=lp.filter(function(p){return !esAbono(p);});
         var paid=regs.filter(function(p){return p.estadoPago==='Pagado';}).length;
         var mora=regs.filter(function(p){return p.estadoPago==='En Mora';}).length;
         var isExp=exp===loan.id;
@@ -97,8 +98,8 @@ export function CarteraView(props){
           isExp&&function(){
             // Cronograma unificado con DebtorModal, el Recibo de Abono y el PDF:
             // # / Vence / Interes / Abono a capital / Valor cuota / Saldo / Estado
-            var cuotasReg=lp.filter(function(p){return p.id.indexOf('-ab-')===-1;}).filter(function(p){return loan.modalidad!=='Intereses'||p.estadoPago!=='Pendiente';});
-            var abonos=lp.filter(function(p){return p.id.indexOf('-ab-')!==-1;});
+            var cuotasReg=lp.filter(function(p){return !esAbono(p);}).filter(function(p){return loan.modalidad!=='Intereses'||p.estadoPago!=='Pendiente';});
+            var abonos=lp.filter(function(p){return esAbono(p);});
             var esUSD=loan.moneda==='USD';
             var cronoItems=cuotasReg.slice().sort(function(a,b){return a.cuotaN-b.cuotaN;});
             // Linea de tiempo unica: cuotas + abonos intercalados por fecha, con la MISMA regla
@@ -129,7 +130,7 @@ export function CarteraView(props){
                     // Fila de ABONO intercalada (regla canonica '-ab-'), espejo de la del PDF:
                     // sin numero de cuota ni interes, el monto en ABONO A CAPITAL y VALOR CUOTA,
                     // y el saldo que quedo inmediatamente despues del abono.
-                    if(p.id.indexOf('-ab-')!==-1){
+                    if(esAbono(p)){
                       return h('div',{key:p.id,style:{display:'grid',gridTemplateColumns:cronoCols,padding:'5px 8px',fontSize:11,gap:4,borderTop:'1px solid var(--blue-bd)',background:'var(--blue-bg)'}},
                         h('span',{style:{color:'var(--blue)',fontWeight:600}},'-'),
                         h('span',{style:{color:'var(--blue)',fontStyle:'italic'}},fmtD(p.fechaPago),
