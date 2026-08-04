@@ -3,7 +3,7 @@
   "caso": "recibo-usd-oscuro",
   "generador": "generateRecibo",
   "tema": "dark",
-  "entradaHash": "a8b5386d20797c96df286ea7ef877ed725f55301",
+  "entradaHash": "a8ca7e8d88ac8f94cac93e7234a4e58701404837",
   "estructura": {
     "docTitle": "Recibo de Pago",
     "h1": [

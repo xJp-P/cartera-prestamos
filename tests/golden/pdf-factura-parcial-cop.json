@@ -3,7 +3,7 @@
   "caso": "factura-parcial-cop",
   "generador": "generateFacturaCobro",
   "tema": "light",
-  "entradaHash": "8371d39fcf8a997c8f4d0ab1c6fd6f04cacc1415",
+  "entradaHash": "a645f93c0da5095004ba526222ae7aee1a84c1a0",
   "estructura": {
     "docTitle": "Recibo de Cobro",
     "h1": [],

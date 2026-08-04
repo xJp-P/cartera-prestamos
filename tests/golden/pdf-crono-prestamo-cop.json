@@ -3,7 +3,7 @@
   "caso": "crono-prestamo-cop",
   "generador": "generateCronogramaPDF",
   "tema": "light",
-  "entradaHash": "fe6fa91fa41a0ccf8a94213b04139e527eb6d602",
+  "entradaHash": "7a96cbd3681b160daaa45ab3a2555c9cd6cf533d",
   "estructura": {
     "docTitle": "Cronograma de Pagos",
     "h1": [

@@ -57,6 +57,11 @@ const TOL_REDONDEO = 5;
 const PISO = {
   payments: 100, loans: 20, eventos: 40, conLedger: 10, conFallback: 30,
   saldadasConEventos: 40, loansConFlujo: 15, filasFlujo: 40, activos: 5,
+  // Interes Diario: el credito sintetico de tests/fixture/credito-diario.js. Es un PISO
+  // y no un "si existe, comprueba" A PROPOSITO — sin el, toda la seccion 8 daria VERDE EN
+  // VACIO, que es peor que fallar: pareceria que los invariantes del corte estan
+  // protegidos cuando en realidad no se evaluo ni una fila.
+  loansDiarios: 1, cortes: 2,
 };
 
 function main() {
@@ -80,7 +85,10 @@ function main() {
   const { simbolos, meta } = cargarFrontend({ silenciarConsola: true });
   const H = {};
   const NECESARIOS = ['cobrosDe', 'imputarCobros', 'saldoConCaja', 'pendienteDeCuota',
-                      'pendCuota', 'flujoCajaDe', 'computeLiquidacion'];
+                      'pendCuota', 'flujoCajaDe', 'computeLiquidacion',
+                      // Predicados de clasificacion (core/ids.js). Se exigen aqui para que
+                      // la seccion 8 no pueda "pasar" por no haberlos encontrado.
+                      'esAbono', 'esCorte', 'esCuotaRegular'];
   const faltantes = [];
   NECESARIOS.forEach(function (n) {
     if (typeof simbolos[n] === 'function') H[n] = simbolos[n];
@@ -1007,6 +1015,126 @@ function main() {
       R.check('un parcial mayor que la deuda deja el total en 0, nunca negativo',
         H.computeLiquidacion(cand, lpEnorme, {}).total === 0);
     }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  R.seccion('8. Interes Diario — invariantes de la fila de CORTE y espejo de predicados');
+  // El corte es el TERCER tipo de fila de `payments` (id `${loanId}-ct-${n}`), y toda la
+  // seguridad de la modalidad cuelga de que esas filas cumplan una forma exacta. Aqui se
+  // verifican los invariantes que NO dependen de que la feature exista todavia: la forma
+  // del dato y la equivalencia de las dos mitades del espejo de predicados.
+  {
+    // Oraculo INDEPENDIENTE: el test no reutiliza el predicado de produccion para decidir
+    // que es un corte. Si lo hiciera, un bug en el predicado se ocultaria a si mismo.
+    const esCorteTest = function (p) { return String(p.id).indexOf('-ct-') !== -1; };
+    const diarios = loans.filter(function (l) { return l.modalidad === 'Interes Diario'; });
+    const cortes  = pays.filter(esCorteTest);
+
+    R.check(`la BD trae al menos ${PISO.loansDiarios} credito Interes Diario (real: ${diarios.length})`,
+      diarios.length >= PISO.loansDiarios,
+      diarios.length ? undefined : 'falta el credito sintetico: regeneralo con tests/fixture/credito-diario.js');
+    R.check(`la BD trae al menos ${PISO.cortes} filas de corte (real: ${cortes.length})`,
+      cortes.length >= PISO.cortes);
+
+    if (cortes.length) {
+      // I1 — nace 'Pagado' y NUNCA cambia. Es lo que apaga por construccion las 4 copias de
+      // la auto-mora (que filtran estadoPago='Pendiente') y los DELETE de las 5 rutas que
+      // regeneran. Si un corte apareciera como Pendiente, la auto-mora lo marcaria En Mora
+      // y contaminaria el KPI de mora, computeLiquidacion y el Reporte de Activos.
+      const noPagado = cortes.filter(function (p) { return p.estadoPago !== 'Pagado'; });
+      R.check(`(I1) las ${cortes.length} filas de corte estan en 'Pagado'`,
+        noPagado.length === 0, muestra(noPagado.map(function (p) { return { id: p.id, estadoPago: p.estadoPago }; })));
+
+      // I2 — composicion exacta en pesos enteros, sin tolerancia.
+      const desc = cortes.filter(function (p) {
+        return Math.round(p.cuotaTotal) !== Math.round(p.interesPeriodo) + Math.round(p.abonoCapital);
+      });
+      R.check('(I2) cuotaTotal === interesPeriodo + abonoCapital, EXACTO',
+        desc.length === 0, muestra(desc.map(function (p) {
+          return { id: p.id, cuotaTotal: p.cuotaTotal, interes: p.interesPeriodo, capital: p.abonoCapital };
+        })));
+      const noEnteros = cortes.filter(function (p) {
+        return !Number.isInteger(p.cuotaTotal) || !Number.isInteger(p.interesPeriodo) || !Number.isInteger(p.abonoCapital);
+      });
+      R.check('(I2b) los tres rubros son pesos ENTEROS', noEnteros.length === 0, muestra(noEnteros));
+
+      // I6 — EL INVARIANTE MAS PELIGROSO DE LA MODALIDAD.
+      // En un corte de solo-interes (abonoCapital = 0) hace falta ADEMAS que
+      // cuotaTotal === interesPeriodo exacto. Si difieren aunque sea en un peso, el fallback
+      // `if (capTotal <= 0 && reconc > 0) capTotal = reconc` de imputarCobros reclasifica
+      // TODO el interes cobrado como CAPITAL: saldoConCaja se desploma y la deuda se paga
+      // sola con intereses. Por eso no basta con I2 y se comprueba aparte.
+      const soloInteres = cortes.filter(function (p) { return Math.round(p.abonoCapital) === 0; });
+      const i6 = soloInteres.filter(function (p) {
+        return Math.round(p.cuotaTotal) !== Math.round(p.interesPeriodo);
+      });
+      R.check(`(I6) en los ${soloInteres.length} cortes de solo-interes, cuotaTotal === interesPeriodo`,
+        i6.length === 0, muestra(i6));
+      R.check('cobertura: existe al menos un corte de SOLO INTERES (el borde de I6)',
+        soloInteres.length >= 1);
+
+      // Y la consecuencia observable de I6, medida con el helper REAL: el dinero de un
+      // corte de solo-interes se imputa 100% a interes y 0 a capital.
+      const malImputados = soloInteres.filter(function (p) {
+        const t = H.imputarCobros(p).totales;
+        return t.capital !== 0 || t.interes !== Math.round(p.interesPeriodo);
+      });
+      R.check('un corte de solo-interes imputa 100% a INTERES y 0 a CAPITAL (imputarCobros real)',
+        malImputados.length === 0, muestra(malImputados.map(function (p) {
+          return { id: p.id, totales: H.imputarCobros(p).totales };
+        })));
+
+      // I5 — ledger siempre escrito -> cobrosDe usa el ledger y nunca el fallback.
+      const sinLedger = cortes.filter(function (p) { return !ledgerDe(p); });
+      R.check('(I5) toda fila de corte trae ledger `recibos` no vacio', sinLedger.length === 0,
+        muestra(sinLedger.map(function (p) { return { id: p.id, recibos: p.recibos }; })));
+
+      // Los tres tipos de fila son MUTUAMENTE EXCLUYENTES: ningun id es a la vez abono y
+      // corte, y ningun corte se cuela como cuota regular.
+      const ambiguos = pays.filter(function (p) { return esAbono(p) && esCorteTest(p); });
+      R.check('ningun id es a la vez abono y corte', ambiguos.length === 0, muestra(ambiguos));
+    }
+
+    // Cero cronograma: un credito de Interes Diario no tiene NI UNA fila de cuota regular.
+    // Es la propiedad que sostiene el `return []` de buildSchedule; si aparece una, alguna
+    // ruta de regeneracion le fabrico un cronograma frances (el `else` catch-all del motor).
+    diarios.forEach(function (l) {
+      const suyas = paysDe(l);
+      const regulares = suyas.filter(function (p) { return !esAbono(p) && !esCorteTest(p); });
+      R.check(`el credito diario ${l.id} no tiene cuotas de cronograma (${suyas.length} filas, todas cortes)`,
+        regulares.length === 0, muestra(regulares.map(function (p) { return { id: p.id, cuotaN: p.cuotaN }; })));
+
+      // saldoConCaja con el helper REAL: capital prestado menos el capital imputado.
+      const esperado = origCOPDe(l) - suyas.reduce(function (s, p) { return s + Math.round(p.abonoCapital); }, 0);
+      R.check(`saldoConCaja del credito diario == origCOP - capital de los cortes (${esperado})`,
+        H.saldoConCaja(l, suyas) === esperado,
+        `real=${H.saldoConCaja(l, suyas)} esperado=${esperado}`);
+    });
+
+    // ── Espejo de predicados: backend vs frontend ─────────────────────────────
+    // `backend/core/ids.js` y `public/js/core/ids.js` son la MISMA regla de negocio escrita
+    // dos veces (CommonJS vs modulo ES, sin bundler). Si divergen, el backend y la pantalla
+    // clasifican distinto la misma fila: la clase de falla del Bug #45. En vez de comparar
+    // texto, se comparan COMPORTAMIENTOS sobre todos los ids reales de la BD mas los bordes.
+    const idsBack = require(path.join(REPO, 'backend', 'core', 'ids.js'));
+    const casos = pays.map(function (p) { return p.id; })
+      .concat(['x-ab-1', 'x-ct-1', 'x-1', '', null, undefined, 'ab-ct-mezcla', 'L-ct-99', 'L-ab-99']);
+    const divergen = casos.filter(function (id) {
+      const fila = { id: id };
+      return idsBack.esAbono(fila)        !== H.esAbono(fila)
+          || idsBack.esCorte(fila)        !== H.esCorte(fila)
+          || idsBack.esCuotaRegular(fila) !== H.esCuotaRegular(fila);
+    });
+    R.check(`backend y frontend clasifican IGUAL los ${casos.length} ids probados (espejo de core/ids.js)`,
+      divergen.length === 0, muestra(divergen));
+
+    // Y la relacion entre los tres predicados no puede romperse.
+    const incoherentes = casos.filter(function (id) {
+      const f = { id: id };
+      return H.esCuotaRegular(f) !== (!H.esAbono(f) && !H.esCorte(f));
+    });
+    R.check('esCuotaRegular === !esAbono && !esCorte, para todo id',
+      incoherentes.length === 0, muestra(incoherentes));
   }
 
   db.close();

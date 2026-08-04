@@ -3,7 +3,7 @@
   "caso": "recibo-parcial-cop",
   "generador": "generateRecibo",
   "tema": "light",
-  "entradaHash": "ace819b260cf4e2ec3c90492c34b5885305d79a8",
+  "entradaHash": "3f1431c686cd8947a2bb40e319d6a12d5c4e7678",
   "estructura": {
     "docTitle": "Recibo de Pago",
     "h1": [

@@ -3,7 +3,7 @@
   "caso": "abono-corta-intereses-cop",
   "generador": "generateReciboAbono",
   "tema": "light",
-  "entradaHash": "e383f426470fe597befc3abf358c046cd6237b1f",
+  "entradaHash": "03a2d09386b8088427316719e16a73fdd1adf939",
   "estructura": {
     "docTitle": "Recibo de Abono a Capital",
     "h1": [],

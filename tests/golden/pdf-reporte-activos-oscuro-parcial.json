@@ -3,7 +3,7 @@
   "caso": "reporte-activos-oscuro-parcial",
   "generador": "generateReportePrestamosPDF",
   "tema": "dark",
-  "entradaHash": "b4be2f21722525d7f01e06e6e55e56b89b0fb183",
+  "entradaHash": "3f1280b53be9a73ec7de08e692511584cdf08120",
   "estructura": {
     "docTitle": "Reporte de Prestamos Activos",
     "h1": [
@@ -22,10 +22,11 @@
     "etiquetas": []
   },
   "valores": {
-    "bytes": 11781,
-    "nFilas": 22,
-    "nCeldas": 176,
+    "bytes": 12110,
+    "nFilas": 23,
+    "nCeldas": 184,
     "celdasPorTr": [
+      8,
       8,
       8,
       8,
@@ -49,10 +50,10 @@
       8,
       8
     ],
-    "nMontos": 48,
-    "hashMontos": "453a457d61bab52ccafd88de7be094f2e38d8a3c",
+    "nMontos": 49,
+    "hashMontos": "19e6df9cb4200b0302334170b00a7b26bfcedd4a",
     "hashFname": "b8f8233920e5bcdeee9079ac1b2c17fa72f8fa34",
-    "hashTexto": "f811a8d70fa200e823d2b12a11ce562fd1bcff15",
+    "hashTexto": "97811a06e7721dae5179b4655622fb9ccb96575d",
     "clases": [
       "badge badge-mora",
       "badge badge-pagado",

@@ -3,7 +3,7 @@
   "caso": "factura-transitoria-proxima",
   "generador": "generateFacturaCobro",
   "tema": "light",
-  "entradaHash": "f8f93ef4497ee60cb20fb5824d8eaff6372b98b0",
+  "entradaHash": "5b7638e0c0d15a45ad0ffeb0fde04f309b08dd36",
   "estructura": {
     "docTitle": "Recibo de Cobro",
     "h1": [],

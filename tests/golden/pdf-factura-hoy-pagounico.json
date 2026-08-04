@@ -3,7 +3,7 @@
   "caso": "factura-hoy-pagounico",
   "generador": "generateFacturaCobro",
   "tema": "light",
-  "entradaHash": "2398ec07afd927cbb53ea24ac5f0a92a0fb9eeb2",
+  "entradaHash": "1bc8e5894aa07f8c9be841ff25c158d0e36172df",
   "estructura": {
     "docTitle": "Recibo de Cobro",
     "h1": [],

@@ -3,7 +3,7 @@
   "caso": "crono-pagounico-usd",
   "generador": "generateCronogramaPDF",
   "tema": "dark",
-  "entradaHash": "5ab8e3b2410cd0c2dc2f6f0d0804d94f0936d555",
+  "entradaHash": "76a4b3757e3dcc84cc40b6ff47ab82ee3c362050",
   "estructura": {
     "docTitle": "Cronograma de Pagos",
     "h1": [

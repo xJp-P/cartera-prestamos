@@ -3,7 +3,7 @@
   "caso": "factura-usd-mora",
   "generador": "generateFacturaCobro",
   "tema": "dark",
-  "entradaHash": "f3ea074cc8741bb9b9699211c881903117984598",
+  "entradaHash": "50bd2f25e0701c240664d6198d215a8c88b4f93c",
   "estructura": {
     "docTitle": "Recibo de Cobro",
     "h1": [],

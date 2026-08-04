@@ -44,6 +44,7 @@ if (!process.versions.electron) {
 
 const Database = require('better-sqlite3');
 const { PROD_DB } = require('../lib/paths');
+const { inyectarCreditoDiario } = require('./credito-diario');
 
 const DESTINO = path.join(__dirname, 'cartera-fixture.db');
 
@@ -238,6 +239,19 @@ function main() {
     console.error('  RESTO: datos_pago parece conservar un numero real');
     restos++;
   }
+
+  // ── Credito SINTETICO de Interes Diario ──────────────────────────────────
+  // VA DESPUES de la verificacion de rastros A PROPOSITO: el barrido de nombres
+  // reales busca tambien TOKENS sueltos, asi que un nombre sintetico inyectado
+  // antes podria disparar un falso positivo y tumbar la generacion por un dato
+  // que no viene de ningun cliente. Lo real se anonimiza y se verifica primero;
+  // lo sintetico se anade despues, y el VACUUM de abajo lo compacta igual.
+  //
+  // La definicion vive en `credito-diario.js` para poder inyectarla SOLA sobre el
+  // fixture ya versionado: regenerar desde produccion arrastra actividad real y
+  // estado dependiente del calendario (la auto-mora marca por fecha), asi que no
+  // siempre se quiere —ni se puede— una regeneracion completa.
+  inyectarCreditoDiario(db);
 
   // ── VACUUM: sin esto el fichero SIGUE conteniendo los datos reales ────────
   // SQLite no sobrescribe: un UPDATE deja el valor viejo en paginas libres. Las

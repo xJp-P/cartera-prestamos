@@ -3049,6 +3049,48 @@
       "recibos": "[]",
       "saldoFinal": 0,
       "saldoInicial": 706769
+    },
+    {
+      "abonoCapital": 0,
+      "cuotaN": 1,
+      "cuotaTotal": 15000,
+      "estadoPago": "Pagado",
+      "extraConsolidado": 0,
+      "fechaPago": "2026-07-16",
+      "fechaRecaudo": "2026-07-16",
+      "id": "fixture-diario-01-ct-1",
+      "interesPeriodo": 15000,
+      "montoCOPRecibido": 15000,
+      "montoUSDRecibido": 0,
+      "nombreCliente": "Nilda Paredes",
+      "observaciones": "",
+      "paidAt": "<TS>",
+      "partialPaid": 15000,
+      "prestamoId": "fixture-diario-01",
+      "recibos": "[{\"fecha\":\"2026-07-16\",\"cop\":15000}]",
+      "saldoFinal": 1000000,
+      "saldoInicial": 1000000
+    },
+    {
+      "abonoCapital": 400000,
+      "cuotaN": 2,
+      "cuotaTotal": 415000,
+      "estadoPago": "Pagado",
+      "extraConsolidado": 0,
+      "fechaPago": "2026-07-31",
+      "fechaRecaudo": "2026-07-31",
+      "id": "fixture-diario-01-ct-2",
+      "interesPeriodo": 15000,
+      "montoCOPRecibido": 415000,
+      "montoUSDRecibido": 0,
+      "nombreCliente": "Nilda Paredes",
+      "observaciones": "",
+      "paidAt": "<TS>",
+      "partialPaid": 415000,
+      "prestamoId": "fixture-diario-01",
+      "recibos": "[{\"fecha\":\"2026-07-31\",\"cop\":415000}]",
+      "saldoFinal": 600000,
+      "saldoInicial": 1000000
     }
   ]
 }

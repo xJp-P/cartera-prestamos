@@ -3,7 +3,7 @@
   "caso": "recibo-pago-completo-cop",
   "generador": "generateRecibo",
   "tema": "light",
-  "entradaHash": "48fd02605e0d215331dea6c4b2d541325ed183d3",
+  "entradaHash": "774a8bb949285e6ef16cae4a52b8ac100f80cbb5",
   "estructura": {
     "docTitle": "Recibo de Pago",
     "h1": [

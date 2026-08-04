@@ -3,7 +3,7 @@
   "caso": "abono-capint-parcial-fijarcuota",
   "generador": "generateReciboAbono",
   "tema": "light",
-  "entradaHash": "0f9865d8c222c237040c193bfbcb6e4b064a4777",
+  "entradaHash": "801593559d7885a0b6a47217721ed01a2fe1a9e7",
   "estructura": {
     "docTitle": "Recibo de Abono a Capital",
     "h1": [],
