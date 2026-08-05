@@ -1157,6 +1157,156 @@ async function faseRegresiones() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// FASE E — BLINDAJE DE INTERES DIARIO
+//
+// Cada caso de aqui protege una defensa que NO tiene otro testigo en la suite. Sin
+// esto, un refactor futuro puede quitar cualquiera de los seis guards y las 283
+// comprobaciones anteriores seguirian en verde: el fixture no ejerce ninguno de
+// estos caminos por si solo.
+//
+// El patron es siempre el mismo y es el que importa: no basta con que la respuesta
+// sea 4xx — hay que comprobar que la BD quedo INTACTA. Un rechazo que ya escribio
+// a medias es peor que no rechazar, porque deja al deudor en un estado que nadie
+// diseno (doctrina de atomicidad, convencion #3).
+async function faseBlindaje() {
+  R.seccion('FASE E — blindaje de Interes Diario: seis defensas, cada una con su testigo');
+  const E = require('../backend/core/engine');
+  const { esCuotaRegular } = require('../backend/core/ids');
+  const rutaE = copiaDeProduccion('e2e-blindaje');
+  const S = await arrancar(rutaE);
+  const DB = S.dbPath;
+  try {
+    // ── E1 — el motor rechaza lo que no entiende ──────────────────────────────
+    R.seccion('E1 — buildSchedule: rechazo estricto de modalidad desconocida');
+    const base = { id: 'T', nombre: 'X', tasaMensual: 3, fechaInicio: '2026-07-01',
+                   diaPago: 15, montoCOP: 1000000, frecuencia: 'Mensual' };
+    let lanzo = false, tipoErr = '';
+    try { E.buildSchedule({ ...base, modalidad: 'Modalidad Inventada', plazoMeses: 0 }); }
+    catch (e) { lanzo = true; tipoErr = e && e.constructor && e.constructor.name; }
+    R.check('E1 lanza ante una modalidad desconocida', lanzo,
+      'sin el throw, la cascada cae en amortizacion francesa y fabrica (plazoMeses || 12) cuotas PMT');
+    R.eq('E1 lanza ClientError (=> 4xx, no 500)', tipoErr, 'ClientError');
+    R.eq('E1 la modalidad de credito abierto NO lanza: devuelve cronograma vacio',
+      E.buildSchedule({ ...base, modalidad: E.MODALIDAD_DIARIA, plazoMeses: 0 }).length, 0);
+    // Control negativo: el rechazo no puede haberse logrado rompiendo el motor entero.
+    E.MODALIDADES_CONOCIDAS.forEach(function (m) {
+      let genero = 0;
+      try { genero = E.buildSchedule({ ...base, modalidad: m, plazoMeses: 4 }).length; } catch (_) { genero = -1; }
+      R.check('E1 control: ' + m + ' sigue generando cronograma', genero > 0, 'filas=' + genero);
+    });
+
+    // ── E2 — POST /api/loans con modalidad invalida ───────────────────────────
+    R.seccion('E2 — POST /api/loans rechaza la modalidad antes de escribir');
+    const hashE2 = hashBD(DB);
+    const rE2 = await pedir(S, 'POST', '/api/loans', {
+      nombre: 'Prueba blindaje', cedula: '', telefono: '', notas: '', frecuencia: 'Mensual',
+      moneda: 'COP', montoOrigen: 100000, trmAcordada: 1, montoCOP: 100000,
+      tasaMensual: 2, plazoMeses: 0, modalidad: 'Modalidad Inventada',
+      fechaInicio: '2026-08-01', diaPago: 1, estado: 'Activo',
+    });
+    R.check('E2 responde 4xx', rE2.status >= 400 && rE2.status < 500, 'status=' + rE2.status);
+    R.check('E2 la BD quedo INTACTA (el computo va en FASE 1, antes del INSERT)', hashBD(DB) === hashE2);
+
+    // ── E3 — /cambiar-dia-pago: whitelist, no blacklist ───────────────────────
+    R.seccion('E3 — /cambiar-dia-pago solo admite las modalidades con cuotas mensuales');
+    const diario = conDb(DB, d => d.prepare("SELECT * FROM loans WHERE modalidad=?").get(E.MODALIDAD_DIARIA));
+    R.check('E3 ANTI-VACIO: el fixture trae el credito de interes diario', !!diario,
+      'sin el, este bloque entero seria verde en vacio');
+    if (diario) {
+      const hashE3 = hashBD(DB);
+      const rE3 = await pedir(S, 'POST', '/api/loans/' + diario.id + '/cambiar-dia-pago', { nuevoDia: 20 });
+      R.check('E3 rechaza el credito abierto', rE3.status >= 400 && rE3.status < 500,
+        'status=' + rE3.status + ' — con blacklist entraba y se le recalculaba un cronograma mensual');
+      R.check('E3 la BD quedo INTACTA (ni diaPago ni fechaBaseCronograma)', hashBD(DB) === hashE3);
+      // Control negativo: a un C+I mensual el endpoint le SIGUE funcionando.
+      const cyi = conDb(DB, d => d.prepare(
+        "SELECT * FROM loans WHERE estado='Activo' AND modalidad='Capital + Intereses' AND (frecuencia IS NULL OR frecuencia='Mensual')").get());
+      if (cyi) {
+        const rOk = await pedir(S, 'POST', '/api/loans/' + cyi.id + '/cambiar-dia-pago',
+          { nuevoDia: cyi.diaPago === 20 ? 21 : 20 });
+        R.check('E3 control: un C+I mensual sigue pudiendo cambiar de dia', rOk.status === 200,
+          'status=' + rOk.status + ' ' + String(rOk.text).slice(0, 160));
+      }
+    }
+
+    // ── E4 — el CORTE es inmutable ────────────────────────────────────────────
+    R.seccion('E4 — un corte no cambia de estado ni admite parciales');
+    const corte = conDb(DB, d => d.prepare("SELECT * FROM payments WHERE id LIKE '%-ct-%' ORDER BY cuotaN").get());
+    R.check('E4 ANTI-VACIO: existe al menos una fila de corte', !!corte);
+    if (corte) {
+      const hashE4 = hashBD(DB);
+      const rPut = await pedir(S, 'PUT', '/api/payments/' + corte.id, { estadoPago: 'Pendiente' });
+      R.check('E4 PUT /payments sobre un corte -> 4xx', rPut.status >= 400 && rPut.status < 500,
+        'status=' + rPut.status + ' — dejarlo Pendiente lo expondria a la auto-mora');
+      const rPar = await pedir(S, 'POST', '/api/payments/' + corte.id + '/partial',
+        { monto: 5000, fecha: hoyStr() });
+      R.check('E4 /partial sobre un corte -> 4xx', rPar.status >= 400 && rPar.status < 500,
+        'status=' + rPar.status + ' — sumaria un evento al ledger e inflaria Cobros del Mes');
+      R.check('E4 la BD quedo INTACTA tras los dos intentos', hashBD(DB) === hashE4);
+    }
+
+    // ── E5 — el credito abierto no se cierra solo ─────────────────────────────
+    R.seccion('E5 — auto-finalizacion: un credito abierto no tiene cuotas que cerrar');
+    if (diario) {
+      R.eq('E5 sigue Activo tras los intentos anteriores',
+        conDb(DB, d => d.prepare('SELECT estado FROM loans WHERE id=?').get(diario.id).estado), 'Activo');
+      const suyas = conDb(DB, d => d.prepare('SELECT * FROM payments WHERE prestamoId=?').all(diario.id));
+      R.check('E5 tiene filas, y NINGUNA cuenta como cuota de cronograma',
+        suyas.length > 0 && suyas.filter(esCuotaRegular).length === 0,
+        suyas.length + ' filas, ' + suyas.filter(esCuotaRegular).length + ' regulares — con `!esAbono` los ' +
+        'cortes contaban como cuotas, y al estar todos Pagados el prestamo se auto-finalizaba con el capital vivo');
+    }
+
+    // ── E6 — /recalculate: aisla al problematico ──────────────────────────────
+    R.seccion('E6 — /recalculate omite el prestamo que falla y sigue con los demas');
+    const victima = conDb(DB, d => d.prepare(
+      "SELECT * FROM loans WHERE modalidad='Capital + Intereses' AND estado='Activo'").get());
+    R.check('E6 ANTI-VACIO: hay un C+I activo con el que fabricar el caso', !!victima);
+    if (victima) {
+      // Se corrompe la modalidad DIRECTO en la BD, saltandose la validacion del POST: es
+      // como llegaria un dato heredado o una migracion futura a medio aplicar.
+      conDbW(DB, d => d.prepare("UPDATE loans SET modalidad='Modalidad Corrupta' WHERE id=?").run(victima.id));
+      const pendAntes = conDb(DB, d => d.prepare(
+        "SELECT COUNT(*) c FROM payments WHERE prestamoId=? AND estadoPago='Pendiente'").get(victima.id).c);
+      const rRec = await pedir(S, 'POST', '/api/recalculate', {});
+      R.eq('E6 responde 200 pese al prestamo corrupto', rRec.status, 200);
+      R.check('E6 lo REPORTA en `omitidos` en vez de callarlo',
+        rRec.json && Array.isArray(rRec.json.omitidos) && rRec.json.omitidos.some(o => o.id === victima.id),
+        JSON.stringify((rRec.json || {}).omitidos || []));
+      R.check('E6 recalculo los demas prestamos', rRec.json && rRec.json.updated > 0,
+        'updated=' + ((rRec.json || {}).updated));
+      R.eq('E6 el corrupto quedo INTACTO (su transaccion revirtio sola)',
+        conDb(DB, d => d.prepare("SELECT COUNT(*) c FROM payments WHERE prestamoId=? AND estadoPago='Pendiente'").get(victima.id).c),
+        pendAntes);
+      conDbW(DB, d => d.prepare("UPDATE loans SET modalidad='Capital + Intereses' WHERE id=?").run(victima.id));
+
+      // ── E7 — PUT /loans no puede huerfanar un pago parcial ──────────────────
+      R.seccion('E7 — Bug #44: PUT /loans aborta si el cronograma nuevo dejaria un parcial sin sitio');
+      const ultima = conDb(DB, d => d.prepare(
+        "SELECT * FROM payments WHERE prestamoId=? AND estadoPago='Pendiente' AND id NOT LIKE '%-ab-%' ORDER BY cuotaN DESC").get(victima.id));
+      R.check('E7 ANTI-VACIO: el prestamo tiene una Pendiente sobre la que poner el parcial', !!ultima);
+      if (ultima) {
+        conDbW(DB, d => d.prepare('UPDATE payments SET partialPaid=?, recibos=? WHERE id=?')
+          .run(70000, JSON.stringify([{ fecha: hoyStr(), cop: 70000 }]), ultima.id));
+        const loanRow = conDb(DB, d => d.prepare('SELECT * FROM loans WHERE id=?').get(victima.id));
+        const hashE7 = hashBD(DB);
+        // Acortar el plazo a 1 deja fuera esa cuotaN: el parcial no tendria donde restaurarse.
+        const rE7 = await pedir(S, 'PUT', '/api/loans/' + victima.id, { ...loanRow, plazoMeses: 1 });
+        R.check('E7 responde 4xx en vez de tragarse el parcial', rE7.status >= 400 && rE7.status < 500,
+          'status=' + rE7.status + ' ' + String(rE7.text).slice(0, 160));
+        R.check('E7 la BD quedo INTACTA: el parcial, su ledger y el plazo siguen igual', hashBD(DB) === hashE7);
+        // Control negativo: el MISMO PUT sin acortar el plazo si pasa. Sin esto, "rechaza"
+        // podria conseguirse rompiendo PUT /loans entero.
+        const rE7ok = await pedir(S, 'PUT', '/api/loans/' + victima.id, { ...loanRow });
+        R.eq('E7 control: el mismo PUT sin acortar el plazo SI es aceptado', rE7ok.status, 200);
+        R.eq('E7 control: y el parcial sobrevivio a esa regeneracion',
+          conDb(DB, d => d.prepare('SELECT partialPaid FROM payments WHERE id=?').get(ultima.id).partialPaid), 70000);
+      }
+    }
+  } finally { await cerrar(S); }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // createApp nunca cierra su conexion a SQLite, asi que las copias de ESTA corrida siguen
 // bloqueadas al terminar y no se pueden borrar desde aqui. Se podan al ARRANCAR las que ya
 // tienen mas de 2 horas: sus procesos murieron hace rato y el handle esta libre. El margen
@@ -1186,6 +1336,7 @@ async function main() {
   await faseEscritura();
   await faseUndo();
   await faseRegresiones();
+  await faseBlindaje();
 
   // ── ANTI-VACIO ─────────────────────────────────────────────────────────────
   R.seccion('Anti-vacio — cobertura y volumen');
