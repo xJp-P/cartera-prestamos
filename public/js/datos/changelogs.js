@@ -540,5 +540,18 @@ export const CHANGELOGS = {
     'Reorganizacion interna del codigo. La app funciona exactamente igual: no cambia ninguna cifra, ningun calculo ni ninguna pantalla.',
     'El proyecto pasa de dos archivos gigantes a modulos separados, lo que hace mas rapido y seguro corregir errores y agregar cosas nuevas.',
     'Se anadio una bateria de pruebas automaticas que revisa los saldos, los cobros, los 5 documentos PDF y los 25 servicios internos antes de cada entrega.'
+  ],
+  '2.5.0': [
+    'NUEVA MODALIDAD: Interes Diario (credito abierto). El interes se genera cada dia sobre el capital vivo, sin cuotas ni plazo. El cliente paga intereses o abona a capital cuando quiera.',
+    'Puedes crear el credito con fecha de inicio en el pasado: al guardarlo ya trae los dias de interes transcurridos, y el formulario te avisa cuantos son antes de confirmar.',
+    'Cada movimiento se registra como un CORTE, que cobra los intereses y baja el capital en la misma operacion. El abono reduce el interes diario desde ese mismo dia.',
+    'La tarjeta del credito muestra el interes devengado por cobrar con la formula a la vista (dias x interes por dia) y el valor para liquidar hoy.',
+    'NUEVO documento ESTADO DE CUENTA: detalla como se genero el interes tramo por tramo, con los cortes intercalados, para que el deudor pueda verificar cada peso.',
+    'NUEVO documento RECIBO DE CORTE: certifica el dinero recibido y muestra cuanto generara el credito desde manana frente a cuanto generaba antes.',
+    'El Reporte de Prestamos Activos y el Recibo de Cobro entienden la modalidad nueva: muestran el interes devengado en vez de una cuota que no existe.',
+    'La barra de progreso de un credito abierto mide el capital devuelto. Antes cualquier credito de este tipo aparecia al 100% aunque quedara capital por cobrar.',
+    'Se corrigio que la meta mensual de recaudo contara como pendiente un dinero que ya se habia cobrado.',
+    'Se corrigieron dos huecos que podian hacer perder el registro de un pago parcial al reconstruir un cronograma, y uno que dejaba un cierre forzoso sin contar los intereses.',
+    'Sincronizar datos ahora avisa si algun prestamo no se pudo recalcular, en vez de decir que todo salio bien.'
   ]
 };
