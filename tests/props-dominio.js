@@ -88,7 +88,10 @@ function main() {
                       'pendCuota', 'flujoCajaDe', 'computeLiquidacion',
                       // Predicados de clasificacion (core/ids.js). Se exigen aqui para que
                       // la seccion 8 no pueda "pasar" por no haberlos encontrado.
-                      'esAbono', 'esCorte', 'esCuotaRegular'];
+                      'esAbono', 'esCorte', 'esCuotaRegular',
+                      // Espejo del motor de devengo (Etapa 4). Se exigen aqui para que la
+                      // comprobacion de equivalencia no pueda "pasar" por no encontrarlos.
+                      'devengoDiario', 'estadoDiario', 'esDiario', 'progresoCapital'];
   const faltantes = [];
   NECESARIOS.forEach(function (n) {
     if (typeof simbolos[n] === 'function') H[n] = simbolos[n];
@@ -871,10 +874,15 @@ function main() {
 
       // El total es exactamente la regla de negocio documentada, con los parciales
       // restados UNA sola vez.
-      const esperado = Math.max(0, a.capitalPendiente + a.intMora - a.partialPend);
+      // `interesDevengado` es el termino que aporta el credito abierto: su interes no
+      // vive en ninguna fila En Mora, asi que `intMora` sale 0 y sin este sumando la
+      // liquidacion regalaria la renta entera del producto. En las otras 4 modalidades
+      // vale 0, de modo que la propiedad de siempre queda intacta.
+      const esperado = Math.max(0, a.capitalPendiente + a.intMora + a.interesDevengado - a.partialPend);
       if (a.total !== esperado) {
         formulaMal.push({ id: l.id, nombre: l.nombre, total: a.total, esperado,
-                          cap: a.capitalPendiente, intMora: a.intMora, partialPend: a.partialPend });
+                          cap: a.capitalPendiente, intMora: a.intMora,
+                          devengado: a.interesDevengado, partialPend: a.partialPend });
       }
       // Capital pendiente = origCOP - capital de Pagadas (la mora NO resta capital).
       const capEsp = Math.max(0, origCOPDe(l) - lp.filter(function (p) { return p.estadoPago === 'Pagado'; })
@@ -895,7 +903,7 @@ function main() {
     console.log(`   activos evaluados: ${evaluados} | con cuotas en mora: ${conMora} | con interes de proximo mes aplicable: ${conProxMes}`);
 
     R.check(`el total nunca es negativo (${evaluados} activos)`, neg.length === 0, muestra(neg));
-    R.check('total === capitalPendiente + intMora - partialPend (parciales restados UNA vez)',
+    R.check('total === capitalPendiente + intMora + interesDevengado - partialPend (parciales restados UNA vez)',
       formulaMal.length === 0, muestra(formulaMal));
     R.check('capitalPendiente = origCOP - capital de Pagadas (la mora no resta capital)',
       capMal.length === 0, muestra(capMal));
@@ -1135,6 +1143,80 @@ function main() {
     });
     R.check('esCuotaRegular === !esAbono && !esCorte, para todo id',
       incoherentes.length === 0, muestra(incoherentes));
+
+    // ── ESPEJO DEL MOTOR DE DEVENGO: backend vs frontend ─────────────────────
+    // `devengoDiario` esta escrito DOS VECES (CommonJS en backend/core/engine.js y
+    // modulo ES en public/js/core/dominio.js) porque el proyecto no tiene bundler.
+    // Si las dos mitades divergen, el servidor y la pantalla dirian cifras distintas
+    // sobre lo que un cliente debe HOY — la clase de falla del Bug #45, pero sobre el
+    // numero central del producto. No se comparan textos: se ejecutan las dos sobre el
+    // mismo espacio de casos y se exige igualdad EXACTA de todo el desglose.
+    const motorBack = require(path.join(REPO, 'backend', 'core', 'engine.js'));
+    const casosDev = [];
+    const inicios = ['2026-01-15', '2026-02-28', '2026-06-30', '2026-12-01'];
+    const tasasD  = [0, 2.5, 3, 12];
+    const montosD = [1, 350000, 1000000, 9999999];
+    const hastasD = ['2026-03-01', '2026-07-15', '2027-01-31', '2028-02-29'];
+    inicios.forEach(fi => tasasD.forEach(ta => montosD.forEach(mo => hastasD.forEach(ha => {
+      [0, 1, 3].forEach(nc => {
+        const loanD = { id: 'M', nombre: 'X', moneda: 'COP', montoOrigen: mo, trmAcordada: 1,
+                        tasaMensual: ta, modalidad: 'Interes Diario', fechaInicio: fi, plazoMeses: 0 };
+        const cortesD = [];
+        for (let k = 1; k <= nc; k++) {
+          cortesD.push({ id: 'M-ct-' + k, prestamoId: 'M', cuotaN: k,
+            fechaPago: motorBack.sumarDias(fi, k * 17),
+            interesPeriodo: Math.round(mo * 0.001 * k), abonoCapital: Math.round(mo / (nc + 2)),
+            cuotaTotal: 0, estadoPago: 'Pagado' });
+        }
+        casosDev.push([loanD, cortesD, ha]);
+      });
+    }))));
+    const divergenDev = casosDev.filter(function (c) {
+      return JSON.stringify(motorBack.devengoDiario(c[0], c[1], c[2]))
+          !== JSON.stringify(H.devengoDiario(c[0], c[1], c[2]));
+    });
+    R.check(`backend y frontend calculan el MISMO devengo en los ${casosDev.length} casos probados`,
+      divergenDev.length === 0,
+      divergenDev.length ? muestra(divergenDev.slice(0, 2).map(function (c) {
+        return { caso: { inicio: c[0].fechaInicio, tasa: c[0].tasaMensual, monto: c[0].montoOrigen, cortes: c[1].length, hasta: c[2] },
+                 back: motorBack.devengoDiario(c[0], c[1], c[2]),
+                 front: H.devengoDiario(c[0], c[1], c[2]) };
+      }), 2) : undefined);
+    R.check('ANTI-VACIO: el espejo se probo sobre un espacio significativo', casosDev.length >= 100);
+
+    // ── El progreso de un credito abierto NO puede darlo por saldado ─────────
+    // Es el defecto medido en la app real: la barra marcaba 100% con capital vivo,
+    // porque todo corte nace 'Pagado' y las formulas cuota-a-cuota daban cobrado ==
+    // esperado. `progresoCapital` mide el CAPITAL devuelto, que es lo unico que
+    // avanza hacia el cierre.
+    diarios.forEach(function (l) {
+      const suyas = paysDe(l);
+      const pct = H.progresoCapital(l, suyas);
+      const abonado = suyas.reduce(function (s, p) { return s + Math.round(p.abonoCapital || 0); }, 0);
+      const orig = origCOPDe(l);
+      R.eq(`progresoCapital del credito diario == capital devuelto / prestado (${abonado}/${orig})`,
+        pct, Math.min(100, Math.round(abonado / orig * 100)));
+      R.check('y NO marca 100% mientras quede capital vivo',
+        !(abonado < orig && pct === 100), `abonado=${abonado} orig=${orig} pct=${pct}`);
+      R.check('cobertura: el credito del fixture tiene capital vivo (si no, el aserto anterior es vacio)',
+        abonado < orig, `abonado=${abonado} orig=${orig}`);
+    });
+
+    // ── computeLiquidacion no puede regalar el interes devengado ─────────────
+    // Sin la rama de Interes Diario, `intMora` sale 0 (no hay cuotas En Mora) y la
+    // liquidacion se quedaria en el capital pelado: se perderia la renta entera.
+    diarios.forEach(function (l) {
+      const suyas = paysDe(l);
+      const hasta = '2026-08-30';   // fecha FIJA: el valor depende del dia
+      const dev = H.estadoDiario(l, suyas, hasta);
+      const liq = H.computeLiquidacion(l, suyas, { hasta: hasta });
+      R.check('la liquidacion marca el credito como diario', liq.esDiario === true);
+      R.eq('capital pendiente == capital vivo del motor', liq.capitalPendiente, dev.capitalVivo);
+      R.eq('el interes devengado entra en la liquidacion', liq.interesDevengado, dev.interesPendiente);
+      R.eq('TOTAL == capital vivo + interes devengado', liq.total, dev.capitalVivo + dev.interesPendiente);
+      R.check('cobertura: hay interes devengado que perder (si no, el aserto es vacio)',
+        dev.interesPendiente > 0, `devengado=${dev.interesPendiente}`);
+    });
   }
 
   db.close();
