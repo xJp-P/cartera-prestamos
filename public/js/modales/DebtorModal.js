@@ -10,7 +10,7 @@ import { Modal } from '../componentes/base.js';
 import { Ico } from '../componentes/iconos.js';
 import { API, showError } from '../core/api.js';
 import { _pmt } from '../core/calculo.js';
-import { computeLiquidacion, imputarCobros, pendCuota } from '../core/dominio.js';
+import { computeLiquidacion, imputarCobros, pendCuota, esDiario, progresoCapital } from '../core/dominio.js';
 import { copToUsd, fmt, fmtD, fmtN, fmtUSD } from '../core/format.js';
 import { h, useState } from '../core/react.js';
 import { freqLabel } from '../core/ui.js';
@@ -231,7 +231,9 @@ export function DebtorModal(props){
         var enMora=regulares.filter(function(p){return p.estadoPago==='En Mora';});
         var pendientes=regulares.filter(function(p){return p.estadoPago==='Pendiente';});
         var totalReg=regulares.length;
-        var pct=totalReg>0?Math.round(pagadas/totalReg*100):0;
+        // Un credito abierto no tiene cuotas: `pagadas/totalReg` seria 2/2 = 100% con el
+        // capital intacto. Se mide el capital devuelto (ver progresoCapital en dominio.js).
+        var pct=esDiario(l)?progresoCapital(l,lp):(totalReg>0?Math.round(pagadas/totalReg*100):0);
         // Saldo real: monto original - todo capital pagado (cuotas + abonos)
         var capAbonos=abonosList.filter(function(p){return p.estadoPago==='Pagado';}).reduce(function(s,p){return s+p.abonoCapital;},0);
         var origCOP=l.moneda==='USD'?Math.round(l.montoOrigen*l.trmAcordada):Math.round(l.montoOrigen);

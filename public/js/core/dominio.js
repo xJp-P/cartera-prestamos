@@ -44,7 +44,7 @@
 // no tiene ledger (historico previo, abonos a capital, liquidaciones de mora) cae al FALLBACK: un
 // unico evento en fechaRecaudo por (montoCOPRecibido||cuotaTotal). metrics.recibido y sparkCobros
 // usan ESTA funcion -> el KPI y la suma del grafico cuadran por construccion, sin doble conteo.
-import { esAbono } from './ids.js';
+import { esAbono, esCorte } from './ids.js';
 
 export function cobrosDe(p){
   if(!p) return [];
@@ -211,6 +211,138 @@ export function flujoCajaDe(loan, loanPays){
   return {eventos:out,totales:{ingreso:tg,interes:ti,capital:tc,ajuste:ta},inferidos:inf,origCOP:origCOP};
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// INTERES DIARIO — ESPEJO del motor de backend/core/engine.js
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// Los CUERPOS de `diasEntre`, `interesDeTramo` y `devengoDiario` deben ser
+// IDENTICOS a los del backend. Es la misma regla de negocio sobre los mismos
+// datos; si divergen, la pantalla y el servidor dirian cosas distintas sobre lo
+// que un cliente debe HOY — exactamente la clase de falla del Bug #45.
+//
+// La duplicacion es inevitable y deliberada: el backend es CommonJS, esto es un
+// modulo ES, y el proyecto no tiene bundler a proposito. Lo que SI se puede hacer
+// —y se hace— es verificar la equivalencia: tests/props-dominio.js ejecuta las dos
+// implementaciones sobre el mismo espacio de casos y exige que coincidan.
+//
+// La doctrina completa (convencion de dias, tramos semiabiertos, base = saldo del
+// MOTOR, sin capitalizacion, redondeo por tramo) esta documentada en el backend y
+// NO se repite aqui para que exista una sola fuente que mantener.
+
+export var MODALIDAD_DIARIA = 'Interes Diario';
+
+export function esDiario(loan) {
+  return !!loan && loan.modalidad === MODALIDAD_DIARIA;
+}
+
+// Dias reales entre dos fechas ISO, anclado a mediodia (TZ-safe).
+export function diasEntre(desdeISO, hastaISO) {
+  var a = new Date(String(desdeISO) + 'T12:00:00');
+  var b = new Date(String(hastaISO) + 'T12:00:00');
+  if (isNaN(a) || isNaN(b)) return 0;
+  return Math.round((b - a) / 86400000);
+}
+
+// Interes de UN tramo, en pesos enteros. Se redondea por TRAMO, no por dia.
+export function interesDeTramo(saldo, tasaMensual, dias) {
+  if (!(dias > 0) || !(saldo > 0)) return 0;
+  return Math.round(saldo * ((+tasaMensual || 0) / 100) * dias / 30);
+}
+
+// Espejo de `devengoDiario`. Ver engine.js para el porque de cada decision.
+export function devengoDiario(loan, cortes, hastaISO) {
+  var tasaMensual = +loan.tasaMensual || 0;
+  var origCOP = loan.moneda === 'USD'
+    ? Math.round(loan.montoOrigen * loan.trmAcordada)
+    : Math.round(loan.montoOrigen);
+
+  var ord = (cortes || []).slice().sort(function (a, b) {
+    var c = String(a.fechaPago).localeCompare(String(b.fechaPago));
+    return c !== 0 ? c : (a.cuotaN - b.cuotaN);
+  });
+
+  var tramos = [];
+  var saldo = origCOP;
+  var cursor = loan.fechaInicio;
+  var interesDevengado = 0;
+  var interesCobrado = 0;
+  var capitalAbonado = 0;
+
+  var empujar = function (desde, hasta, base) {
+    var dias = diasEntre(desde, hasta);
+    if (dias < 0) dias = 0;
+    var interes = interesDeTramo(base, tasaMensual, dias);
+    tramos.push({ desde: desde, hasta: hasta, dias: dias, base: base, interes: interes });
+    interesDevengado += interes;
+  };
+
+  ord.forEach(function (c) {
+    empujar(cursor, c.fechaPago, saldo);
+    var abono = Math.round(+c.abonoCapital || 0);
+    capitalAbonado += abono;
+    saldo = Math.max(0, saldo - abono);
+    interesCobrado += Math.round(+c.interesPeriodo || 0);
+    cursor = c.fechaPago;
+  });
+
+  empujar(cursor, hastaISO, saldo);
+
+  var ultimo = ord.length ? ord[ord.length - 1] : null;
+  return {
+    origCOP: origCOP,
+    capitalVivo: saldo,
+    capitalAbonado: capitalAbonado,
+    tramos: tramos,
+    interesDevengado: interesDevengado,
+    interesCobrado: interesCobrado,
+    interesPendiente: Math.max(0, interesDevengado - interesCobrado),
+    fechaUltimoCorte: ultimo ? ultimo.fechaPago : null,
+    diasDesdeUltimoCorte: diasEntre(ultimo ? ultimo.fechaPago : loan.fechaInicio, hastaISO),
+    diasTotales: diasEntre(loan.fechaInicio, hastaISO),
+    cache: {
+      fechaUltimoCorte: ultimo ? ultimo.fechaPago : loan.fechaInicio,
+      interesAcumuladoPend: Math.max(0, interesDevengado - interesCobrado
+        - tramos[tramos.length - 1].interes),
+    },
+  };
+}
+
+// Cortes de un credito abierto, en el orden en que ocurrieron.
+export function cortesDe(loan, loanPays) {
+  return (loanPays || [])
+    .filter(function (p) { return String(p.prestamoId) === String(loan.id) && esCorte(p); })
+    .sort(function (a, b) {
+      var c = String(a.fechaPago).localeCompare(String(b.fechaPago));
+      return c !== 0 ? c : (a.cuotaN - b.cuotaN);
+    });
+}
+
+// Estado de un credito abierto a una fecha. Atajo para las superficies, que casi
+// siempre quieren "el devengo de ESTE prestamo, hoy".
+export function estadoDiario(loan, loanPays, hastaISO) {
+  return devengoDiario(loan, cortesDe(loan, loanPays), hastaISO);
+}
+
+// ── PROGRESO de un credito abierto ────────────────────────────────────────────
+// Las barras de progreso de la app miden cuota-a-cuota: `cuotas pagadas / total`
+// o `monto cobrado / monto esperado`. Ninguna de las dos significa nada aqui, y
+// la segunda ademas MIENTE: todo corte nace 'Pagado', asi que cobrado == esperado
+// y la barra marca 100% mientras el cliente sigue debiendo el capital. Verificado
+// en la app real: un credito con $600.000 vivos aparecia al 100%.
+//
+// En un credito abierto la pregunta con sentido es cuanto CAPITAL se ha devuelto,
+// que es lo unico que de verdad avanza hacia el cierre. El interes se cobra y se
+// vuelve a generar; no es progreso.
+export function progresoCapital(loan, loanPays) {
+  var origCOP = loan.moneda === 'USD'
+    ? Math.round(loan.montoOrigen * loan.trmAcordada)
+    : Math.round(loan.montoOrigen);
+  if (!(origCOP > 0)) return 0;
+  var abonado = cortesDe(loan, loanPays)
+    .reduce(function (s, c) { return s + Math.round(+c.abonoCapital || 0); }, 0);
+  return Math.min(100, Math.round(abonado / origCOP * 100));
+}
+
 // ── Cálculo CENTRALIZADO de la liquidación (v1.19.0) ──────────────────────────
 // UNA sola fuente de verdad para el "Valor de liquidación": LiquidarModal, AbonoModal, la
 // tarjeta del perfil del deudor (DebtorModal) y los PDFs (cronograma + recibo de abono)
@@ -243,7 +375,33 @@ export function computeLiquidacion(loan, loanPays, opts){
   var intProxMes = aplicaInteres ? Math.round(capitalPendiente * (+loan.tasaMensual || 0) / 100) : 0;
   var incluye = !!opts.incluyeProxMes && aplicaInteres;
   var intExtra = incluye ? intProxMes : 0;
-  var total = Math.max(0, capitalPendiente + intMora - partialPend + intExtra);
+
+  // ── INTERES DIARIO ──────────────────────────────────────────────────────────
+  // Un credito abierto no tiene cuotas En Mora, asi que `intMora` sale 0 y la
+  // liquidacion se quedaria en el capital pelado: se regalaria TODO el interes
+  // devengado y no cobrado, que en este producto es la renta entera. El interes no
+  // esta en ninguna fila — vive derivado del tiempo transcurrido — asi que hay que
+  // pedirselo al motor.
+  //
+  // `capitalPendiente` NO necesita rama: los cortes son 'Pagado' y llevan su
+  // `abonoCapital`, asi que la formula canonica ya devuelve el capital vivo exacto.
+  var diario = esDiario(loan);
+  var devengo = 0, diasDevengados = 0, interesDia = 0;
+  if (diario) {
+    // `hasta` es un PARAMETRO y no `new Date()` por dentro: el valor de liquidacion
+    // depende del dia, y dejar que la funcion lo decida sola la volveria imposible
+    // de probar y de reproducir en un PDF fechado.
+    var hasta = opts.hasta || (function () {
+      var d = new Date();
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    })();
+    var dev = estadoDiario(loan, pays, hasta);
+    devengo = dev.interesPendiente;
+    diasDevengados = dev.diasDesdeUltimoCorte;
+    interesDia = interesDeTramo(dev.capitalVivo, +loan.tasaMensual || 0, 30) / 30;
+  }
+
+  var total = Math.max(0, capitalPendiente + intMora + devengo - partialPend + intExtra);
   return {
     esUSD: esUSD, trm: loan.trmAcordada, tasaMensual: +loan.tasaMensual || 0,
     capitalPendiente: capitalPendiente,
@@ -251,6 +409,10 @@ export function computeLiquidacion(loan, loanPays, opts){
     partialPend: partialPend,
     aplicaInteres: aplicaInteres, intProxMes: intProxMes,
     incluyeProxMes: incluye, intExtra: intExtra,
+    // Campos propios del credito abierto. En las otras 4 modalidades valen 0, asi
+    // que las superficies pueden leerlos sin ramificar.
+    esDiario: diario, interesDevengado: devengo,
+    diasDevengados: diasDevengados, interesDia: Math.round(interesDia),
     total: total
   };
 }

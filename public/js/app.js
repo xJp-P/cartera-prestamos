@@ -60,7 +60,7 @@ import { DebtHistoryModal } from './modales/DebtHistoryModal.js';
 import { DeleteDebtModal } from './modales/DeleteDebtModal.js';
 import { ConfirmUndoModal } from './modales/ConfirmUndoModal.js';
 import { ConfirmModal } from './modales/ConfirmModal.js';
-import { esAbono } from './core/ids.js';
+import { esAbono, esCuotaRegular } from './core/ids.js';
 
 'use strict';
 
@@ -490,15 +490,19 @@ function App(){
   var metrics=useMemo(function(){
     var td=nowStr(),thisM=td.slice(0,7),nxtW=addDays(td,7);
     var active=loans.filter(function(l){return l.estado==='Activo';});
-    var noAbono=function(p){return !esAbono(p);};
-    var mp=pays.filter(function(p){return p.fechaPago.startsWith(thisM)&&noAbono(p);});
-    var mora=pays.filter(function(p){return p.estadoPago==='En Mora'&&noAbono(p);});
+    // Cuotas del CRONOGRAMA. Excluye abonos y CORTES de interes diario: un corte es un
+    // evento ya consumado, no una obligacion del mes — contarlo inflaria el ESPERADO
+    // del Recaudo con dinero que ya entro. Antes se llamaba `noAbono`, nombre que con
+    // el tercer tipo de fila paso a mentir.
+    var esCuota=function(p){return esCuotaRegular(p);};
+    var mp=pays.filter(function(p){return p.fechaPago.startsWith(thisM)&&esCuota(p);});
+    var mora=pays.filter(function(p){return p.estadoPago==='En Mora'&&esCuota(p);});
     // v1.9.x — Recaudo del mes con logica de flujo de caja estricta. Mora arrastrada
     // ya no contamina el "esperado": solo cuenta lo que vence este mes. La mora
     // recuperada (cuotas de otros meses pagadas durante este mes) si suma al "recibido"
     // y aparece en la lista para visibilidad operativa.
     var moraRecuperadaMes=pays.filter(function(p){
-      return noAbono(p)
+      return esCuota(p)
         && !p.fechaPago.startsWith(thisM)
         && p.estadoPago==='Pagado'
         && p.fechaRecaudo

@@ -6,7 +6,7 @@
 // Sin Context API y sin store: eso seria rediseno, no refactor.
 
 import { Ico } from '../componentes/iconos.js';
-import { imputarCobros } from '../core/dominio.js';
+import { imputarCobros, esDiario, progresoCapital } from '../core/dominio.js';
 import { copToUsd, fmt, fmtD, fmtN, fmtUSD } from '../core/format.js';
 import { h, useMemo, useState } from '../core/react.js';
 import { esAbono } from '../core/ids.js';
@@ -88,7 +88,10 @@ export function PortfolioView(props){
         if(p.estadoPago==='Pagado') return s+p.cuotaTotal;
         return s+(p.partialPaid||0);
       },0);
-      var pctMonto=totEspRec>0?Math.round(totCobRec/totEspRec*100):0;
+      // Misma trampa que en Cartera: en un credito abierto cobrado == esperado por
+      // construccion (todo corte nace 'Pagado') y la barra marcaria 100% con el capital
+      // vivo. Se mide el capital devuelto.
+      var pctMonto=esDiario(loan)?progresoCapital(loan,lp):(totEspRec>0?Math.round(totCobRec/totEspRec*100):0);
 
       // ── MORA: tiene cuotas en mora? ──
       var enMora=lp.some(function(p){return p.estadoPago==='En Mora';});

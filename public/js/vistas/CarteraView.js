@@ -6,7 +6,7 @@
 // Sin Context API y sin store: eso seria rediseno, no refactor.
 
 import { Ico } from '../componentes/iconos.js';
-import { imputarCobros, saldoConCaja } from '../core/dominio.js';
+import { imputarCobros, saldoConCaja, esDiario, progresoCapital } from '../core/dominio.js';
 import { copToUsd, fmt, fmtD, fmtN, fmtUSD } from '../core/format.js';
 import { h, useState } from '../core/react.js';
 import { freqLabel } from '../core/ui.js';
@@ -58,7 +58,12 @@ export function CarteraView(props){
           if(p.estadoPago==='Pagado') return s+p.cuotaTotal;
           return s+(p.partialPaid||0);
         },0);
-        var pct=totEsp>0?Math.round(totRec/totEsp*100):0;
+        // En un credito abierto `totRec/totEsp` da SIEMPRE 100%: todo corte nace 'Pagado',
+        // asi que cobrado == esperado mientras el capital sigue vivo. Medido en la app real:
+        // un credito con $600.000 pendientes marcaba la barra llena. Se mide el CAPITAL
+        // devuelto, que es lo unico que avanza hacia el cierre (el interes se cobra y se
+        // vuelve a generar: no es progreso).
+        var pct=esDiario(loan)?progresoCapital(loan,lp):(totEsp>0?Math.round(totRec/totEsp*100):0);
         return h('div',{key:loan.id,className:'loan-card',style:{background:'var(--bg2)',borderRadius:14,border:'1px solid '+(mora>0?'var(--red-bd)':'var(--border)'),boxShadow:'var(--shadow)',overflow:'hidden',transition:'border-color .15s'}},
           h('div',{style:{padding:'13px 14px 11px'}},
             h('div',{style:{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:8}},
