@@ -32,6 +32,7 @@ const SUITES = [
   { nombre: 'syntax',        archivo: 'syntax.js',        desc: 'sintaxis de backend, desktop y frontend' },
   { nombre: 'hooks-order',   archivo: 'hooks-order.js',   desc: 'ningun hook bajo un return condicional (Bug #40)' },
   { nombre: 'imports',       archivo: 'imports.js',       desc: 'grafo de modulos: sin huerfanos, sin ciclos, sin imports muertos' },
+  { nombre: 'motor-diario',  archivo: 'motor-diario.js',  desc: 'invariantes del devengo de interes diario (motor puro)' },
   { nombre: 'props-dominio', archivo: 'props-dominio.js', desc: 'invariantes de imputacion, saldos y flujo de caja' },
   { nombre: 'pdf-render',    archivo: 'pdf-render.js',    desc: 'estructura de los 5 generadores de PDF' },
   { nombre: 'e2e-api',       archivo: 'e2e-api.js',       desc: 'los 25 endpoints contra el server.js real' },
