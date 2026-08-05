@@ -26,7 +26,7 @@ const express = require('express');
 
 // Predicados de clasificacion de filas de `payments` (core/ids.js): unica fuente
 // de verdad de que es un abono. Antes cada sitio repetia el literal indexOf('-ab-').
-const { esAbono } = require('../core/ids');
+const { esAbono, esCorte, esCuotaRegular } = require('../core/ids');
 
 module.exports = function crearRutasPayments(ctx) {
   const { db, mutacionAtomica, ClientError, hoyStr, buildSchedule, runPayment } = ctx;
@@ -38,7 +38,7 @@ module.exports = function crearRutasPayments(ctx) {
     const activeIndefinidos = db.prepare("SELECT * FROM loans WHERE estado = 'Activo' AND modalidad = 'Intereses'").all();
     for (const loan of activeIndefinidos) {
       const allPays = db.prepare('SELECT * FROM payments WHERE prestamoId = ? ORDER BY cuotaN DESC').all(loan.id);
-      const regulares = allPays.filter(p => !esAbono(p));
+      const regulares = allPays.filter(p => esCuotaRegular(p));
       // Si quedan menos de 3 cuotas pendientes futuras, generar más
       const pendFuturas = regulares.filter(p => p.estadoPago === 'Pendiente');
       if (pendFuturas.length < 3) {
@@ -74,6 +74,14 @@ module.exports = function crearRutasPayments(ctx) {
     // auto-finalizacion / reactivacion, asi que el agregado entero es la unidad de undo.
     if (!payBefore) return res.status(404).json({ error: 'Cuota no encontrada' });
     return mutacionAtomica(req, res, { accion: 'pago', endpoint: 'PUT /api/payments/:id', scopeTipo: 'loan', scopeId: payBefore.prestamoId }, () => {
+    // Un CORTE es INMUTABLE: nace 'Pagado' y no vuelve a cambiar de estado. Esta ruta le
+    // reescribiria estadoPago, partialPaid, paidAt y el ledger `recibos` — y con
+    // 'Pendiente'/'En Mora' lo dejaria ademas a merced de la auto-mora, que lo marcaria
+    // vencido y contaminaria el KPI de mora, computeLiquidacion y el Reporte de Activos.
+    // Deshacer un corte es competencia del undo (que restaura el agregado), no de un PUT.
+    if (esCorte(payBefore)) {
+      throw new ClientError('Un corte de interes diario no cambia de estado: registra un movimiento ya ocurrido. Para revertirlo, usa Deshacer.');
+    }
     // Al marcar Pagado: partialPaid = cuotaTotal (recibido completo); al revertir: partialPaid = 0 (historial se pierde)
     let newPartial;
     if (estadoPago === 'Pagado' && payBefore) newPartial = payBefore.cuotaTotal;
@@ -127,7 +135,7 @@ module.exports = function crearRutasPayments(ctx) {
         // NO usar la heuristica interes===0 && capital>0: la cuota unica de un Prestamo (o Pago Unico
         // sin ganancia) tambien la cumple -> quedaba fuera de 'regulares', 'todasPagadas' nunca era
         // true y el prestamo no auto-finalizaba al pagar (gemelo backend del Bug #26).
-        const regulares = allPays.filter(p => !esAbono(p));
+        const regulares = allPays.filter(p => esCuotaRegular(p));
         const todasPagadas = regulares.length > 0 && regulares.every(p => p.estadoPago === 'Pagado');
         if (todasPagadas) {
           db.prepare("UPDATE loans SET estado = 'Finalizado', cuotaFijaPactada = 0 WHERE id = ? AND estado = 'Activo'").run(pay.prestamoId);
@@ -161,6 +169,10 @@ module.exports = function crearRutasPayments(ctx) {
     return mutacionAtomica(req, res, { accion: 'pago_parcial', logTipo: 'pago', endpoint: 'POST /api/payments/:id/partial', scopeTipo: 'loan', scopeId: pay.prestamoId }, () => {
     if (pay.estadoPago === 'Pagado') throw new ClientError('La cuota ya está pagada');
     if (esAbono(pay)) throw new ClientError('No se pueden aplicar pagos parciales sobre un abono a capital');
+    // Un CORTE es un hecho consumado: registra dinero que YA entro, no una obligacion por
+    // cobrar. Aceptar un parcial encima lo convertiria en algo a medio pagar y le sumaria un
+    // evento al ledger `recibos`, inflando "Cobros del Mes" con plata que nunca se recibio.
+    if (esCorte(pay)) throw new ClientError('No se pueden aplicar pagos parciales sobre un corte de interes diario: ya es un movimiento consumado');
     const montoNum = Math.round(+monto || 0);
     if (montoNum <= 0) throw new ClientError('El monto debe ser mayor a 0');
     const yaPagado = pay.partialPaid || 0;
@@ -212,7 +224,7 @@ module.exports = function crearRutasPayments(ctx) {
       }
       // Auto-finalización del préstamo
       const allPays = db.prepare('SELECT * FROM payments WHERE prestamoId = ?').all(pay.prestamoId);
-      const regulares = allPays.filter(p => !esAbono(p)); // abono = id con '-ab-' (canonico, ver Bug #26)
+      const regulares = allPays.filter(p => esCuotaRegular(p)); // abono = id con '-ab-' (canonico, ver Bug #26)
       const todasPagadas = regulares.length > 0 && regulares.every(p => p.estadoPago === 'Pagado');
       if (todasPagadas) {
         db.prepare("UPDATE loans SET estado = 'Finalizado', cuotaFijaPactada = 0 WHERE id = ? AND estado = 'Activo'").run(pay.prestamoId);

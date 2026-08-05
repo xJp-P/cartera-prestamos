@@ -25,8 +25,8 @@ const { esAbono } = require('../core/ids');
 
 module.exports = function crearRutasRecalculate(ctx) {
   const {
-    db, insertSchedule, snapshotCobros, restaurarCobros,
-    buildSchedule, buildScheduleFixedPMT, cuotasHastaHoy, hoyStr,
+    db, insertSchedule, snapshotCobros, restaurarCobros, abortarSiHuerfanos,
+    buildSchedule, buildScheduleFixedPMT, cuotasHastaHoy, hoyStr, ClientError,
   } = ctx;
   const router = express.Router();
 
@@ -104,6 +104,13 @@ module.exports = function crearRutasRecalculate(ctx) {
       // Aplicar extra del prorrateo (proximaCuotaExtra) a la cuota objetivo si aun esta pendiente
       const extraLoan = Math.round(+loan.proximaCuotaExtra || 0);
       const extraN = +loan.proximaCuotaExtraN || 0;
+      // Bug #44: una cuota con dinero encima cuyo cuotaN no exista en el cronograma nuevo
+      // no tiene donde restaurarse. Alcanzable aqui via `buildScheduleFixedPMT`, que deriva
+      // el numero de cuotas de la cuota fija pactada y puede devolver menos de las que se
+      // acaban de borrar. Era una de las 2 rutas de las 5 que no lo comprobaba.
+      // Lanzar DENTRO de la transaccion de este prestamo revierte su DELETE; el for de abajo
+      // lo captura y sigue con los demas (ver `omitidos`).
+      abortarSiHuerfanos(schedule, partialMap);
       restaurarCobros(schedule, partialMap);
       schedule.forEach(p => {
         if (extraLoan !== 0 && p.cuotaN === extraN) {
@@ -115,9 +122,21 @@ module.exports = function crearRutasRecalculate(ctx) {
       });
       if (schedule.length > 0) insertSchedule(schedule);
     });
+    // Un prestamo que el motor rechaza (modalidad desconocida) o que perderia un pago
+    // parcial al regenerarse NO puede tumbar la sincronizacion de los otros 11. Su
+    // transaccion ya revirtio sola al lanzar, asi que queda EXACTAMENTE como estaba; se
+    // registra en `omitidos` y se sigue. Es la misma doctrina que ya justificaba envolver
+    // cada prestamo por separado: "uno problematico no debe revertir el trabajo de los demas".
+    // Se informa en la respuesta en vez de callarlo: un 200 mudo diria que todo se recalculo.
+    const omitidos = [];
     for (const loan of activeLoans) {
-      recalcularUno(loan);
-      updated++;
+      try {
+        recalcularUno(loan);
+        updated++;
+      } catch (e) {
+        if (!(e instanceof ClientError)) throw e;   // fallo real de infraestructura: que suba
+        omitidos.push({ id: loan.id, nombre: loan.nombre, motivo: e.message });
+      }
     }
     // Re-aplicar auto-mora a Pendientes que cruzaron la fecha
     db.prepare(`UPDATE payments SET estadoPago='En Mora' WHERE estadoPago='Pendiente' AND fechaPago < ?`)
@@ -144,7 +163,7 @@ module.exports = function crearRutasRecalculate(ctx) {
         AND id NOT LIKE '%-ab-%'`)
         .run(nsPU, nsPU, nsPU + gPU, fl.id);
     });
-    res.json({ ok: true, updated });
+    res.json({ ok: true, updated, omitidos });
   });
 
   return router;

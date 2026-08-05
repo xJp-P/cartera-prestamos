@@ -5,7 +5,10 @@
 // ni se "mejoro" nada. Cualquier cambio de comportamiento aqui seria un bug.
 //
 // CONTRATO DE PUREZA: este modulo no toca la base de datos, ni Express, ni ningun
-// estado del closure `createApp`. Solo depende de sus argumentos, `Math` y `Date`.
+// estado del closure `createApp`. Solo depende de sus argumentos, `Math`, `Date` y
+// —desde el blindaje de Interes Diario— la clase `ClientError`, que es un tipo puro
+// sin estado ni dependencias. Se importa para que un rechazo del motor llegue al
+// cliente como 4xx con la BD intacta, en vez de como un 500.
 // Se verifico mecanicamente antes de extraerlo: 0 referencias a `db`, `app`,
 // `insPayment`, `mutacionAtomica` y demas simbolos del closure. Por eso es la
 // pieza de menor riesgo del backend y por eso va primera.
@@ -14,6 +17,8 @@
 // funcion y la parte impura se queda en su router. Perder la pureza de este modulo
 // es perder la unica parte del backend que se puede probar sin levantar nada.
 
+const { ClientError } = require('./errors');
+
 // Nombre canonico de la modalidad de credito abierto (interes diario). Vive aqui
 // —y no en un literal disperso— porque el motor es el unico punto por el que pasan
 // las cinco rutas que generan cronograma, y una modalidad mal escrita en un `===`
@@ -21,6 +26,14 @@
 // francesa. Sin tilde, igual que 'Pago Unico', porque asi viajan ya los valores
 // persistidos en la columna `loans.modalidad`.
 const MODALIDAD_DIARIA = 'Interes Diario';
+
+// Whitelist de las modalidades que este motor sabe amortizar. Existe porque la cascada
+// de `buildSchedule` NO tiene rama por defecto: lo que no cae en 'Prestamo' ni en
+// 'Pago Unico' termina en el bucle de amortizacion francesa. Un typo en la columna
+// `modalidad`, o una modalidad futura que olvide registrarse aqui, no produciria un
+// error sino DOCE CUOTAS PMT en silencio sobre un prestamo que nunca las pacto.
+// Cuando lo que se fabrica es deuda, fallar ruidoso es la unica opcion segura.
+const MODALIDADES_CONOCIDAS = ['Intereses', 'Capital + Intereses', 'Prestamo', 'Pago Unico'];
 
 // ── Motor financiero ──────────────────────────────────────────────────────
 function pmt(r, n, pv) {
@@ -90,6 +103,16 @@ function buildSchedule(loan, startN, startSaldo, numCuotas) {
   // formula canonica de saldo, en `saldoReal` (techo del abono) y en la
   // auto-finalizacion. El motor no rechaza lo que no entiende: lo inventa.
   if (loan && loan.modalidad === MODALIDAD_DIARIA) return [];
+
+  // RECHAZO ESTRICTO de lo desconocido (ver MODALIDADES_CONOCIDAS). Va DESPUES del
+  // credito abierto —que es conocido pero deliberadamente sin cronograma— y ANTES de
+  // cualquier calculo, para que la BD nunca vea una fila derivada de una modalidad que
+  // el motor no entiende. Es `ClientError`, no `Error`: asi las rutas envueltas en
+  // `mutacionAtomica` responden 4xx con la BD intacta en vez de un 500.
+  if (!loan || MODALIDADES_CONOCIDAS.indexOf(loan.modalidad) === -1) {
+    throw new ClientError('Modalidad no reconocida por el motor: "' + (loan && loan.modalidad) +
+      '". Las validas son: ' + MODALIDADES_CONOCIDAS.join(', ') + ' y ' + MODALIDAD_DIARIA + '.');
+  }
 
   startN = startN || 1;
   const { id, nombre, tasaMensual, modalidad, fechaInicio, diaPago } = loan;
@@ -291,6 +314,7 @@ function buildScheduleFixedPMT(loan, startN, saldoInicial, cuotaFija) {
 
 module.exports = {
   MODALIDAD_DIARIA,
+  MODALIDADES_CONOCIDAS,
   pmt,
   getPayDate,
   tasaPeriodo,

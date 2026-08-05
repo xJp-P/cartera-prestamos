@@ -62,6 +62,21 @@ module.exports = function crearRutasLoans(ctx) {
     // v1.10.0: gananciaFija solo aplica para modalidad Pago Unico — forzar 0 en el resto
     if (loan.modalidad !== 'Pago Unico') loan.gananciaFija = 0;
     else loan.gananciaFija = Math.round(+loan.gananciaFija || 0);
+    // FASE 1 — computar el cronograma ANTES de la primera escritura. El motor rechaza las
+    // modalidades que no reconoce (ver MODALIDADES_CONOCIDAS en core/engine.js), y hasta ahora
+    // ese rechazo llegaba DESPUES del INSERT: la transaccion lo revertia, si, pero el cliente
+    // recibia un 500 en vez de un 4xx que le dijera que la modalidad no existe. `buildSchedule`
+    // es puro, asi que adelantarlo no tiene ningun efecto colateral.
+    // (Esto NO cierra el defecto #1 del backlog: un cuerpo incompleto —sin `cedula`, p.ej.—
+    // sigue reventando en el driver de SQLite mas abajo. Eso es validacion de payload, otro
+    // trabajo; aqui solo se arregla la ruta de la modalidad.)
+    let schedule;
+    try {
+      schedule = buildSchedule(loan);
+    } catch (e) {
+      if (e instanceof ClientError) return res.status(400).json({ error: e.message });
+      throw e;
+    }
     // ATOMICO: el INSERT del prestamo y la generacion de su cronograma van en UNA transaccion.
     // Antes iban sueltos: un fallo entre ambos creaba un prestamo sin cuotas. Este endpoint NO
     // se journaliza (fuera del alcance acordado del undo), pero la atomicidad si es exigible.
@@ -72,7 +87,7 @@ module.exports = function crearRutasLoans(ctx) {
         VALUES (@id,@nombre,@cedula,@telefono,@moneda,@montoOrigen,@trmAcordada,@montoCOP,
           @tasaMensual,@plazoMeses,@modalidad,@fechaInicio,@diaPago,@estado,@notas,@frecuencia,@fechaDevolucion,@comprasUSD,@gananciaFija)
       `).run(loan);
-      insertSchedule(buildSchedule(loan));
+      insertSchedule(schedule);
     })();
     var detalleLog = (loan.moneda === 'USD' ? 'USD $' + loan.montoOrigen : '$' + Math.round(loan.montoCOP).toLocaleString()) + ' (' + loan.modalidad + ')';
     if (loan.modalidad === 'Pago Unico' && loan.gananciaFija > 0) {
@@ -149,6 +164,12 @@ module.exports = function crearRutasLoans(ctx) {
     // Aplicar extra del prorrateo + restaurar partialPaid
     const extraLoanEdit = Math.round(+loan.proximaCuotaExtra || 0);
     const extraNEdit = +loan.proximaCuotaExtraN || 0;
+    // Bug #44: si el cronograma nuevo NO incluye una cuota que llevaba dinero encima, el
+    // parcial no tiene donde restaurarse y se perderia en silencio. Aqui es alcanzable
+    // porque un edit puede ACORTAR `plazoMeses` o fijar una cuota mas alta, dejando fuera
+    // cuotaN que si existian. Era una de las 2 rutas de las 5 que no lo comprobaba.
+    // Estamos dentro de `mutacionAtomica` y en FASE 1: lanzar aqui da 4xx con la BD intacta.
+    abortarSiHuerfanos(schedule, partialMapEdit);
     restaurarCobros(schedule, partialMapEdit);
     schedule.forEach(p => {
       if (extraLoanEdit !== 0 && p.cuotaN === extraNEdit) {
@@ -575,7 +596,14 @@ module.exports = function crearRutasLoans(ctx) {
     const nuevoDiaInt = parseInt(nuevoDia, 10);
     return mutacionAtomica(req, res, { accion: 'cambio-fecha', endpoint: 'POST /api/loans/:id/cambiar-dia-pago', scopeTipo: 'loan', scopeId: req.params.id }, () => {
     if (loan.estado !== 'Activo') throw new ClientError('Solo se puede cambiar la fecha de prestamos activos');
-    if (loan.modalidad === 'Prestamo' || loan.modalidad === 'Pago Unico') throw new ClientError('No aplica para prestamos sin cuotas periodicas');
+    // WHITELIST, no blacklist. Antes esto rechazaba nombrando a 'Prestamo' y 'Pago Unico',
+    // de modo que TODA modalidad futura entraba por defecto: el credito abierto —que no
+    // tiene cuotas ni dia de pago— alcanzaba el endpoint, se le borraba la mora, se le
+    // recalculaba un cronograma mensual y se le persistia `diaPago`/`fechaBaseCronograma`.
+    // Una lista de exclusion hay que acordarse de ampliarla; una de admision falla sola.
+    if (loan.modalidad !== 'Intereses' && loan.modalidad !== 'Capital + Intereses') {
+      throw new ClientError('No aplica para prestamos sin cuotas periodicas mensuales (modalidad: ' + loan.modalidad + ')');
+    }
     if (freq !== 'Mensual') throw new ClientError('Cambiar el dia de pago solo aplica a prestamos de frecuencia Mensual');
     if (!nuevoDiaInt || nuevoDiaInt < 1 || nuevoDiaInt > 31) throw new ClientError('Dia invalido');
     if (nuevoDiaInt === loan.diaPago) throw new ClientError('El nuevo dia debe ser distinto al actual');
