@@ -65,6 +65,7 @@ const ENDPOINTS = [
   'GET /api/payments', 'PUT /api/payments/:id', 'POST /api/payments/:id/partial',
   'POST /api/loans/:id/abono', 'POST /api/loans/:id/reestructurar',
   'POST /api/loans/:id/force-close', 'POST /api/loans/:id/cambiar-dia-pago',
+  'POST /api/loans/:id/corte',
   'POST /api/recalculate', 'GET /api/config', 'PUT /api/config', 'GET /api/activity',
   'GET /api/undo', 'POST /api/undo/:id',
   'GET /api/debts', 'GET /api/debts/:id', 'POST /api/debts',
@@ -1307,6 +1308,195 @@ async function faseBlindaje() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// FASE F — CICLO DE VIDA DE UN CREDITO DE INTERES DIARIO
+//
+// Recorre el producto entero contra el servidor REAL: crear retroactivo, cobrar
+// intereses, abonar capital, saldar, y los rechazos de cada validacion. Es lo que
+// convierte "el motor calcula bien" (suite motor-diario, pura) en "el endpoint
+// escribe bien lo que el motor calcula".
+//
+// TODAS las fechas son RELATIVAS a hoy. Con fechas fijas el test caducaria: un
+// credito "abierto hace 15 dias" pasaria a tener 400 y los importes cambiarian
+// solos. Relativas, los montos son estables (15 dias al 3% sobre 1.000.000 son
+// 15.000 cualquier dia del ano).
+async function faseDiario() {
+  R.seccion('FASE F — ciclo de vida completo de un credito de interes diario');
+  const E = require('../backend/core/engine');
+  const rutaF = copiaDeProduccion('e2e-diario');
+  const S = await arrancar(rutaF);
+  const DB = S.dbPath;
+  const hoy = hoyStr();
+  const haceDias = (n) => E.sumarDias(hoy, -n);
+  // El registro de cobertura se mantiene A MANO (`pedir` no marca solo). Sin esta
+  // linea la suite seguiria anunciando cobertura total teniendo un endpoint sin tocar.
+  marcar('POST /api/loans/:id/corte');
+  // Snapshot del agregado (loan + sus payments) para comprobar "BD intacta" y el undo.
+  const agregado = (id) => JSON.stringify({
+    loan: conDb(DB, d => d.prepare('SELECT * FROM loans WHERE id=?').get(id)),
+    pays: conDb(DB, d => d.prepare('SELECT * FROM payments WHERE prestamoId=? ORDER BY id').all(id)),
+  });
+
+  try {
+    // ── F1 — creacion RETROACTIVA ──────────────────────────────────────────
+    R.seccion('F1 — POST /api/loans crea el credito abierto sin cronograma');
+    const rNuevo = await pedir(S, 'POST', '/api/loans', {
+      nombre: 'Deudor Diario E2E', cedula: '', telefono: '', notas: '', frecuencia: 'Mensual',
+      moneda: 'COP', montoOrigen: 1000000, trmAcordada: 1, montoCOP: 1000000,
+      tasaMensual: 3, plazoMeses: 0, modalidad: E.MODALIDAD_DIARIA,
+      fechaInicio: haceDias(15), diaPago: 1, estado: 'Activo',
+    });
+    R.eq('F1 responde 201', rNuevo.status, 201);
+    const idD = rNuevo.json && rNuevo.json.id;
+    R.check('F1 devuelve el id del credito', !!idD);
+    if (!idD) return;
+    R.eq('F1 NO le genero ni una cuota de cronograma',
+      conDb(DB, d => d.prepare('SELECT COUNT(*) c FROM payments WHERE prestamoId=?').get(idD).c), 0);
+    const l1 = conDb(DB, d => d.prepare('SELECT * FROM loans WHERE id=?').get(idD));
+    R.eq('F1 fechaUltimoCorte se sembro en fechaInicio (nunca NULL: evita el interes-cero-silencioso)',
+      l1.fechaUltimoCorte, haceDias(15));
+    R.eq('F1 interesAcumuladoPend arranca en 0', l1.interesAcumuladoPend, 0);
+    R.eq('F1 plazoMeses normalizado al centinela', l1.plazoMeses, 0);
+
+    // ── F2 — rechazos, cada uno con la BD intacta ──────────────────────────
+    R.seccion('F2 — validaciones del corte: 4xx Y la BD sin tocar');
+    const casos = [
+      ['interes mayor que el devengado', { interesPagado: 99999999 }],
+      ['abono mayor que el capital vivo', { abonoCapital: 99999999 }],
+      ['corte vacio (ni interes ni capital)', { interesPagado: 0, abonoCapital: 0 }],
+      ['fecha futura', { interesPagado: 1000, fecha: E.sumarDias(hoy, 1) }],
+      ['fecha anterior al inicio del credito', { interesPagado: 1000, fecha: haceDias(40) }],
+      ['montos negativos', { interesPagado: -5000 }],
+      ['fecha con formato invalido', { interesPagado: 1000, fecha: '05/08/2026' }],
+    ];
+    for (const [etiqueta, cuerpo] of casos) {
+      const antes = agregado(idD);
+      const r = await pedir(S, 'POST', '/api/loans/' + idD + '/corte', cuerpo);
+      R.check('F2 rechaza ' + etiqueta + ' -> 4xx', r.status >= 400 && r.status < 500,
+        'status=' + r.status + ' ' + String(r.text).slice(0, 140));
+      R.check('F2 y la BD quedo INTACTA tras ' + etiqueta, agregado(idD) === antes);
+    }
+
+    // ── F3 — corte de SOLO INTERES ─────────────────────────────────────────
+    R.seccion('F3 — corte de solo interes: cobra el devengo y no toca el capital');
+    // 15 dias al 3% sobre 1.000.000 = 15.000, con la convencion dias reales / 30.
+    const rC1 = await pedir(S, 'POST', '/api/loans/' + idD + '/corte',
+      { fecha: hoy, interesPagado: 15000, abonoCapital: 0, observaciones: 'corte e2e 1' });
+    R.eq('F3 responde 200', rC1.status, 200);
+    R.eq('F3 el devengo previo era exactamente 15.000 (15 dias retroactivos)',
+      rC1.json && rC1.json.antes.interesPendiente, 15000);
+    R.eq('F3 tras el corte no queda interes pendiente', rC1.json && rC1.json.despues.interesPendiente, 0);
+    R.eq('F3 el capital sigue intacto', rC1.json && rC1.json.despues.capitalVivo, 1000000);
+    const ct1 = conDb(DB, d => d.prepare('SELECT * FROM payments WHERE prestamoId=? ORDER BY cuotaN').all(idD));
+    R.eq('F3 creo UNA fila', ct1.length, 1);
+    R.eq('F3 con id de corte', ct1[0].id, idD + '-ct-1');
+    R.eq('F3 nace Pagado (invariante I1)', ct1[0].estadoPago, 'Pagado');
+    R.eq('F3 cuotaTotal == interesPeriodo en un corte de solo interes (invariante I6)',
+      ct1[0].cuotaTotal, ct1[0].interesPeriodo);
+    R.eq('F3 abonoCapital = 0', ct1[0].abonoCapital, 0);
+    R.check('F3 el ledger `recibos` quedo escrito (invariante I5)',
+      (ct1[0].recibos || '').indexOf('15000') !== -1, ct1[0].recibos);
+    R.check('F3 partialPaid == cuotaTotal (el corte esta saldado por definicion)',
+      ct1[0].partialPaid === ct1[0].cuotaTotal);
+    const l3 = conDb(DB, d => d.prepare('SELECT * FROM loans WHERE id=?').get(idD));
+    R.eq('F3 el cache avanzo al dia del corte', l3.fechaUltimoCorte, hoy);
+    R.eq('F3 sin interes arrastrado', l3.interesAcumuladoPend, 0);
+    R.eq('F3 el credito sigue Activo (queda capital)', l3.estado, 'Activo');
+
+    // ── F4 — /abono esta cerrado para esta modalidad ───────────────────────
+    R.seccion('F4 — /abono rechaza el credito abierto (crearia una fila que el motor no mira)');
+    const antesAb = agregado(idD);
+    const rAb = await pedir(S, 'POST', '/api/loans/' + idD + '/abono',
+      { monto: 100000, fecha: hoy, recalcMode: 'mantener' });
+    R.check('F4 responde 4xx', rAb.status >= 400 && rAb.status < 500, 'status=' + rAb.status);
+    R.check('F4 y la BD quedo INTACTA', agregado(idD) === antesAb);
+
+    // ── F5 — UNDO del corte: round-trip byte-exacto ────────────────────────
+    R.seccion('F5 — deshacer un corte devuelve el agregado tal cual estaba');
+    const antesUndo = agregado(idD);
+    const rC2 = await pedir(S, 'POST', '/api/loans/' + idD + '/corte',
+      { fecha: hoy, interesPagado: 0, abonoCapital: 200000 });
+    R.eq('F5 el corte con abono responde 200', rC2.status, 200);
+    R.eq('F5 el capital bajo', rC2.json && rC2.json.despues.capitalVivo, 800000);
+    const undos = (await pedir(S, 'GET', '/api/undo?scopeTipo=loan&scopeId=' + idD)).json;
+    const head = Array.isArray(undos) && undos.find(u => u.estado === 'disponible');
+    R.check('F5 el corte quedo journalizado y es reversible', !!head, JSON.stringify(undos || []).slice(0, 200));
+    if (head) {
+      R.eq('F5 marcado como movimiento de caja', head.afecta_caja, 1);
+      const rUndo = await pedir(S, 'POST', '/api/undo/' + head.id, {});
+      R.eq('F5 el undo responde 200', rUndo.status, 200);
+      R.check('F5 el agregado volvio BYTE-EXACTO al estado previo', agregado(idD) === antesUndo,
+        'el snapshot restaurado no coincide');
+    }
+
+    // ── F6 — CIERRE ESTRICTO ───────────────────────────────────────────────
+    R.seccion('F6 — solo finaliza con capital 0 Y devengo 0');
+    // Se abona TODO el capital pero se deja 0 de interes pagado. Como el corte es
+    // del mismo dia que el anterior, el tramo es de 0 dias y no devenga nada nuevo.
+    const rC3 = await pedir(S, 'POST', '/api/loans/' + idD + '/corte',
+      { fecha: hoy, interesPagado: 0, abonoCapital: 1000000 });
+    R.eq('F6 el abono total responde 200', rC3.status, 200);
+    R.eq('F6 el capital quedo en 0', rC3.json && rC3.json.despues.capitalVivo, 0);
+    R.eq('F6 con capital 0 y sin interes pendiente, SALDA', rC3.json && rC3.json.saldado, true);
+    R.eq('F6 el credito quedo Finalizado',
+      conDb(DB, d => d.prepare('SELECT estado FROM loans WHERE id=?').get(idD).estado), 'Finalizado');
+
+    // Y el control que de verdad prueba la regla: capital 0 PERO interes vivo.
+    R.seccion('F6b — control: capital 0 con interes pendiente NO cierra');
+    const rB = await pedir(S, 'POST', '/api/loans', {
+      nombre: 'Deudor Diario E2E b', cedula: '', telefono: '', notas: '', frecuencia: 'Mensual',
+      moneda: 'COP', montoOrigen: 1000000, trmAcordada: 1, montoCOP: 1000000,
+      tasaMensual: 3, plazoMeses: 0, modalidad: E.MODALIDAD_DIARIA,
+      fechaInicio: haceDias(10), diaPago: 1, estado: 'Activo',
+    });
+    const idB = rB.json && rB.json.id;
+    R.check('F6b se creo el segundo credito', !!idB);
+    if (idB) {
+      // Abona TODO el capital sin pagar un peso de los 10.000 devengados.
+      const rBC = await pedir(S, 'POST', '/api/loans/' + idB + '/corte',
+        { fecha: hoy, interesPagado: 0, abonoCapital: 1000000 });
+      R.eq('F6b responde 200', rBC.status, 200);
+      R.eq('F6b el capital quedo en 0', rBC.json && rBC.json.despues.capitalVivo, 0);
+      R.eq('F6b PERO quedan 10.000 de interes devengado', rBC.json && rBC.json.despues.interesPendiente, 10000);
+      R.eq('F6b por eso NO salda', rBC.json && rBC.json.saldado, false);
+      R.eq('F6b y el credito sigue Activo',
+        conDb(DB, d => d.prepare('SELECT estado FROM loans WHERE id=?').get(idB).estado), 'Activo');
+      // Al cobrar ese interes —y solo entonces— cierra.
+      const rBF = await pedir(S, 'POST', '/api/loans/' + idB + '/corte',
+        { fecha: hoy, interesPagado: 10000, abonoCapital: 0 });
+      R.eq('F6b cobrado el interes, ahora SI salda', rBF.json && rBF.json.saldado, true);
+      R.eq('F6b y queda Finalizado',
+        conDb(DB, d => d.prepare('SELECT estado FROM loans WHERE id=?').get(idB).estado), 'Finalizado');
+    }
+
+    // ── F7 — el corte solo aplica a esta modalidad ─────────────────────────
+    R.seccion('F7 — /corte rechaza las modalidades con cronograma');
+    const cyi = conDb(DB, d => d.prepare("SELECT id FROM loans WHERE modalidad='Capital + Intereses' AND estado='Activo'").get());
+    if (cyi) {
+      const antesC = agregado(cyi.id);
+      const rNo = await pedir(S, 'POST', '/api/loans/' + cyi.id + '/corte', { interesPagado: 1000 });
+      R.check('F7 responde 4xx sobre un C+I', rNo.status >= 400 && rNo.status < 500, 'status=' + rNo.status);
+      R.check('F7 y la BD quedo INTACTA', agregado(cyi.id) === antesC);
+    }
+
+    // ── F8 — cierre forzoso: el interes devengado SI cuenta como perdida ───
+    R.seccion('F8 — force-close de un credito abierto no reporta $0 de interes perdido');
+    const rF8 = await pedir(S, 'POST', '/api/loans', {
+      nombre: 'Deudor Diario E2E c', cedula: '', telefono: '', notas: '', frecuencia: 'Mensual',
+      moneda: 'COP', montoOrigen: 1000000, trmAcordada: 1, montoCOP: 1000000,
+      tasaMensual: 3, plazoMeses: 0, modalidad: E.MODALIDAD_DIARIA,
+      fechaInicio: haceDias(20), diaPago: 1, estado: 'Activo',
+    });
+    const idC = rF8.json && rF8.json.id;
+    if (idC) {
+      const rFc = await pedir(S, 'POST', '/api/loans/' + idC + '/force-close', {});
+      R.eq('F8 responde 200', rFc.status, 200);
+      R.eq('F8 el capital perdido es el prestado', rFc.json && rFc.json.capitalPerdido, 1000000);
+      R.eq('F8 y los intereses perdidos son los 20 dias devengados', rFc.json && rFc.json.interesesPerdidos, 20000);
+    }
+  } finally { await cerrar(S); }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // createApp nunca cierra su conexion a SQLite, asi que las copias de ESTA corrida siguen
 // bloqueadas al terminar y no se pueden borrar desde aqui. Se podan al ARRANCAR las que ya
 // tienen mas de 2 horas: sus procesos murieron hace rato y el handle esta libre. El margen
@@ -1327,7 +1517,7 @@ function podarCopiasViejas() {
 }
 
 async function main() {
-  console.log('e2e-api — golden master de los 25 endpoints contra backend/server.js REAL');
+  console.log('e2e-api — golden master de los ' + ENDPOINTS.length + ' endpoints contra backend/server.js REAL');
   console.log('modo: ' + (ACTUALIZAR ? 'ACTUALIZAR BASELINES' : 'comparar contra baseline'));
   const podadas = podarCopiasViejas();
   if (podadas) console.log('copias temporales viejas eliminadas: ' + podadas);
@@ -1337,6 +1527,7 @@ async function main() {
   await faseUndo();
   await faseRegresiones();
   await faseBlindaje();
+  await faseDiario();
 
   // ── ANTI-VACIO ─────────────────────────────────────────────────────────────
   R.seccion('Anti-vacio — cobertura y volumen');
