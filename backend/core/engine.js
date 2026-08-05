@@ -450,10 +450,18 @@ function devengoDiario(loan, cortes, hastaISO) {
     fechaUltimoCorte: ultimo ? ultimo.fechaPago : null,
     diasDesdeUltimoCorte: diasEntre(ultimo ? ultimo.fechaPago : loan.fechaInicio, hastaISO),
     diasTotales: diasEntre(loan.fechaInicio, hastaISO),
-    // Lo que habria que persistir en las columnas cache de `loans` tras el ultimo
-    // corte. Etapa 3 las escribe; aqui se derivan para que exista UNA sola formula.
+    // Lo que se persiste en las columnas cache de `loans`. Aqui se derivan para que
+    // exista UNA sola formula: la ruta que escribe (POST /corte) usa esto, no su
+    // propia cuenta.
+    //
+    // `fechaUltimoCorte` cae a `fechaInicio` cuando aun no hay cortes, y NO a NULL.
+    // El proyecto tiene el precedente contrario (`fechaBaseCronograma` es NULL y el
+    // lector hace el fallback), pero aqui el modo de fallo es peor: un lector que
+    // olvide el fallback pasaria `null` a `diasEntre`, que devuelve 0 sin quejarse
+    // — es decir, INTERES CERO EN SILENCIO. Guardando siempre una fecha valida, ese
+    // camino no existe. La columna significa "desde cuando corre el tramo abierto".
     cache: {
-      fechaUltimoCorte: ultimo ? ultimo.fechaPago : null,
+      fechaUltimoCorte: ultimo ? ultimo.fechaPago : loan.fechaInicio,
       interesAcumuladoPend: Math.max(0, interesDevengado - interesCobrado
         - tramos[tramos.length - 1].interes),
     },

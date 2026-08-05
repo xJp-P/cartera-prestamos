@@ -46,8 +46,16 @@ module.exports = function crearRutasLoans(ctx) {
     db, logAction, insPayment, runPayment, insertSchedule, mutacionAtomica,
     snapshotCobros, restaurarCobros, abortarSiHuerfanos,
     buildSchedule, buildScheduleFixedPMT, getPayDate, tasaPeriodo, cuotasHastaHoy,
+    MODALIDAD_DIARIA, devengoDiario,
     ClientError, hoyStr,
   } = ctx;
+
+  // Cortes de un credito abierto, en orden cronologico. Es la unica lectura que
+  // `devengoDiario` necesita, y se centraliza para que ninguna ruta invente su
+  // propio filtro (que es como nacio el Bug #28).
+  const cortesDe = (loanId) => db
+    .prepare("SELECT * FROM payments WHERE prestamoId = ? AND id LIKE '%-ct-%' ORDER BY fechaPago, cuotaN")
+    .all(loanId);
   const router = express.Router();
 
   // ── API: Loans ────────────────────────────────────────────────────────────
@@ -62,6 +70,23 @@ module.exports = function crearRutasLoans(ctx) {
     // v1.10.0: gananciaFija solo aplica para modalidad Pago Unico — forzar 0 en el resto
     if (loan.modalidad !== 'Pago Unico') loan.gananciaFija = 0;
     else loan.gananciaFija = Math.round(+loan.gananciaFija || 0);
+    // ── Interes Diario: sembrar el cache del devengo ──────────────────────────
+    // El credito abierto nace SIN cortes, asi que el tramo abierto corre desde
+    // `fechaInicio` y no hay interes arrastrado. Se guarda la FECHA, nunca NULL:
+    // un lector que olvidara el fallback pasaria null a `diasEntre`, que devuelve 0
+    // sin quejarse — interes cero en silencio. Con una fecha valida ese camino no existe.
+    // Esto es lo que hace que la creacion RETROACTIVA funcione sola: si `fechaInicio`
+    // es de hace 15 dias, el primer devengo ya trae esos 15 dias.
+    if (loan.modalidad === MODALIDAD_DIARIA) {
+      loan.fechaUltimoCorte = loan.fechaInicio;
+      loan.interesAcumuladoPend = 0;
+      // Un credito abierto no tiene plazo. Se normaliza al centinela para que ninguna
+      // ruta lo confunda con un cronograma de N meses.
+      loan.plazoMeses = 0;
+    } else {
+      loan.fechaUltimoCorte = null;
+      loan.interesAcumuladoPend = 0;
+    }
     // FASE 1 — computar el cronograma ANTES de la primera escritura. El motor rechaza las
     // modalidades que no reconoce (ver MODALIDADES_CONOCIDAS en core/engine.js), y hasta ahora
     // ese rechazo llegaba DESPUES del INSERT: la transaccion lo revertia, si, pero el cliente
@@ -83,9 +108,11 @@ module.exports = function crearRutasLoans(ctx) {
     db.transaction(() => {
       db.prepare(`
         INSERT INTO loans(id,nombre,cedula,telefono,moneda,montoOrigen,trmAcordada,montoCOP,
-          tasaMensual,plazoMeses,modalidad,fechaInicio,diaPago,estado,notas,frecuencia,fechaDevolucion,comprasUSD,gananciaFija)
+          tasaMensual,plazoMeses,modalidad,fechaInicio,diaPago,estado,notas,frecuencia,fechaDevolucion,comprasUSD,gananciaFija,
+          fechaUltimoCorte,interesAcumuladoPend)
         VALUES (@id,@nombre,@cedula,@telefono,@moneda,@montoOrigen,@trmAcordada,@montoCOP,
-          @tasaMensual,@plazoMeses,@modalidad,@fechaInicio,@diaPago,@estado,@notas,@frecuencia,@fechaDevolucion,@comprasUSD,@gananciaFija)
+          @tasaMensual,@plazoMeses,@modalidad,@fechaInicio,@diaPago,@estado,@notas,@frecuencia,@fechaDevolucion,@comprasUSD,@gananciaFija,
+          @fechaUltimoCorte,@interesAcumuladoPend)
       `).run(loan);
       insertSchedule(schedule);
     })();
@@ -234,6 +261,15 @@ module.exports = function crearRutasLoans(ctx) {
     // valida y computa; la FASE 2 (aplicar) se ejecuta dentro de la transaccion del
     // helper junto al INSERT del journal de undo. Las validaciones lanzan ClientError.
     return mutacionAtomica(req, res, { accion: 'abono', endpoint: 'POST /api/loans/:id/abono', scopeTipo: 'loan', scopeId: req.params.id }, () => {
+    // Un credito abierto NO se abona por aqui. Esta ruta crea una fila '-ab-', y
+    // `devengoDiario` solo mira los cortes ('-ct-'): el capital bajaria en la formula
+    // canonica de saldo mientras el devengo seguiria corriendo sobre la base VIEJA.
+    // Serian dos verdades distintas sobre el mismo credito, en silencio y creciendo
+    // cada dia. La ruta correcta es POST /api/loans/:id/corte, que registra el abono
+    // Y el interes en el mismo evento.
+    if (loan.modalidad === MODALIDAD_DIARIA) {
+      throw new ClientError('Este credito es de ' + MODALIDAD_DIARIA + ': los abonos se registran como un CORTE (POST /api/loans/:id/corte), que baja el capital y liquida el interes devengado en el mismo movimiento.');
+    }
     // ── FASE 1: LECTURA + VALIDACION (sin escrituras) ────────────────────────
     const allPays = db.prepare('SELECT * FROM payments WHERE prestamoId = ? ORDER BY cuotaN').all(req.params.id);
 
@@ -552,6 +588,136 @@ module.exports = function crearRutasLoans(ctx) {
   // ── API: Cierre Forzoso ───────────────────────────────────────────────────
   // Marca el préstamo como 'Cancelado' (cierre con pérdidas), guarda snapshot
   // de capital pendiente + intereses en mora, y borra las cuotas restantes.
+  // ── API: CORTE de un credito de interes diario ────────────────────────────
+  // El unico evento economico de un credito abierto. Materializa UNA fila '-ct-'
+  // con lo que el cliente entrego: intereses devengados y/o abono a capital.
+  //
+  // Es el equivalente de /abono + PUT /payments para esta modalidad, y sustituye a
+  // los dos: /abono crea filas '-ab-' que `devengoDiario` NO mira, asi que usarlo
+  // aqui bajaria el capital sin que el motor se enterara — el devengo seguiria
+  // corriendo sobre la base vieja. Por eso /abono lo rechaza explicitamente.
+  //
+  // Atomico via `mutacionAtomica`: FASE 1 valida y computa TODO (lanzando
+  // ClientError -> 4xx con la BD intacta), FASE 2 escribe dentro de la transaccion
+  // junto al journal de undo.
+  router.post('/api/loans/:id/corte', (req, res) => {
+    const { fecha, interesPagado, abonoCapital, observaciones, montoCOPRecibido, montoUSDRecibido } = req.body;
+    const loan = db.prepare('SELECT * FROM loans WHERE id = ?').get(req.params.id);
+    if (!loan) return res.status(404).json({ error: 'No encontrado' });
+    // `accion` describe el evento en el journal; `logTipo` es lo que ve el Historial.
+    // Se reusa 'pago' A PROPOSITO: `tipo` alimenta tipoIcon/tipoColor/tipoLabel del
+    // frontend, que solo conoce 10 valores — meter uno nuevo aqui lo dejaria sin
+    // icono ni color hasta la etapa de UI. Y un corte ES un cobro.
+    return mutacionAtomica(req, res, { accion: 'corte', logTipo: 'pago', endpoint: 'POST /api/loans/:id/corte', scopeTipo: 'loan', scopeId: req.params.id }, () => {
+      // ── FASE 1: LECTURA + VALIDACION + COMPUTO (sin escrituras) ─────────────
+      if (loan.modalidad !== MODALIDAD_DIARIA) {
+        throw new ClientError('Los cortes solo aplican a creditos de ' + MODALIDAD_DIARIA + ' (este es ' + loan.modalidad + ').');
+      }
+      if (loan.estado !== 'Activo') throw new ClientError('Solo se pueden registrar cortes en creditos activos');
+
+      const fechaCorte = fecha || hoyStr();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(fechaCorte))) throw new ClientError('Fecha invalida: se espera YYYY-MM-DD');
+      if (fechaCorte > hoyStr()) throw new ClientError('No se puede registrar un corte con fecha futura: devengaria intereses aun no causados');
+      if (fechaCorte < loan.fechaInicio) throw new ClientError('El corte no puede ser anterior al inicio del credito (' + loan.fechaInicio + ')');
+
+      const cortes = cortesDe(req.params.id);
+      const ultimaFecha = cortes.length ? cortes[cortes.length - 1].fechaPago : loan.fechaInicio;
+      // Se permite el MISMO dia (tramo de 0 dias, sin interes: es el caso de dos
+      // movimientos en una jornada), pero nunca antes: retroceder partiria los tramos
+      // y haria que un periodo ya liquidado se recalculara sobre otra base.
+      if (fechaCorte < ultimaFecha) {
+        throw new ClientError('El corte no puede ser anterior al ultimo registrado (' + ultimaFecha + ')');
+      }
+
+      const dev = devengoDiario(loan, cortes, fechaCorte);
+      const intPagado = Math.round(+interesPagado || 0);
+      const abonoCap  = Math.round(+abonoCapital  || 0);
+      if (intPagado < 0 || abonoCap < 0) throw new ClientError('Los montos no pueden ser negativos');
+      if (intPagado === 0 && abonoCap === 0) {
+        throw new ClientError('El corte debe registrar algo: intereses, abono a capital, o ambos');
+      }
+      // Cobrar mas interes del devengado no es un pago anticipado: no hay periodo
+      // futuro que cubrir en un credito sin cronograma. Se rechaza en vez de dejar
+      // que `devengoDiario` lo clampe a 0 y el excedente desaparezca sin rastro.
+      if (intPagado > dev.interesPendiente) {
+        throw new ClientError('El interes cobrado ($' + intPagado.toLocaleString('es-CO') + ') supera el devengado a la fecha ($' +
+          dev.interesPendiente.toLocaleString('es-CO') + ' al ' + fechaCorte + ').');
+      }
+      if (abonoCap > dev.capitalVivo) {
+        throw new ClientError('El abono ($' + abonoCap.toLocaleString('es-CO') + ') supera el capital vivo ($' +
+          dev.capitalVivo.toLocaleString('es-CO') + ').');
+      }
+
+      const n = cortes.reduce((m, c) => Math.max(m, c.cuotaN), 0) + 1;
+      const total = intPagado + abonoCap;
+      // Caja REAL. En COP coincide con la composicion; en USD puede diferir por la TRM
+      // del dia (misma doctrina del Bug #37: el capital se mide a TRM pactada, la caja
+      // es lo que de verdad entro). Si el cliente no la envia, se deriva.
+      const cajaCOP = Math.round(+montoCOPRecibido) > 0 ? Math.round(+montoCOPRecibido) : total;
+      const filaCorte = {
+        id: `${loan.id}-ct-${n}`,
+        prestamoId: loan.id,
+        nombreCliente: loan.nombre,
+        cuotaN: n,
+        fechaPago: fechaCorte,
+        saldoInicial: dev.capitalVivo,
+        interesPeriodo: intPagado,
+        abonoCapital: abonoCap,
+        cuotaTotal: total,
+        saldoFinal: Math.max(0, dev.capitalVivo - abonoCap),
+        // Un corte nace 'Pagado' y no vuelve a cambiar (invariante I1). Es lo que lo
+        // deja fuera de las 4 copias de la auto-mora, que filtran por 'Pendiente'.
+        estadoPago: 'Pagado',
+        fechaRecaudo: fechaCorte,
+        observaciones: observaciones || '',
+        montoCOPRecibido: cajaCOP,
+        montoUSDRecibido: montoUSDRecibido ? Math.round(+montoUSDRecibido * 100) / 100 : 0,
+        // partialPaid = cuotaTotal: el corte esta saldado por definicion. Sin esto,
+        // `pendCuota` lo mostraria como si se debiera entero.
+        partialPaid: total,
+        extraConsolidado: 0,
+        // Ledger SIEMPRE escrito (invariante I5): asi `cobrosDe` usa el ledger y nunca
+        // el fallback, y el evento entra en "Cobros del Mes" con su fecha real.
+        recibos: JSON.stringify([{ fecha: fechaCorte, cop: cajaCOP }]),
+      };
+
+      // Estado DESPUES del corte, derivado del mismo motor (no una cuenta aparte).
+      const devPost = devengoDiario(loan, cortes.concat([filaCorte]), fechaCorte);
+      // ── CIERRE ESTRICTO ─────────────────────────────────────────────────────
+      // Un credito abierto solo se salda si NO queda capital NI interes devengado.
+      // Con capital 0 pero interes pendiente el credito sigue vivo: ese interes se
+      // debe y hay que poder cobrarlo. Y con interes 0 pero capital vivo, obviamente.
+      const saldado = devPost.capitalVivo === 0 && devPost.interesPendiente === 0;
+
+      const partes = [];
+      if (intPagado > 0) partes.push('intereses $' + intPagado.toLocaleString('es-CO'));
+      if (abonoCap  > 0) partes.push('abono a capital $' + abonoCap.toLocaleString('es-CO'));
+
+      return {
+        descripcion: 'Corte de interes diario: ' + loan.nombre + ' — ' + partes.join(' + ') +
+          ' (' + fechaCorte + ')' + (saldado ? ' — credito SALDADO' : ''),
+        afectaCaja: true,   // siempre entra dinero: el corte no existe sin movimiento
+        payload: {
+          ok: true,
+          corte: { id: filaCorte.id, n: n, fecha: fechaCorte, interesPagado: intPagado, abonoCapital: abonoCap, total: total },
+          antes:   { capitalVivo: dev.capitalVivo,     interesPendiente: dev.interesPendiente,     diasDevengados: dev.diasDesdeUltimoCorte },
+          despues: { capitalVivo: devPost.capitalVivo, interesPendiente: devPost.interesPendiente },
+          saldado: saldado,
+        },
+        aplicar: () => {
+          runPayment(filaCorte);
+          db.prepare("UPDATE payments SET paidAt = datetime('now','localtime') WHERE id = ?").run(filaCorte.id);
+          // El cache queda derivado del motor, nunca calculado aqui: una sola formula.
+          db.prepare('UPDATE loans SET montoCOP = ?, fechaUltimoCorte = ?, interesAcumuladoPend = ? WHERE id = ?')
+            .run(devPost.capitalVivo, devPost.cache.fechaUltimoCorte, devPost.cache.interesAcumuladoPend, loan.id);
+          if (saldado) {
+            db.prepare("UPDATE loans SET estado = 'Finalizado' WHERE id = ? AND estado = 'Activo'").run(loan.id);
+          }
+        },
+      };
+    });
+  });
+
   router.post('/api/loans/:id/force-close', (req, res) => {
     const loan = db.prepare('SELECT * FROM loans WHERE id = ?').get(req.params.id);
     if (!loan) return res.status(404).json({ error: 'No encontrado' });
@@ -564,9 +730,16 @@ module.exports = function crearRutasLoans(ctx) {
       const originalCOP = loan.moneda === 'USD' ? Math.round(loan.montoOrigen * loan.trmAcordada) : Math.round(loan.montoOrigen);
       const todoCapPagado = allPays.filter(p => p.estadoPago === 'Pagado').reduce((s, p) => s + p.abonoCapital, 0);
       const capitalPerdido = Math.max(0, Math.round(originalCOP - todoCapPagado));
-      const interesesPerdidos = Math.round(allPays
-        .filter(p => p.estadoPago === 'En Mora' && !esAbono(p))
-        .reduce((s, p) => s + p.interesPeriodo, 0));
+      // Intereses que se dan por perdidos. En las 4 modalidades con cronograma son los
+      // de las cuotas En Mora. Un credito abierto NO TIENE cuotas En Mora —su interes
+      // vive devengado, no materializado—, asi que por esa via el cierre forzoso
+      // reportaria $0 de interes perdido y la "Perdida total" de Rendimiento saldria
+      // corta justo en lo que el producto genera. Se toma del motor.
+      const interesesPerdidos = loan.modalidad === MODALIDAD_DIARIA
+        ? devengoDiario(loan, cortesDe(req.params.id), hoyStr()).interesPendiente
+        : Math.round(allPays
+            .filter(p => p.estadoPago === 'En Mora' && !esAbono(p))
+            .reduce((s, p) => s + p.interesPeriodo, 0));
       const totalPerdido = capitalPerdido + interesesPerdidos;
 
       return {
