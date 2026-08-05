@@ -312,9 +312,169 @@ function buildScheduleFixedPMT(loan, startN, saldoInicial, cuotaFija) {
   return rows;
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// INTERES DIARIO — el motor del credito abierto (capital vivo)
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// No hay cronograma. El interes se devenga por DIAS sobre el capital vivo, y solo
+// se materializa una fila cuando ocurre un evento economico real: el CORTE
+// (id `${loanId}-ct-${n}`), donde el cliente paga intereses y/o abona a capital.
+//
+// Todo lo de aqui es PURO: recibe el prestamo y sus cortes YA LEIDOS, y no toca la
+// BD. Es lo que permite probar la matematica sin levantar nada.
+//
+// ── CONVENCION DE DIAS (decision de negocio: "reutilicemos la logica que ya existe")
+// La formula es la MISMA que el prorrateo de `/cambiar-dia-pago`:
+//       interes = saldo * (tasaMensual/100) * dias / 30
+// es decir DIAS REALES de calendario divididos entre 30. Ojo con el nombre: esto
+// NO es la convencion bursatil "30/360" (que cuenta todos los meses como de 30
+// dias); es Actual/360 — cada dia real vale 1/30 de la tasa mensual. La diferencia
+// es observable: un mes de 31 dias cobra 31/30 de la tasa mensual, y un ano cobra
+// 365/360 = 1,39% mas que doce mensualidades. Es el comportamiento estandar en
+// credito y es el que la app YA aplica desde v1.14.0; duplicar una convencion
+// distinta aqui seria tener dos matematicas para lo mismo.
+//
+// ── TRAMOS SEMIABIERTOS [desde, hasta) (decision de negocio) ────────────────────
+// Cada tramo incluye su dia inicial y EXCLUYE el final. Consecuencias, las dos
+// buscadas:
+//   (a) dos cortes el mismo dia producen un tramo de 0 dias -> 0 interes, en vez
+//       de un "dia fantasma" cobrado dos veces;
+//   (b) los tramos PARTICIONAN la linea de tiempo exactamente: sin solapes y sin
+//       huecos, asi que ningun dia se cobra dos veces ni se pierde.
+// EFECTO A TENER PRESENTE: el dia del corte pertenece al tramo SIGUIENTE, luego un
+// abono reduce la base ESE MISMO DIA. El requisito original hablaba de "a partir
+// del dia siguiente", que es un dia mas de interes a la base vieja. Las dos reglas
+// son coherentes consigo mismas; se implemento la semiabierta por (a) y (b).
+// Para cambiarla NO hay que tocar el bucle: basta poner DIA_DEL_CORTE_A_BASE_VIEJA
+// en true, y el tramo que cierra en un corte contara ese dia.
+const DIA_DEL_CORTE_A_BASE_VIEJA = false;
+
+// Dias reales entre dos fechas ISO. Anclado a las 12:00 como TODO el resto del
+// proyecto: a medianoche, un desfase de horas por zona horaria cambia el dia y por
+// tanto el interes. A mediodia hacen falta 12 horas de error para equivocarse de dia.
+function diasEntre(desdeISO, hastaISO) {
+  const a = new Date(String(desdeISO) + 'T12:00:00');
+  const b = new Date(String(hastaISO) + 'T12:00:00');
+  if (isNaN(a) || isNaN(b)) return 0;
+  return Math.round((b - a) / 86400000);
+}
+
+// Interes de UN tramo, en pesos enteros.
+// Se redondea POR TRAMO, no por dia: el tramo es lo que se persiste (el
+// `interesPeriodo` de un corte), asi que redondear ahi hace que lo guardado sea
+// exactamente lo computado — misma doctrina de pesos enteros de v2.2.0 (Bug #43).
+// Redondear cada dia acumularia un error que no vive en ninguna columna.
+function interesDeTramo(saldo, tasaMensual, dias) {
+  if (!(dias > 0) || !(saldo > 0)) return 0;
+  return Math.round(saldo * ((+tasaMensual || 0) / 100) * dias / 30);
+}
+
+/**
+ * devengoDiario — reconstruye el devengo completo de un credito abierto.
+ *
+ * @param {object} loan          fila de `loans` (modalidad Interes Diario)
+ * @param {Array}  cortes        filas '-ct-' de ese prestamo (en cualquier orden)
+ * @param {string} hastaISO      fecha de corte del calculo, 'YYYY-MM-DD'
+ * @returns {object} desglose completo (ver abajo)
+ *
+ * LA BASE ES EL SALDO DEL MOTOR (decision de negocio): capital prestado menos el
+ * capital REALMENTE abonado en los cortes. No se usa `saldoConCaja` ni ninguna
+ * cifra de presentacion: el devengo es una DECISION (cuanto se debe), y en este
+ * proyecto las decisiones las gobierna el saldo del motor. Ver la doctrina de los
+ * dos saldos en CLAUDE.md.
+ *
+ * SIN CAPITALIZACION (decision de negocio): el interes no pagado NO se suma a la
+ * base. Un credito con intereses atrasados sigue devengando sobre el capital, no
+ * sobre capital+intereses. Ademas de ser lo pactado, evita el anatocismo.
+ *
+ * RETROACTIVIDAD: no es un caso especial. Si `fechaInicio` esta en el pasado y no
+ * hay cortes, sale UN tramo [fechaInicio, hasta) con todos los dias transcurridos.
+ * La creacion retroactiva funciona porque el modelo es "tramos entre eventos", no
+ * "un contador que empieza hoy".
+ */
+function devengoDiario(loan, cortes, hastaISO) {
+  const tasaMensual = +loan.tasaMensual || 0;
+  const origCOP = loan.moneda === 'USD'
+    ? Math.round(loan.montoOrigen * loan.trmAcordada)
+    : Math.round(loan.montoOrigen);
+
+  // Orden cronologico; desempate por cuotaN para que dos cortes del mismo dia
+  // tengan un orden estable y reproducible (si no, el reparto de tramos de 0 dias
+  // dependeria del orden en que SQLite devolviera las filas).
+  const ord = (cortes || []).slice().sort((a, b) => {
+    const c = String(a.fechaPago).localeCompare(String(b.fechaPago));
+    return c !== 0 ? c : (a.cuotaN - b.cuotaN);
+  });
+
+  const tramos = [];
+  let saldo = origCOP;
+  let cursor = loan.fechaInicio;
+  let interesDevengado = 0;
+  let interesCobrado = 0;
+  let capitalAbonado = 0;
+
+  const empujar = (desde, hasta, base) => {
+    let dias = diasEntre(desde, hasta);
+    if (dias < 0) dias = 0;                    // corte anterior al cursor: tramo nulo, nunca negativo
+    const interes = interesDeTramo(base, tasaMensual, dias);
+    tramos.push({ desde: desde, hasta: hasta, dias: dias, base: base, interes: interes });
+    interesDevengado += interes;
+  };
+
+  ord.forEach((c) => {
+    const fin = DIA_DEL_CORTE_A_BASE_VIEJA ? sumarDias(c.fechaPago, 1) : c.fechaPago;
+    empujar(cursor, fin, saldo);
+    // El corte consuma el evento: baja el capital y registra lo cobrado.
+    const abono = Math.round(+c.abonoCapital || 0);
+    capitalAbonado += abono;
+    saldo = Math.max(0, saldo - abono);        // el capital vivo nunca es negativo
+    interesCobrado += Math.round(+c.interesPeriodo || 0);
+    cursor = fin;
+  });
+
+  // Tramo abierto: desde el ultimo evento hasta la fecha consultada.
+  empujar(cursor, hastaISO, saldo);
+
+  const ultimo = ord.length ? ord[ord.length - 1] : null;
+  return {
+    origCOP: origCOP,
+    capitalVivo: saldo,
+    capitalAbonado: capitalAbonado,
+    tramos: tramos,
+    interesDevengado: interesDevengado,
+    interesCobrado: interesCobrado,
+    // Lo que el cliente debe HOY de intereses. Clamp a 0: si pago de mas en un
+    // corte (redondeo, o un pago voluntario por encima), no se le queda debiendo
+    // al reves — ese excedente es un asunto del corte, no del devengo.
+    interesPendiente: Math.max(0, interesDevengado - interesCobrado),
+    fechaUltimoCorte: ultimo ? ultimo.fechaPago : null,
+    diasDesdeUltimoCorte: diasEntre(ultimo ? ultimo.fechaPago : loan.fechaInicio, hastaISO),
+    diasTotales: diasEntre(loan.fechaInicio, hastaISO),
+    // Lo que habria que persistir en las columnas cache de `loans` tras el ultimo
+    // corte. Etapa 3 las escribe; aqui se derivan para que exista UNA sola formula.
+    cache: {
+      fechaUltimoCorte: ultimo ? ultimo.fechaPago : null,
+      interesAcumuladoPend: Math.max(0, interesDevengado - interesCobrado
+        - tramos[tramos.length - 1].interes),
+    },
+  };
+}
+
+// Suma dias a una fecha ISO y devuelve ISO. Solo la usa la variante
+// DIA_DEL_CORTE_A_BASE_VIEJA, pero vive aqui para no repetir el anclaje a mediodia.
+function sumarDias(iso, n) {
+  const d = new Date(String(iso) + 'T12:00:00');
+  d.setDate(d.getDate() + n);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
 module.exports = {
   MODALIDAD_DIARIA,
   MODALIDADES_CONOCIDAS,
+  diasEntre,
+  sumarDias,
+  interesDeTramo,
+  devengoDiario,
   pmt,
   getPayDate,
   tasaPeriodo,

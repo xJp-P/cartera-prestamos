@@ -149,6 +149,26 @@ function aplicarEsquema(db) {
     `);
   } catch(_){}
 
+  // ── Interes Diario (credito abierto): columnas cache del devengo ────────────
+  // El estado del devengo es DERIVABLE de (fechaInicio + los cortes), y esa
+  // derivacion —`devengoDiario` en core/engine.js— sigue siendo la autoridad.
+  // Estas dos columnas son un CACHE del estado en el ultimo evento economico:
+  //
+  //   fechaUltimoCorte      fecha del ultimo corte. NULL -> no hay ninguno, y el
+  //                         devengo arranca en `fechaInicio`. Por eso el default
+  //                         NULL es correcto y no hace falta rellenar nada: los
+  //                         prestamos de las otras 4 modalidades no la usan jamas.
+  //   interesAcumuladoPend  interes devengado y NO cobrado hasta ese corte. Es el
+  //                         arrastre: el modelo NO capitaliza (decision de negocio),
+  //                         asi que el interes impago no puede vivir sumado al
+  //                         capital — necesita columna propia o se perderia.
+  //
+  // Interes de hoy = interesAcumuladoPend + devengo([fechaUltimoCorte, hoy)).
+  // Que el cache y la derivacion completa coincidan es un INVARIANTE verificable,
+  // y es lo que delata una divergencia entre el ledger de cortes y el atajo.
+  try { db.exec("ALTER TABLE loans ADD COLUMN fechaUltimoCorte TEXT"); } catch(_){}
+  try { db.exec("ALTER TABLE loans ADD COLUMN interesAcumuladoPend REAL DEFAULT 0"); } catch(_){}
+
   // ── Tabla de historial de acciones ──────────────────────────────────────────
   db.exec(`
     CREATE TABLE IF NOT EXISTS activity_log (
