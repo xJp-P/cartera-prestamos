@@ -33,6 +33,7 @@ import { properCase, nowStr, addDays, payMatchesQuery } from './core/ui.js';
 import { cobrosDe, imputarCobros, saldoConCaja, pendCuota } from './core/dominio.js';
 import { Ico } from './componentes/iconos.js';
 import { generateCronogramaPDF } from './pdf/cronograma.js';
+import { generateReciboCorte } from './pdf/recibo-corte.js';
 import { generateReciboAbono }   from './pdf/recibo-abono.js';
 
 // Vistas — Etapa 3/B7. El estado sigue en `App` y baja por props.
@@ -369,8 +370,16 @@ function App(){
   var registrarCorte=useCallback(function(loanId,datos){
     return API.post('/api/loans/'+loanId+'/corte',datos).then(function(r){
       if(!r) return null;
-      return reload().then(function(){
+      return reload().then(function(res){
         setCorteModal(null);
+        // Recibo con el estado YA PERSISTIDO (mismo patron que _doAbono en v1.17.0): se
+        // lee lo que el backend guardo, no se replica el motor. En try/catch porque un
+        // fallo del PDF nunca puede tumbar el registro del corte, que ya ocurrio.
+        try {
+          var freshPays=(res&&res[1])||pays;
+          var fila=freshPays.filter(function(p){return String(p.id)===String(r.corte&&r.corte.id);})[0];
+          if(fila) generateReciboCorte(loans.filter(function(l){return String(l.id)===String(loanId);})[0]||((res&&res[0])||[]).filter(function(l){return String(l.id)===String(loanId);})[0],freshPays,fila,{});
+        } catch(_){}
         showToast(r.saldado?'Corte registrado — credito SALDADO':'Corte registrado');
         return r;
       });
@@ -814,7 +823,7 @@ function App(){
       onCorte:function(l){var dRef=debtorModal;setDebtorModal(null);setCorteModal({loan:l,fromDeudor:dRef});},onReestructurar:function(l){var dRef=debtorModal;setDebtorModal(null);setRestructureModal({loan:l,fromDeudor:dRef});},
       // v2.0.0 — el modal de liquidacion se elevo a App; aqui solo se DISPARA, con el mismo
       // patron fromDeudor de onAbono/onReestructurar (Cancelar devuelve al perfil).
-      onRequestLiquidar:function(l){var dRef=debtorModal;setDebtorModal(null);setLiquidarModal({loan:l,fromDeudor:dRef});},onReload:reload}),
+      onRequestLiquidar:function(l){var dRef=debtorModal;setDebtorModal(null);setLiquidarModal({loan:l,fromDeudor:dRef});},onReload:reload,datosPago:cfg.datos_pago}),
     // v2.0.0 — LiquidarModal a nivel App (antes vivia DENTRO de DebtorModal, por eso era
     // inalcanzable desde AbonoModal). La logica de confirmacion es la MISMA de v1.19.0:
     // registrarAbono(...,liquidar=true,...) con el mismo obs y el mismo intExtra.

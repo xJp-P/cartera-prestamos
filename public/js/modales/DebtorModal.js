@@ -15,11 +15,13 @@ import { copToUsd, fmt, fmtD, fmtN, fmtUSD } from '../core/format.js';
 import { h, useState } from '../core/react.js';
 import { freqLabel, nowStr } from '../core/ui.js';
 import { generateCronogramaPDF } from '../pdf/cronograma.js';
+import { generateEstadoCuentaDiario } from '../pdf/estado-cuenta.js';
+import { generateFacturaCobroDiario } from '../pdf/factura-cobro.js';
 import { esAbono } from '../core/ids.js';
 
 // ── DebtorModal ───────────────────────────────────────────────────────────────
 export function DebtorModal(props){
-  var d=props.deudor,pays=props.pays,loans=props.loans,onClose=props.onClose,onNewLoan=props.onNewLoan,onAbono=props.onAbono,onCorte=props.onCorte,onRequestLiquidar=props.onRequestLiquidar,onReload=props.onReload,onReestructurar=props.onReestructurar;
+  var d=props.deudor,pays=props.pays,loans=props.loans,onClose=props.onClose,onNewLoan=props.onNewLoan,onAbono=props.onAbono,onCorte=props.onCorte,onRequestLiquidar=props.onRequestLiquidar,onReload=props.onReload,onReestructurar=props.onReestructurar,datosPago=props.datosPago;
   var ex=useState(null); var expLoan=ex[0]; var setExpLoan=ex[1];
   var cr=useState(null); var cronoLoan=cr[0]; var setCronoLoan=cr[1];
   // v2.0.0 — confirmLiq / incluyeProxMes / liqSending se movieron al componente LiquidarModal
@@ -491,7 +493,12 @@ export function DebtorModal(props){
                   h('button',{onClick:function(e){e.stopPropagation();if(esDiario(l)&&onCorte){onCorte(l);}else{onAbono(l);}},style:btnPrimary},
                     h(Ico,{name:esDiario(l)?'receipt':'dollar',size:15,color:'#fff',sw:2.2}),esDiario(l)?'Registrar corte':'Registrar abono'),
                   h('button',{onClick:function(e){e.stopPropagation();onRequestLiquidar(l);},style:Object.assign({},btnSecondary,{marginTop:6})},
-                    h(Ico,{name:'check',size:15,color:'var(--green)',sw:2.4}),'Liquidar deuda')));
+                    h(Ico,{name:'check',size:15,color:'var(--green)',sw:2.4}),'Liquidar deuda'),
+                  // Cobro del interes devengado. Solo en credito abierto: en las otras 4
+                  // modalidades la factura se emite POR CUOTA desde la vista Pagos, y un
+                  // credito diario no aparece alli porque no tiene cuotas que vencer.
+                  esDiario(l)&&h('button',{onClick:function(e){e.stopPropagation();generateFacturaCobroDiario(l,lp,datosPago,{});},style:Object.assign({},btnSecondary,{marginTop:6})},
+                    h(Ico,{name:'receipt',size:15,color:'var(--green)',sw:2.2}),'Cobrar interes (PDF)')));
               }
               // Tier 2: AJUSTAR CRONOGRAMA
               if(canReestructurar||canCambiarFecha){
@@ -509,8 +516,15 @@ export function DebtorModal(props){
                 h('div',{style:{display:'grid',gridTemplateColumns:l.estado==='Activo'?'1fr 1fr':'1fr',gap:6}},
                   h('button',{onClick:function(e){e.stopPropagation();setCronoLoan(cronoExp?null:l.id);},style:btnGhost},
                     h(Ico,{name:cronoExp?'x':'calendar',size:13,color:'var(--text3)'}),cronoExp?'Ocultar detalle':'Ver detalle'),
-                  l.estado==='Activo'&&h('button',{onClick:function(e){e.stopPropagation();generateCronogramaPDF(l,lp,document.documentElement.getAttribute('data-theme')==='dark');},style:btnGhost},
-                    h(Ico,{name:'download',size:13,color:'var(--text3)'}),'Descargar PDF'))));
+                  // Un credito abierto no tiene cronograma que descargar: su documento
+                  // equivalente es el Estado de Cuenta, que muestra como se genero el
+                  // interes dia a dia. Mismo boton, distinto destino y distinto rotulo —
+                  // duplicarlo obligaria al usuario a elegir entre uno que no aplica.
+                  l.estado==='Activo'&&h('button',{onClick:function(e){e.stopPropagation();
+                      if(esDiario(l)) generateEstadoCuentaDiario(l,lp,{});
+                      else generateCronogramaPDF(l,lp,document.documentElement.getAttribute('data-theme')==='dark');
+                    },style:btnGhost},
+                    h(Ico,{name:'download',size:13,color:'var(--text3)'}),esDiario(l)?'Estado de cuenta':'Descargar PDF'))));
               return sects;
             })(),
             cronoLoan===l.id&&function(){

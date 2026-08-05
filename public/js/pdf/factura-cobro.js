@@ -16,7 +16,7 @@
 
 import { fmt, fmtUSD, fmtD, copToUsd } from '../core/format.js';
 import { nowStr, facturaCode } from '../core/ui.js';
-import { saldoConCaja, pendienteDeCuota } from '../core/dominio.js';
+import { saldoConCaja, pendienteDeCuota, estadoDiario } from '../core/dominio.js';
 
 // ── Recibo de Cobro / Factura (v1.16.0) ──────────────────────────────────────
 // Documento PROSPECTIVO (antes de pagar) para gestion de cartera. Distinto de
@@ -210,5 +210,115 @@ export function generateFacturaCobro(pay, loan, allPays, datosPago, opts) {
     var w = window.open('', '_blank', 'width=560,height=760');
     w.document.write(html); w.document.close();
     w.onload = function() { w.print(); };
+  }
+}
+
+// ── Factura de Cobro — INTERES DIARIO ─────────────────────────────────────────
+// `generateFacturaCobro` (arriba) es prospectiva sobre una CUOTA: mensaje de mora /
+// hoy / proximo vencimiento y exigencia a una fecha concreta. Un credito abierto NO
+// VENCE NUNCA, asi que ese documento entero no aplica: no hay cuota, no hay fecha
+// limite y no puede haber mora. Reutilizarlo obligaria a inventarle un vencimiento.
+//
+// Este cobra lo unico exigible hoy: el INTERES DEVENGADO. El capital vivo se informa
+// —el deudor lo necesita para decidir si abona— pero NO se exige: el "Total a pagar"
+// es solo el interes (decision de negocio). La liquidacion va como opcion secundaria.
+export function generateFacturaCobroDiario(loan, allPays, datosPago, opts) {
+  opts = opts || {};
+  if (!loan) return;
+  var hasta = opts.hasta || nowStr();
+  var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+  var esUSD = loan.moneda === 'USD';
+  var trm = loan.trmAcordada || 1;
+  function money(cop){ return esUSD ? copToUsd(cop, trm) : fmt(cop); }
+  function escD(s){ return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function okD(v){ if (v === null || v === undefined) return false; var s = String(v).trim(); return s !== '' && s !== '0'; }
+
+  var dev = estadoDiario(loan, allPays, hasta);
+  var interesDia = Math.round(dev.capitalVivo * (+loan.tasaMensual || 0) / 100 / 30);
+  var fechaEmision = new Date().toLocaleDateString('es-CO', {day:'2-digit', month:'long', year:'numeric'});
+  var iniD = String(loan.nombre || '').trim().replace(/[^A-Za-z]/g,'').slice(0,2);
+  var fcCode = 'FC-' + (iniD || 'XX') + '-' + String(loan.id).slice(-3) + '-' + String(hasta).slice(8,10) + String(hasta).slice(5,7);
+
+  var K = dark ? {
+    bg:'#0d1117', text:'#e6edf3', muted:'#8b949e', rowbd:'#21262d', panel:'#161b22',
+    green:'#3fb950', greenBg:'#0f2b19', greenBd:'#1b4332', blue:'#79c0ff', blueBg:'#0d2440', blueBd:'#1f3a5f',
+    headBd:'#30363d', foot:'#6e7681', footBd:'#30363d'
+  } : {
+    bg:'#ffffff', text:'#1f2328', muted:'#656d76', rowbd:'#eeeeee', panel:'#f6f8fa',
+    green:'#166534', greenBg:'#f0fdf4', greenBd:'#4ade80', blue:'#0969da', blueBg:'#ddf4ff', blueBd:'#b6e3ff',
+    headBd:'#333333', foot:'#8c959f', footBd:'#dddddd'
+  };
+  function rowD(l, v, color){
+    return '<div class="fd-row"><span class="fd-lab">' + l + '</span><span class="fd-val"' +
+      (color ? ' style="color:' + color + '"' : '') + '>' + v + '</span></div>';
+  }
+  var metaD = [okD(loan.cedula) ? 'C.C. ' + escD(loan.cedula) : '', okD(loan.telefono) ? 'Tel. ' + escD(loan.telefono) : '']
+    .filter(Boolean).join(' &nbsp;&middot;&nbsp; ');
+
+  var htmlD = [
+    '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Cobro - ' + escD(loan.nombre) + '</title><style>',
+    '*{box-sizing:border-box}',
+    'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;margin:0;padding:26px 30px;background:' + K.bg + ';color:' + K.text + ';font-size:12px;line-height:1.45;max-width:520px}',
+    '.fd-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding-bottom:11px;border-bottom:2px solid ' + K.headBd + ';margin-bottom:14px}',
+    '.fd-brand{display:flex;align-items:center;gap:9px}',
+    '.fd-wm{font-size:17px;font-weight:700;letter-spacing:-.3px}',
+    '.fd-sub{font-size:9.5px;color:' + K.muted + ';margin-top:1px}',
+    '.fd-meta{text-align:right}',
+    '.fd-type{font-size:11px;font-weight:700;color:' + K.green + ';letter-spacing:.5px;text-transform:uppercase}',
+    '.fd-num{font-family:ui-monospace,monospace;font-size:10.5px;color:' + K.muted + ';margin-top:2px}',
+    '.fd-date{font-size:9.5px;color:' + K.foot + ';margin-top:1px}',
+    '.fd-st{font-size:9.5px;color:' + K.muted + ';text-transform:uppercase;letter-spacing:.7px}',
+    '.fd-name{font-size:16px;font-weight:700;margin:2px 0 1px}',
+    '.fd-cc{font-size:10px;color:' + K.muted + '}',
+    '.fd-info{margin-top:12px;padding:9px 13px;background:' + K.blueBg + ';border:1px solid ' + K.blueBd + ';border-radius:9px;font-size:10.5px;line-height:1.5;color:' + K.blue + '}',
+    '.fd-hero{margin:14px 0 2px;padding:15px;text-align:center;background:' + K.greenBg + ';border:1px solid ' + K.greenBd + ';border-radius:12px}',
+    '.fd-hero .l{font-size:9.5px;color:' + K.muted + ';text-transform:uppercase;letter-spacing:.8px}',
+    '.fd-hero .a{font-size:29px;font-weight:700;color:' + K.green + ';font-family:ui-monospace,monospace;margin-top:3px}',
+    '.fd-sec{font-size:9.5px;font-weight:700;color:' + K.muted + ';letter-spacing:.8px;text-transform:uppercase;margin:16px 0 6px}',
+    '.fd-row{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid ' + K.rowbd + ';font-size:11.5px}',
+    '.fd-lab{color:' + K.muted + '}',
+    '.fd-val{font-family:ui-monospace,monospace;font-weight:600;white-space:nowrap}',
+    '.fd-sm{font-size:9.5px;color:' + K.foot + '}',
+    '.fd-caja{margin-top:11px;padding:11px 14px;border-radius:9px;display:flex;justify-content:space-between;align-items:center;gap:12px;background:' + K.blueBg + ';border:1px solid ' + K.blueBd + '}',
+    '.fd-caja .q{font-size:12px;font-weight:700;color:' + K.blue + '}',
+    '.fd-caja .v{font-size:18px;font-weight:700;font-family:ui-monospace,monospace;color:' + K.blue + ';white-space:nowrap}',
+    '.fd-pay{font-size:11px;line-height:1.6;white-space:pre-line}',
+    '.fd-foot{margin-top:17px;padding-top:9px;border-top:1px solid ' + K.footBd + ';text-align:center;color:' + K.foot + ';font-size:9.5px;line-height:1.55}',
+    '.fd-foot b{color:' + K.green + '}',
+    dark ? '@media print{html,body{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}@page{margin:0}html{background:#0d1117!important}body{max-width:none;padding:1.3cm;background:#0d1117!important;color:#e6edf3!important;min-height:100vh}}'
+         : '@media print{html,body{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}@page{margin:0}html{background:#ffffff!important}body{max-width:none;padding:1.3cm;background:#ffffff!important;color:#1f2328!important;min-height:100vh}}',
+    '</style></head><body>',
+    '<div class="fd-head"><div class="fd-brand">',
+    '<svg width="32" height="32" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg"><rect width="36" height="36" rx="9" fill="' + K.green + '"/><text x="18" y="25" font-family="Arial,sans-serif" font-size="21" font-weight="700" fill="#ffffff" text-anchor="middle">C</text></svg>',
+    '<div><div class="fd-wm">Cartera</div><div class="fd-sub">Gestion de cartera de credito</div></div></div>',
+    '<div class="fd-meta"><div class="fd-type">Cobro</div><div class="fd-num">' + fcCode + '</div>',
+    '<div class="fd-date">Emision: ' + fechaEmision + '</div></div></div>',
+    '<div class="fd-st">Cobro a</div>',
+    '<div class="fd-name">' + escD(loan.nombre) + '</div>',
+    (metaD ? '<div class="fd-cc">' + metaD + '</div>' : ''),
+    '<div class="fd-info">Credito abierto: <b>no tiene fecha de vencimiento</b>. Puedes pagar los intereses generados o abonar a capital cuando quieras.</div>',
+    '<div class="fd-hero"><div class="l">Interes devengado al ' + fmtD(hasta) + '</div><div class="a">' + money(dev.interesPendiente) + '</div></div>',
+    '<div class="fd-sec">De donde sale</div>',
+    rowD('Capital vivo', money(dev.capitalVivo)),
+    rowD('Interes por dia', money(interesDia)),
+    rowD('Dias desde el ultimo movimiento<div class="fd-sm">' +
+      (dev.fechaUltimoCorte ? ('Ultimo corte: ' + fmtD(dev.fechaUltimoCorte)) : ('Inicio del credito: ' + fmtD(loan.fechaInicio))) + '</div>',
+      String(dev.diasDesdeUltimoCorte)),
+    rowD('<b>Total a pagar</b>', '<b>' + money(dev.interesPendiente) + '</b>', K.green),
+    '<div class="fd-caja"><span class="q">Si prefieres liquidar todo hoy</span><span class="v">' +
+      money(dev.capitalVivo + dev.interesPendiente) + '</span></div>',
+    (datosPago && String(datosPago).trim()
+      ? '<div class="fd-sec">Como pagar</div><div class="fd-pay">' + escD(datosPago) + '</div>' : ''),
+    '<div class="fd-foot">Generado por <b>Cartera</b> &nbsp;&middot;&nbsp; ' + fcCode + ' &nbsp;&middot;&nbsp; ' + fechaEmision + '</div>',
+    '</body></html>'
+  ].join('\n');
+
+  var fnameD = 'FC ' + loan.nombre + ' - interes ' + hasta;
+  if (window.electronAPI && window.electronAPI.printPDF) {
+    window.electronAPI.printPDF(htmlD, fnameD);
+  } else {
+    var wD = window.open('', '_blank', 'width=560,height=800');
+    wD.document.write(htmlD); wD.document.close();
+    wD.onload = function() { wD.print(); };
   }
 }

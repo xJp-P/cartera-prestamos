@@ -15,7 +15,8 @@
 // `computeLiquidacion`, que resta el parcial APARTE; migrarlo lo restaria dos veces.
 
 import { fmt, fmtUSD, fmtD, copToUsd } from '../core/format.js';
-import { saldoConCaja } from '../core/dominio.js';
+import { saldoConCaja, esDiario, estadoDiario } from '../core/dominio.js';
+import { nowStr } from '../core/ui.js';
 import { esAbono } from '../core/ids.js';
 
 // ── Reporte de Prestamos Activos (PDF) ────────────────────────────────────
@@ -83,6 +84,21 @@ export function generateReportePrestamosPDF(loans, pays, darkMode) {
       else if (l.modalidad === 'Prestamo' || l.modalidad === 'Pago Unico') proxLabel = '1/1';
       else proxLabel = mainCuota.cuotaN + '/' + (l.plazoMeses || '?');                   // N/M
     } else { vencLabel = '—'; proxLabel = '—'; proxValor = 0; proxValorLabel = '—'; }
+    // ── INTERES DIARIO ────────────────────────────────────────────────────────
+    // Un credito abierto no tiene cuota que proyectar, asi que las tres columnas
+    // salian en '—' y el reporte no decia NADA util de el. Se reinterpretan con lo
+    // que si tiene: desde cuando devenga, cuantos dias lleva y cuanto genera al dia.
+    // El saldo pasa a incluir el interes devengado: es lo que habria que cobrar hoy,
+    // y ese es el sentido de un "capital en la calle".
+    var devD = null;
+    if (esDiario(l)) {
+      devD = estadoDiario(l, lp, nowStr());
+      vencLabel = devD.fechaUltimoCorte ? fmtD(devD.fechaUltimoCorte) : fmtD(l.fechaInicio);
+      proxLabel = devD.diasDesdeUltimoCorte + ' dias';
+      proxValor = Math.round(devD.capitalVivo * (+l.tasaMensual || 0) / 100 / 30);
+      proxValorLabel = fmt(proxValor) + '/dia';
+      saldo = devD.capitalVivo + devD.interesPendiente;
+    }
     var tasaStr;
     if (l.modalidad === 'Pago Unico') {
       var pct = (l.gananciaFija > 0 && originalCOP > 0) ? (Math.round(l.gananciaFija / originalCOP * 1000) / 10) : 0;

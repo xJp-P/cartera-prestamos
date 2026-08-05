@@ -16,7 +16,7 @@
 
 import { fmt, fmtUSD, fmtD, copToUsd } from '../core/format.js';
 import { nowStr, properCase } from '../core/ui.js';
-import { saldoConCaja, pendienteDeCuota, computeLiquidacion } from '../core/dominio.js';
+import { saldoConCaja, pendienteDeCuota, computeLiquidacion, esDiario } from '../core/dominio.js';
 import { esAbono } from '../core/ids.js';
 
 // ── Recibo de Abono a Capital (v1.17.0) ──────────────────────────────────────
@@ -30,6 +30,12 @@ import { esAbono } from '../core/ids.js';
 export function generateReciboAbono(loan, allPays, opts) {
   opts = opts || {};
   if (!loan) return;
+  // En un credito de interes diario los abonos NO pasan por aqui: van por CORTE, y su
+  // comprobante es `generateReciboCorte`. La ruta /abono ya los rechaza, asi que esto
+  // es inalcanzable — pero si algun dia se alcanzara, este generador imprimiria un
+  // documento SIN SENTIDO: un "cronograma actualizado" vacio y un impacto sobre una
+  // cuota que no existe. Se prefiere no emitir nada a emitir algo falso.
+  if (esDiario(loan)) return;
   var dark = document.documentElement.getAttribute('data-theme') === 'dark';
   var esUSD = loan.moneda === 'USD';
   var trm = loan.trmAcordada || 1;
