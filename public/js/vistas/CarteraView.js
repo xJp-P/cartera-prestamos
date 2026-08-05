@@ -6,15 +6,15 @@
 // Sin Context API y sin store: eso seria rediseno, no refactor.
 
 import { Ico } from '../componentes/iconos.js';
-import { imputarCobros, saldoConCaja, esDiario, progresoCapital } from '../core/dominio.js';
+import { imputarCobros, saldoConCaja, esDiario, progresoCapital, estadoDiario } from '../core/dominio.js';
 import { copToUsd, fmt, fmtD, fmtN, fmtUSD } from '../core/format.js';
 import { h, useState } from '../core/react.js';
-import { freqLabel } from '../core/ui.js';
+import { freqLabel, nowStr } from '../core/ui.js';
 import { esAbono } from '../core/ids.js';
 
 // ── Cartera ───────────────────────────────────────────────────────────────────
 export function CarteraView(props){
-  var loans=props.loans,pays=props.pays,onAdd=props.onAdd,onEdit=props.onEdit,onDelete=props.onDelete,onAbono=props.onAbono,onForceClose=props.onForceClose;
+  var loans=props.loans,pays=props.pays,onAdd=props.onAdd,onEdit=props.onEdit,onDelete=props.onDelete,onAbono=props.onAbono,onCorte=props.onCorte,onForceClose=props.onForceClose;
   var es=useState(null); var exp=es[0]; var setExp=es[1];
   var ft=useState('Activo'); var filtro=ft[0]; var setFiltro=ft[1];
   var active=loans.filter(function(l){return l.estado==='Activo';});
@@ -64,6 +64,9 @@ export function CarteraView(props){
         // devuelto, que es lo unico que avanza hacia el cierre (el interes se cobra y se
         // vuelve a generar: no es progreso).
         var pct=esDiario(loan)?progresoCapital(loan,lp):(totEsp>0?Math.round(totRec/totEsp*100):0);
+        // Devengo al dia de HOY. Null en las otras 4 modalidades, de modo que cada bloque
+        // se enciende con `devD&&...` sin ramificar toda la tarjeta.
+        var devD=esDiario(loan)&&loan.estado==='Activo'?estadoDiario(loan,lp,nowStr()):null;
         return h('div',{key:loan.id,className:'loan-card',style:{background:'var(--bg2)',borderRadius:14,border:'1px solid '+(mora>0?'var(--red-bd)':'var(--border)'),boxShadow:'var(--shadow)',overflow:'hidden',transition:'border-color .15s'}},
           h('div',{style:{padding:'13px 14px 11px'}},
             h('div',{style:{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:8}},
@@ -81,16 +84,26 @@ export function CarteraView(props){
                   loan.modalidad==='Intereses'&&h('span',{className:'tag',style:{background:'var(--blue-bg)',color:'var(--blue)'}},'\u221E Indefinido'),
                   loan.modalidad==='Prestamo'&&h('span',{className:'tag',style:{background:'var(--yellow-bg)',color:'var(--yellow)'}},'Sin interes'),
                   loan.modalidad==='Pago Unico'&&h('span',{className:'tag',style:{background:'var(--green-bg)',color:'var(--green)'}},'Pago unico'),
+                  esDiario(loan)&&h('span',{className:'tag',style:{background:'var(--blue-bg)',color:'var(--blue)'}},'Interes diario'),
                   mora>0&&h('span',{className:'tag',style:{background:'var(--red-bg)',color:'var(--red)'}},mora+' mora')),
                 h('div',{style:{display:'flex',gap:8,marginTop:5,flexWrap:'wrap',alignItems:'center'}},
                   h('span',{className:'mono',style:{fontSize:13,color:'var(--green)',fontWeight:600}},loan.moneda==='USD'?'$'+fmtN(loan.montoOrigen)+' USD | '+fmt(Math.round(loan.montoOrigen*loan.trmAcordada)):fmt(Math.round(loan.montoOrigen))),
                   h('span',{style:{fontSize:13,color:'var(--border2)'}},' | '),
                   h('span',{style:{fontSize:13,color:'var(--text2)'}},loan.tasaMensual+'% mens.'),
-                  h('span',{style:{fontSize:13,color:'var(--border2)'}},' | '),
-                  h('span',{style:{fontSize:13,color:'var(--text2)'}},freqLabel(loan))),
-                h('div',{style:{fontSize:12,color:'var(--text3)',marginTop:3}},loan.modalidad+' - '+paid+' pagadas')),
+                  // Un credito abierto no tiene frecuencia de cobro: lo que importa es
+                  // cuanto lleva devengando desde el ultimo movimiento.
+                  !esDiario(loan)&&h('span',{style:{fontSize:13,color:'var(--border2)'}},' | '),
+                  !esDiario(loan)&&h('span',{style:{fontSize:13,color:'var(--text2)'}},freqLabel(loan)),
+                  devD&&h('span',{style:{fontSize:13,color:'var(--border2)'}},' | '),
+                  devD&&h('span',{style:{fontSize:13,color:'var(--blue)',fontWeight:600}},'devengando hace '+devD.diasDesdeUltimoCorte+' dia'+(devD.diasDesdeUltimoCorte===1?'':'s'))),
+                // "N pagadas" no significa nada sin cronograma: se muestra el capital vivo.
+                h('div',{style:{fontSize:12,color:'var(--text3)',marginTop:3}},
+                  devD?(loan.modalidad+' - capital vivo '+fmt(devD.capitalVivo)):(loan.modalidad+' - '+paid+' pagadas'))),
               h('div',{style:{display:'flex',gap:5,flexShrink:0}},
-                loan.estado==='Activo'&&h('button',{onClick:function(){onAbono(loan);},title:'Abono a capital',style:{padding:7,background:'var(--green-bg)',border:'none',borderRadius:8,cursor:'pointer',display:'flex'}},h(Ico,{name:'dollar',size:14,color:'var(--green)',sw:1.8})),
+                // En un credito abierto el abono NO va por /abono (crearia una fila que el
+                // motor del devengo no mira): va por CORTE, que baja capital y liquida el
+                // interes en el mismo movimiento.
+                loan.estado==='Activo'&&h('button',{onClick:function(){if(esDiario(loan)&&onCorte){onCorte(loan);}else{onAbono(loan);}},title:esDiario(loan)?'Registrar corte':'Abono a capital',style:{padding:7,background:'var(--green-bg)',border:'none',borderRadius:8,cursor:'pointer',display:'flex'}},h(Ico,{name:esDiario(loan)?'receipt':'dollar',size:14,color:'var(--green)',sw:1.8})),
                 loan.estado==='Activo'&&onForceClose&&h('button',{onClick:function(){onForceClose(loan);},title:'Cerrar prestamo (forzar)',style:{padding:7,background:'var(--yellow-bg)',border:'none',borderRadius:8,cursor:'pointer',display:'flex'}},h(Ico,{name:'xCircle',size:14,color:'var(--yellow)',sw:1.8})),
                 h('button',{onClick:function(){onEdit(loan);},title:'Editar',style:{padding:7,background:'var(--blue-bg)',border:'none',borderRadius:8,cursor:'pointer',display:'flex'}},h(Ico,{name:'edit',size:14,color:'var(--blue)',sw:1.8})),
                 h('button',{onClick:function(){onDelete(loan.id);},title:'Eliminar prestamo',style:{padding:7,background:'var(--red-bg)',border:'none',borderRadius:8,cursor:'pointer',display:'flex'}},h(Ico,{name:'trash',size:14,color:'var(--red)',sw:1.8})))),
@@ -98,6 +111,25 @@ export function CarteraView(props){
               h('div',{style:{flex:1,height:5,background:'var(--bg4)',borderRadius:99,overflow:'hidden'}},
                 h('div',{style:{height:'100%',width:pct+'%',background:'linear-gradient(90deg,#2ea043,#3fb950)',borderRadius:99}})),
               h('span',{className:'mono',style:{fontSize:15,fontWeight:700,color:'var(--green)',flexShrink:0,minWidth:42,textAlign:'right'}},pct+'%'))),
+            // ── Credito abierto: lo que define al producto ────────────────────────
+            // El interes devengado y no cobrado no vive en ninguna fila —se deriva del
+            // tiempo transcurrido— asi que sin este bloque simplemente NO SE VE, y es
+            // justo lo que el cliente debe hoy. Se muestra la formula (dias x tasa/dia)
+            // porque es lo que permite al usuario verificar la cifra antes de cobrar.
+            devD&&h('div',{style:{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}},
+              h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:10}},
+                h('div',{style:{minWidth:0}},
+                  h('div',{style:{fontSize:12,color:'var(--text2)',fontWeight:600}},'Interes devengado por cobrar'),
+                  h('div',{style:{fontSize:10.5,color:'var(--text3)',marginTop:2}},
+                    devD.diasDesdeUltimoCorte+' dia'+(devD.diasDesdeUltimoCorte===1?'':'s')+' x '+
+                    fmt(Math.round(devD.capitalVivo*(+loan.tasaMensual||0)/100/30))+'/dia'+
+                    (devD.fechaUltimoCorte?(' · ultimo corte '+fmtD(devD.fechaUltimoCorte)):' · sin cortes aun'))),
+                h('div',{style:{textAlign:'right',flexShrink:0}},
+                  h('div',{className:'mono',style:{fontSize:14,fontWeight:700,color:'var(--blue)'}},fmt(devD.interesPendiente)),
+                  loan.moneda==='USD'&&h('div',{className:'mono',style:{fontSize:10,color:'var(--blue)'}},copToUsd(devD.interesPendiente,loan.trmAcordada)))),
+              h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:8,background:'var(--blue-bg)',borderRadius:8,padding:'8px 10px'}},
+                h('span',{style:{fontSize:12,color:'var(--text2)',fontWeight:600}},'Liquidar hoy'),
+                h('span',{className:'mono',style:{fontSize:15,fontWeight:700,color:'var(--blue)'}},fmt(devD.capitalVivo+devD.interesPendiente)))),
             h('button',{onClick:function(){setExp(isExp?null:loan.id);},style:{marginTop:8,background:'none',border:'none',cursor:'pointer',color:'var(--green)',fontSize:12,fontWeight:600,display:'flex',alignItems:'center',gap:4,padding:0}},
               isExp?'Ocultar cronograma':'Ver cronograma')),
           isExp&&function(){

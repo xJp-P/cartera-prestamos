@@ -51,6 +51,7 @@ import { DebtorModal } from './modales/DebtorModal.js';
 import { PayModal } from './modales/PayModal.js';
 import { PreflightMoraModal } from './modales/PreflightMoraModal.js';
 import { AbonoModal } from './modales/AbonoModal.js';
+import { CorteModal } from './modales/CorteModal.js';
 import { LiquidarModal } from './modales/LiquidarModal.js';
 import { RestructureModal } from './modales/RestructureModal.js';
 import { LoanModal } from './modales/LoanModal.js';
@@ -92,6 +93,10 @@ function App(){
   // v2.0.0 — modal de liquidacion ELEVADO desde DebtorModal a nivel App: ahora es un modal
   // hermano de AbonoModal, invocable desde el perfil del deudor Y desde el CTA de AbonoModal.
   var s13=useState(null); var liquidarModal=s13[0]; var setLiquidarModal=s13[1];
+  // Corte de un credito de interes diario. Nombre propio en vez de `sNN`: ya hay dos
+  // `var s13` en este bloque (funciona por el orden de asignacion, pero no hace falta
+  // sumar una tercera colision).
+  var sCorte=useState(null); var corteModal=sCorte[0]; var setCorteModal=sCorte[1];
   var s13=useState(false); var menuOpen=s13[0]; var setMenuOpen=s13[1];
   var s14=useState(null); var calcData=s14[0]; var setCalcData=s14[1];
   var s15=useState(null); var toast=s15[0]; var setToast=s15[1];
@@ -357,9 +362,35 @@ function App(){
     }});
   },[pays,reload]);
 
+  // Corte de un credito abierto. Devuelve la promesa para que `_submitGuard` del modal
+  // pueda liberarse (doctrina v1.18.1). Si `r` es null la escritura NO ocurrio —API.post
+  // atrapa el error y resuelve null— asi que el modal NO se cierra y no se emite toast:
+  // es el guard que faltaba en el Bug #33, donde un fallo mostraba "Pago registrado".
+  var registrarCorte=useCallback(function(loanId,datos){
+    return API.post('/api/loans/'+loanId+'/corte',datos).then(function(r){
+      if(!r) return null;
+      return reload().then(function(){
+        setCorteModal(null);
+        showToast(r.saldado?'Corte registrado — credito SALDADO':'Corte registrado');
+        return r;
+      });
+    });
+  },[reload]);
+
+  // Devuelve la promesa con la respuesta para que DevView pueda mostrar los `omitidos`.
+  // Desde la Etapa 1 este endpoint puede saltarse un prestamo (modalidad que el motor no
+  // reconoce, o una regeneracion que huerfanaria un pago parcial) y seguir con los demas.
+  // Un toast fijo de "Cronogramas recalculados" mentiria justo cuando hay algo que mirar.
   var recalculate=useCallback(function(){
-    API.post('/api/recalculate',{}).then(function(r){
-      reload();showToast('Cronogramas recalculados');
+    return API.post('/api/recalculate',{}).then(function(r){
+      if(!r){showToast('No se pudo sincronizar','error');return null;}
+      var om=(r.omitidos||[]).length;
+      return reload().then(function(){
+        // El detalle lo muestra DevView en un panel persistente: un toast de 2 segundos
+        // no es sitio para una lista que el usuario tiene que leer y actuar.
+        showToast(om>0?('Sincronizado — '+om+' omitido'+(om===1?'':'s')):'Cronogramas recalculados',om>0?'error':'success');
+        return r;
+      });
     });
   },[reload]);
 
@@ -755,7 +786,7 @@ function App(){
         h('button',{onClick:function(){window.electronAPI.installUpdate();},style:{background:'var(--green2)',color:'#fff',border:'none',borderRadius:8,padding:'6px 14px',fontSize:11,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}},'Reiniciar e instalar')),
       h('div',{className:'main-content'},
       view==='dashboard'  && h(DashView,  {metrics:metrics,isEmpty:loans.length===0,onNav:navTo,loans:loans,pays:pays,onNameClick:openDebtorByName,onNewLoan:function(){navTo('cartera');setLoanModal('new');}}),
-      view==='cartera'    && h(CarteraView,{loans:loans,pays:pays,onAdd:function(){setLoanModal('new');},onEdit:setLoanModal,onDelete:delLoan,onAbono:setAbonoModal,onForceClose:forceCloseLoan}),
+      view==='cartera'    && h(CarteraView,{loans:loans,pays:pays,onAdd:function(){setLoanModal('new');},onEdit:setLoanModal,onDelete:delLoan,onAbono:setAbonoModal,onCorte:setCorteModal,onForceClose:forceCloseLoan}),
       view==='deudores'   && h(DeudoresView,{deudores:deudores,pays:pays,onSelect:setDebtorModal,onAdd:function(){setLoanModal('new');}}),
       view==='pagos'      && h(PagosView,  {pays:filtPays,allPays:pays,loans:loans,searchQ:searchQ,setSearchQ:setSearchQ,fMonth:fMonth,setFMonth:setFMonth,onSelect:openPayModal,onQuickPay:quickPay,onNameClick:openDebtorByName,datosPago:cfg.datos_pago}),
       view==='rendimiento'&& h(PortfolioView,{loans:loans,pays:pays}),
@@ -777,7 +808,10 @@ function App(){
       // modal de liquidacion CONSERVANDO fromDeudor, para que Cancelar devuelva al perfil.
       // No se reutiliza onClose a proposito: ese re-abriria DebtorModal encima.
       onRequestLiquidar:function(l){var fd=abonoModal&&abonoModal.fromDeudor;setAbonoModal(null);setLiquidarModal({loan:l,fromDeudor:fd});}}),
-    debtorModal&&h(DebtorModal,{deudor:debtorModal,pays:pays,loans:loans,onClose:function(){setDebtorModal(null);},onNewLoan:function(d){setDebtorModal(null);setLoanModal({_prefill:{nombre:d.nombre,cedula:d.cedula,telefono:d.telefono}});},onAbono:function(l){var dRef=debtorModal;setDebtorModal(null);setAbonoModal({loan:l,fromDeudor:dRef});},onReestructurar:function(l){var dRef=debtorModal;setDebtorModal(null);setRestructureModal({loan:l,fromDeudor:dRef});},
+    corteModal&&h(CorteModal,{loan:corteModal.loan||corteModal,pays:pays,onSave:registrarCorte,
+      onClose:function(){if(corteModal.fromDeudor){setDebtorModal(corteModal.fromDeudor);} setCorteModal(null);}}),
+    debtorModal&&h(DebtorModal,{deudor:debtorModal,pays:pays,loans:loans,onClose:function(){setDebtorModal(null);},onNewLoan:function(d){setDebtorModal(null);setLoanModal({_prefill:{nombre:d.nombre,cedula:d.cedula,telefono:d.telefono}});},onAbono:function(l){var dRef=debtorModal;setDebtorModal(null);setAbonoModal({loan:l,fromDeudor:dRef});},
+      onCorte:function(l){var dRef=debtorModal;setDebtorModal(null);setCorteModal({loan:l,fromDeudor:dRef});},onReestructurar:function(l){var dRef=debtorModal;setDebtorModal(null);setRestructureModal({loan:l,fromDeudor:dRef});},
       // v2.0.0 — el modal de liquidacion se elevo a App; aqui solo se DISPARA, con el mismo
       // patron fromDeudor de onAbono/onReestructurar (Cancelar devuelve al perfil).
       onRequestLiquidar:function(l){var dRef=debtorModal;setDebtorModal(null);setLiquidarModal({loan:l,fromDeudor:dRef});},onReload:reload}),

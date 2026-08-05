@@ -7,7 +7,7 @@
 
 import { SparklineChart } from '../componentes/SparklineChart.js';
 import { Ico } from '../componentes/iconos.js';
-import { cobrosDe, imputarCobros, pendCuota } from '../core/dominio.js';
+import { cobrosDe, imputarCobros, pendCuota, esDiario, estadoDiario } from '../core/dominio.js';
 import { copToUsd, fmt, fmtD, fmtN, fmtUSD } from '../core/format.js';
 import { h, useMemo, useState } from '../core/react.js';
 import { nowStr } from '../core/ui.js';
@@ -191,6 +191,31 @@ export function DashView(props){
       prestamosCOP>0&&h('div',{style:chipStyle},prestamosCOP+(prestamosCOP===1?' COP':' en COP')),
       prestamosUSD>0&&h('div',{style:Object.assign({},chipStyle,{color:'var(--blue)',background:'var(--blue-bg)',border:'1px solid var(--blue-bd)'})},prestamosUSD+(prestamosUSD===1?' USD':' en USD')),
       metrics.mora.length>0&&h('div',{style:Object.assign({},chipStyle,{color:'var(--red)',background:'var(--red-bg)',border:'1px solid var(--red-bd)'})},h(Ico,{name:'alert',size:10,color:'var(--red)',sw:2.2}),' ',metrics.mora.length+(metrics.mora.length===1?' cuota mora':' cuotas mora'))),
+    // ── INTERES DEVENGADO POR COBRAR (creditos abiertos) ────────────────
+    // Tarjeta PROPIA y fuera del Recaudo del mes, por decision de negocio: el devengo no
+    // es una meta del mes ni una cuota que venza — es dinero que ya se gano y que el
+    // cliente puede pagar cuando quiera. Mezclarlo con el ESPERADO distorsionaria las dos
+    // cifras. Va ARRIBA del grid de cards para no romper el 2x2 estricto (doctrina).
+    // Solo aparece si hay creditos abiertos activos: en una cartera sin ellos, no existe.
+    function(){
+      var abiertos=loans.filter(function(l){return esDiario(l)&&l.estado==='Activo';});
+      if(abiertos.length===0) return null;
+      var hoyD=nowStr();
+      var tot=abiertos.reduce(function(s,l){return s+estadoDiario(l,pays,hoyD).interesPendiente;},0);
+      var porDia=abiertos.reduce(function(s,l){
+        return s+Math.round(estadoDiario(l,pays,hoyD).capitalVivo*(+l.tasaMensual||0)/100/30);
+      },0);
+      return h('div',{style:{background:'var(--blue-bg)',border:'1px solid var(--blue-bd)',borderRadius:14,padding:'12px 14px',marginBottom:12}},
+        h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:10}},
+          h('div',{style:{minWidth:0}},
+            h('div',{style:{display:'flex',alignItems:'center',gap:6}},
+              h(Ico,{name:'clock',size:14,color:'var(--blue)',sw:2}),
+              h('span',{style:{fontWeight:700,fontSize:13,color:'var(--blue)'}},'Interes devengado por cobrar')),
+            h('div',{style:{fontSize:11,color:'var(--text3)',marginTop:3}},
+              abiertos.length+' credito'+(abiertos.length===1?'':'s')+' abierto'+(abiertos.length===1?'':'s')+
+              ' · genera '+fmt(porDia)+' cada dia')),
+          h('div',{className:'mono',style:{fontSize:19,fontWeight:700,color:'var(--blue)',flexShrink:0}},fmt(tot))));
+    }(),
     // ── RECAUDO DEL MES (progress bar collapsible) ──────────────────────
     // v1.9.x — si pct > 100 (se supero la meta gracias a mora recuperada), la barra se capa
     // visualmente al 100% pero el % real se renderiza y se cambia el color a dorado.

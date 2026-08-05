@@ -207,6 +207,10 @@ export function PortfolioView(props){
             h('span',{style:{color:'var(--blue)'}},'\u221E')):h('div',{style:{display:'flex',alignItems:'center',gap:8}},
             h('div',{style:{flex:1,height:6,background:'var(--bg3)',borderRadius:3,overflow:'hidden',position:'relative'}},
               h('div',{style:{width:m.pctMonto+'%',height:'100%',background:m.enMora&&l.estado==='Activo'?'var(--red)':'var(--green)',borderRadius:3,transition:'width .3s'}})),
-            h('span',{style:{fontSize:11,color:'var(--text3)',whiteSpace:'nowrap'}},m.cuotasPaid+'/'+m.cuotasTotal+' ('+m.pctMonto+'%)')));
+            // "N/M cuotas" no existe en un credito abierto: se rotula el capital devuelto,
+            // que es lo que la barra esta midiendo de verdad.
+            h('span',{style:{fontSize:11,color:'var(--text3)',whiteSpace:'nowrap'}},
+              esDiario(l)?(fmt(m.capRec)+' de '+fmt(m.loan.moneda==='USD'?Math.round(m.loan.montoOrigen*m.loan.trmAcordada):Math.round(m.loan.montoOrigen))+' ('+m.pctMonto+'%)')
+                         :(m.cuotasPaid+'/'+m.cuotasTotal+' ('+m.pctMonto+'%)'))));
       })));
 }

@@ -10,16 +10,16 @@ import { Modal } from '../componentes/base.js';
 import { Ico } from '../componentes/iconos.js';
 import { API, showError } from '../core/api.js';
 import { _pmt } from '../core/calculo.js';
-import { computeLiquidacion, imputarCobros, pendCuota, esDiario, progresoCapital } from '../core/dominio.js';
+import { computeLiquidacion, imputarCobros, pendCuota, esDiario, progresoCapital, estadoDiario } from '../core/dominio.js';
 import { copToUsd, fmt, fmtD, fmtN, fmtUSD } from '../core/format.js';
 import { h, useState } from '../core/react.js';
-import { freqLabel } from '../core/ui.js';
+import { freqLabel, nowStr } from '../core/ui.js';
 import { generateCronogramaPDF } from '../pdf/cronograma.js';
 import { esAbono } from '../core/ids.js';
 
 // ── DebtorModal ───────────────────────────────────────────────────────────────
 export function DebtorModal(props){
-  var d=props.deudor,pays=props.pays,loans=props.loans,onClose=props.onClose,onNewLoan=props.onNewLoan,onAbono=props.onAbono,onRequestLiquidar=props.onRequestLiquidar,onReload=props.onReload,onReestructurar=props.onReestructurar;
+  var d=props.deudor,pays=props.pays,loans=props.loans,onClose=props.onClose,onNewLoan=props.onNewLoan,onAbono=props.onAbono,onCorte=props.onCorte,onRequestLiquidar=props.onRequestLiquidar,onReload=props.onReload,onReestructurar=props.onReestructurar;
   var ex=useState(null); var expLoan=ex[0]; var setExpLoan=ex[1];
   var cr=useState(null); var cronoLoan=cr[0]; var setCronoLoan=cr[1];
   // v2.0.0 — confirmLiq / incluyeProxMes / liqSending se movieron al componente LiquidarModal
@@ -486,8 +486,10 @@ export function DebtorModal(props){
               if(canAbonar){
                 sects.push(h('div',{key:'g1'},
                   h('div',{style:labelStyle},'Cobrar'),
-                  h('button',{onClick:function(e){e.stopPropagation();onAbono(l);},style:btnPrimary},
-                    h(Ico,{name:'dollar',size:15,color:'#fff',sw:2.2}),'Registrar abono'),
+                  // En un credito abierto el boton principal es el CORTE: /abono lo rechaza
+                  // porque crearia una fila que el motor del devengo no mira.
+                  h('button',{onClick:function(e){e.stopPropagation();if(esDiario(l)&&onCorte){onCorte(l);}else{onAbono(l);}},style:btnPrimary},
+                    h(Ico,{name:esDiario(l)?'receipt':'dollar',size:15,color:'#fff',sw:2.2}),esDiario(l)?'Registrar corte':'Registrar abono'),
                   h('button',{onClick:function(e){e.stopPropagation();onRequestLiquidar(l);},style:Object.assign({},btnSecondary,{marginTop:6})},
                     h(Ico,{name:'check',size:15,color:'var(--green)',sw:2.4}),'Liquidar deuda')));
               }
@@ -568,7 +570,27 @@ export function DebtorModal(props){
             l.modalidad==='Intereses'?h('div',{style:{marginTop:8,display:'flex',alignItems:'center',gap:6}},
               h('span',{style:{fontSize:10,color:'var(--text3)'}},pagadas+' cuotas pagadas'),
               h('span',{style:{fontSize:10,color:'var(--blue)'}},'\u221E')):h('div',{style:{marginTop:8,height:5,background:'var(--bg4)',borderRadius:99,overflow:'hidden'}},
-              h('div',{style:{height:'100%',width:pct+'%',background:enMora.length>0?'var(--red)':'var(--green)',borderRadius:99}}))))}());
+              h('div',{style:{height:'100%',width:pct+'%',background:enMora.length>0?'var(--red)':'var(--green)',borderRadius:99}})),
+            // Credito abierto: el interes devengado no vive en ninguna fila, asi que sin
+            // este bloque el perfil del deudor no mostraria lo que el cliente debe HOY.
+            (function(){
+              if(!esDiario(l)||l.estado!=='Activo') return null;
+              var dv=estadoDiario(l,lp,nowStr());
+              return h('div',{style:{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}},
+                h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:10}},
+                  h('div',{style:{minWidth:0}},
+                    h('div',{style:{fontSize:12,color:'var(--text2)',fontWeight:600}},'Interes devengado por cobrar'),
+                    h('div',{style:{fontSize:10.5,color:'var(--text3)',marginTop:2}},
+                      dv.diasDesdeUltimoCorte+' dia'+(dv.diasDesdeUltimoCorte===1?'':'s')+' x '+
+                      fmt(Math.round(dv.capitalVivo*(+l.tasaMensual||0)/100/30))+'/dia'+
+                      (dv.fechaUltimoCorte?(' \u00B7 ultimo corte '+fmtD(dv.fechaUltimoCorte)):' \u00B7 sin cortes aun'))),
+                  h('div',{style:{textAlign:'right',flexShrink:0}},
+                    h('div',{className:'mono',style:{fontSize:14,fontWeight:700,color:'var(--blue)'}},fmt(dv.interesPendiente)),
+                    esUSD&&h('div',{className:'mono',style:{fontSize:10,color:'var(--blue)'}},copToUsd(dv.interesPendiente,l.trmAcordada)))),
+                h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:8,background:'var(--blue-bg)',borderRadius:8,padding:'8px 10px'}},
+                  h('span',{style:{fontSize:12,color:'var(--text2)',fontWeight:600}},'Liquidar hoy'),
+                  h('span',{className:'mono',style:{fontSize:15,fontWeight:700,color:'var(--blue)'}},fmt(dv.capitalVivo+dv.interesPendiente))));
+            }())))}());
       })),
     d.loans.filter(function(l){return l.estado==='Finalizado'||l.estado==='Cancelado';}).length>0&&h('div',{style:{marginTop:16}},
       h('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:10}},

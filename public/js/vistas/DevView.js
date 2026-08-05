@@ -22,6 +22,12 @@ export function DevView(props){
   var s4=useState(null); var updateInfo=s4[0]; var setUpdateInfo=s4[1];
   var s5=useState(props.datosPago||''); var datosPago=s5[0]; var setDatosPago=s5[1];
   var s6=useState(false); var savingPago=s6[0]; var setSavingPago=s6[1];
+  // Prestamos que /recalculate no pudo reconstruir. Desde la Etapa 1 el endpoint aisla
+  // al problematico y sigue con los demas, asi que un "Sincronizado" a secas afirmaria
+  // algo falso. Se guarda para mostrarlo de forma PERSISTENTE: es una lista que hay que
+  // leer y sobre la que hay que actuar, no cabe en un toast de 2 segundos.
+  var s7=useState(null); var omitidos=s7[0]; var setOmitidos=s7[1];
+  var s8=useState(false); var sincronizando=s8[0]; var setSincronizando=s8[1];
   var hasAPI=typeof window.electronAPI!=='undefined';
 
   function saveDatosPago(){
@@ -181,6 +187,28 @@ export function DevView(props){
         h(Ico,{name:'refresh',size:18,color:'var(--yellow)'}),
         h('span',{style:{fontWeight:700,fontSize:14,color:'var(--text)'}},'Sincronizar datos')),
       h('div',{style:{fontSize:11,color:'var(--text3)',marginBottom:12}},'Recalcula todos los cronogramas activos. Se ejecuta automaticamente al abrir la app. Usa este boton solo si notas inconsistencias.'),
-      h('button',{onClick:function(){onSync();showToast('Cronogramas recalculados');},style:{background:'var(--bg3)',color:'var(--text)',border:'1px solid var(--border)',borderRadius:10,padding:'10px 16px',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',gap:6}},
-        h(Ico,{name:'refresh',size:13,color:'var(--text2)'}),'Sincronizar manualmente')));
+      // El toast lo emite `recalculate` en App, que es quien conoce el resultado. Antes se
+      // mostraba aqui uno fijo de "Cronogramas recalculados" ANTES de saber si habia ido bien.
+      h('button',{onClick:function(){
+          if(sincronizando) return;
+          setSincronizando(true);
+          Promise.resolve(onSync()).then(function(r){
+            setSincronizando(false);
+            setOmitidos(r&&r.omitidos?r.omitidos:[]);
+          });
+        },disabled:sincronizando,style:{background:'var(--bg3)',color:'var(--text)',border:'1px solid var(--border)',borderRadius:10,padding:'10px 16px',fontSize:12,fontWeight:600,cursor:sincronizando?'not-allowed':'pointer',opacity:sincronizando?.6:1,fontFamily:'inherit',display:'flex',alignItems:'center',gap:6}},
+        h(Ico,{name:'refresh',size:13,color:'var(--text2)'}),sincronizando?'Sincronizando...':'Sincronizar manualmente'),
+
+      omitidos&&omitidos.length>0&&h('div',{style:{marginTop:12,background:'var(--red-bg)',border:'1px solid var(--red-bd)',borderRadius:10,padding:'10px 12px'}},
+        h('div',{style:{display:'flex',alignItems:'center',gap:6,marginBottom:6}},
+          h(Ico,{name:'alert',size:14,color:'var(--red)'}),
+          h('span',{style:{fontWeight:700,fontSize:12,color:'var(--red)'}},omitidos.length+' prestamo'+(omitidos.length===1?'':'s')+' no se pudo'+(omitidos.length===1?'':'ieron')+' recalcular')),
+        h('div',{style:{fontSize:11,color:'var(--text3)',marginBottom:8}},'Quedaron EXACTAMENTE como estaban (su transaccion revirtio sola). El resto si se sincronizo.'),
+        omitidos.map(function(o,i){
+          return h('div',{key:o.id||i,style:{fontSize:11.5,color:'var(--text2)',padding:'6px 0',borderTop:i>0?'1px solid var(--red-bd)':'none'}},
+            h('div',{style:{fontWeight:600,color:'var(--text)'}},o.nombre||o.id),
+            h('div',{style:{marginTop:2,lineHeight:1.4}},o.motivo));
+        })),
+      omitidos&&omitidos.length===0&&h('div',{style:{marginTop:12,fontSize:11.5,color:'var(--green)',display:'flex',alignItems:'center',gap:6}},
+        h(Ico,{name:'check',size:13,color:'var(--green)'}),'Todos los cronogramas activos se recalcularon sin omisiones.')));
 }

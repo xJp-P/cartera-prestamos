@@ -9,6 +9,7 @@ import { Fld, Modal } from '../componentes/base.js';
 import { Ico } from '../componentes/iconos.js';
 import { showError } from '../core/api.js';
 import { pmt } from '../core/calculo.js';
+import { MODALIDAD_DIARIA, diasEntre } from '../core/dominio.js';
 import {
   copToUsd, fmt, fmtD, fmtN, fmtNumInput, fmtUSD, parseDecimalInput, parseIntInput, parseNum,
 } from '../core/format.js';
@@ -115,6 +116,9 @@ export function LoanModal(props){
   function syncMonto(raw){ var v=parseNum(raw); set('montoOrigen',v); if(f.moneda==='USD'&&!compraFrac){ var usd=+v||0; if(usd>0){ if((+f.trmAcordada)>0) setTotalCOPInput(Math.round((+f.trmAcordada)*usd)); else if((+totalCOPInput)>0) set('trmAcordada',Math.round((+totalCOPInput)/usd)); } } }
   var esSI=f.modalidad==='Intereses';
   var esUnaCuota=f.modalidad==='Prestamo'||f.modalidad==='Pago Unico'; // v1.10.0: ambas son 1 cuota
+  // Credito abierto: sin plazo, sin frecuencia y sin cronograma. Solo capital, tasa y
+  // fecha de inicio — que PUEDE ser pasada: el motor devenga los dias transcurridos.
+  var esDiarioF=f.modalidad===MODALIDAD_DIARIA;
   var montoCOP=f.moneda==='USD'?Math.round((+f.montoOrigen||0)*(trmEfectiva||1)):(+f.montoOrigen||0);
   // v1.10.0 — Calculo de ganancia para Pago Unico segun modo elegido
   // gananciaCOPCalc es el valor efectivo en COP que se va a persistir/mostrar
@@ -139,6 +143,10 @@ export function LoanModal(props){
     if(f.modalidad==='Prestamo'){c=montoCOP;}
     else if(f.modalidad==='Pago Unico'){c=montoCOP+gananciaCOPCalc;}
     else if(f.modalidad==='Intereses'){c=Math.round(montoCOP*r);}
+    // Credito abierto: no hay cuota. Lo que se previsualiza es el interes que genera
+    // UN DIA, que es la unidad real del producto. Sin esta rama caeria en el PMT con
+    // plazo 0 y daria Infinity.
+    else if(f.modalidad===MODALIDAD_DIARIA){c=Math.round(montoCOP*rMensual/30);}
     else{c=Math.round(pmt(r,n,montoCOP));}
     // Cronograma tentativo (mismo algoritmo que CalcView)
     var rows=[];
@@ -199,7 +207,9 @@ export function LoanModal(props){
       tasaMensual:esUnaCuotaSubmit?0:(+f.tasaMensual||0),
       plazoMeses:esUnaCuotaSubmit?1:(+f.plazoMeses||0),
       diaPago:diaPagoAuto,
-      frecuencia:esUnaCuotaSubmit?'Mensual':(f.frecuencia||'Mensual'),
+      // El credito abierto no cobra por frecuencia (devenga por dias), pero la columna
+      // es NOT NULL con default: se normaliza para que ninguna ruta lea un valor suelto.
+      frecuencia:(esUnaCuotaSubmit||f.modalidad===MODALIDAD_DIARIA)?'Mensual':(f.frecuencia||'Mensual'),
       comprasUSD:comprasFinal,
       gananciaFija:esPagoUnico?gananciaCOPCalc:0
     };
@@ -310,15 +320,27 @@ export function LoanModal(props){
           h('b',null,'Capital + Intereses:'),' Cuota fija mensual (amortizacion francesa). Cada cuota incluye intereses + parte del capital. Plazo fijo.',h('br',null),h('br',null),
           h('b',null,'Prestamo:'),' Sin intereses. Se presta un monto y se paga en una sola cuota.',h('br',null),h('br',null),
           h('b',null,'Pago Unico:'),' Una sola cuota en fecha exacta + ganancia personalizable (por % o monto fijo). Ideal para negocios cortos.',h('br',null),h('br',null),
-          h('span',{style:{color:'var(--text3)',fontStyle:'italic'}},'En todas las modalidades se pueden hacer abonos a capital para reducir el saldo.'))))},
-      h('select',{value:f.modalidad,onChange:function(e){var m=e.target.value;set('modalidad',m);if(m==='Prestamo'||m==='Pago Unico'){set('tasaMensual','0');set('plazoMeses','1');}},className:'inp',disabled:lockSens,style:lockSens?{background:'var(--bg3)',color:'var(--text3)',cursor:'not-allowed'}:{}},
+          h('b',null,'Interes Diario:'),' Credito abierto: el interes se genera cada dia sobre el capital vivo, sin cuotas ni plazo. El cliente paga intereses o abona capital cuando quiera. La fecha de inicio puede ser pasada: se devengan los dias transcurridos.',h('br',null),h('br',null),
+          h('span',{style:{color:'var(--text3)',fontStyle:'italic'}},'En todas las modalidades se pueden hacer abonos a capital para reducir el saldo. En Interes Diario el abono se registra como un CORTE, que baja el capital y liquida el interes en el mismo movimiento.'))))},
+      h('select',{value:f.modalidad,onChange:function(e){var m=e.target.value;set('modalidad',m);
+        if(m==='Prestamo'||m==='Pago Unico'){set('tasaMensual','0');set('plazoMeses','1');}
+        // El credito abierto no tiene plazo: se normaliza al centinela 0, que es lo que
+        // el backend espera y lo que deja `buildSchedule` inerte.
+        if(m===MODALIDAD_DIARIA){set('plazoMeses','0');}},className:'inp',disabled:lockSens,style:lockSens?{background:'var(--bg3)',color:'var(--text3)',cursor:'not-allowed'}:{}},
       h('option',null,'Intereses'),
       h('option',null,'Capital + Intereses'),
       h('option',null,'Prestamo'),
-      h('option',null,'Pago Unico'))),
-    !esUnaCuota&&h(Fld,{label:'Frecuencia de cobro'},h('select',{value:f.frecuencia,onChange:function(e){set('frecuencia',e.target.value);},className:'inp',disabled:lockSens,style:lockSens?{background:'var(--bg3)',color:'var(--text3)',cursor:'not-allowed'}:{}},
+      h('option',null,'Pago Unico'),
+      h('option',null,MODALIDAD_DIARIA))),
+    !esUnaCuota&&!esDiarioF&&h(Fld,{label:'Frecuencia de cobro'},h('select',{value:f.frecuencia,onChange:function(e){set('frecuencia',e.target.value);},className:'inp',disabled:lockSens,style:lockSens?{background:'var(--bg3)',color:'var(--text3)',cursor:'not-allowed'}:{}},
       h('option',null,'Semanal'),h('option',null,'Quincenal'),h('option',null,'Mensual'))),
-    !esUnaCuota&&h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}},
+    // Credito abierto: solo TASA. No hay plazo que pedir, y dejar el campo visible
+    // invitaria a escribir un numero que el motor ignora.
+    esDiarioF&&h(Fld,{label:'Tasa mensual (%)'},
+      h('input',{type:'text',inputMode:'decimal',value:f.tasaMensual,onChange:function(e){set('tasaMensual',parseDecimalInput(e.target.value));},placeholder:'0.00',className:'inp',disabled:lockSens,style:lockSens?{background:'var(--bg3)',color:'var(--text3)',cursor:'not-allowed'}:{}}),
+      (+f.tasaMensual)>0&&h('div',{style:{fontSize:11,marginTop:4,color:'var(--text3)',fontFamily:'monospace'}},
+        'Se aplicara: '+(+f.tasaMensual)+'% mensual — '+fmt(Math.round(montoCOP*(+f.tasaMensual||0)/100/30))+' por dia')),
+    !esUnaCuota&&!esDiarioF&&h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}},
       h(Fld,{label:'Tasa mensual (%)'},
         h('input',{type:'text',inputMode:'decimal',value:f.tasaMensual,onChange:function(e){set('tasaMensual',parseDecimalInput(e.target.value));},placeholder:'0.00',className:'inp',disabled:lockSens,style:lockSens?{background:'var(--bg3)',color:'var(--text3)',cursor:'not-allowed'}:{}}),
         (+f.tasaMensual)>0&&h('div',{style:{fontSize:11,marginTop:4,color:'var(--text3)',fontFamily:'monospace'}},'Se aplicara: '+(+f.tasaMensual)+'% mensual')),
@@ -362,6 +384,10 @@ export function LoanModal(props){
         h('span',{style:{fontSize:12,color:'var(--text2)'}},'Cuota '+freqCuotaLabel(f.frecuencia)+' en USD'),
         h('span',{className:'mono',style:{fontSize:12,fontWeight:700,color:'var(--yellow)'}},fmtUSD(preview.cuota/(trmEfectiva||1)))),
       f.modalidad==='Intereses'&&h('div',{style:{fontSize:11,color:'var(--blue)',marginTop:6}},'\u221E Plazo indefinido - paga intereses hasta abonar todo el capital'),
+      esDiarioF&&h('div',{style:{fontSize:11,color:'var(--blue)',marginTop:6,lineHeight:1.5}},
+        'Sin cuotas ni plazo: el interes se devenga cada dia sobre el capital vivo. El cliente paga intereses o abona capital cuando quiera, y cada movimiento se registra como un CORTE.',
+        f.fechaInicio&&f.fechaInicio<nowStr()&&h('div',{style:{marginTop:4,color:'var(--yellow)',fontWeight:600}},
+          'Fecha de inicio en el pasado: al crearlo ya traera '+diasEntre(f.fechaInicio,nowStr())+' dia(s) de interes devengado ('+fmt(Math.round(montoCOP*(+f.tasaMensual||0)/100/30*diasEntre(f.fechaInicio,nowStr())))+').')),
       f.modalidad==='Prestamo'&&f.fechaDevolucion&&h('div',{style:{fontSize:11,color:'var(--yellow)',marginTop:6}},'Sin intereses - devolucion: '+fmtD(f.fechaDevolucion)),
       f.modalidad==='Pago Unico'&&f.fechaDevolucion&&h('div',{style:{fontSize:11,color:'var(--green)',marginTop:6}},'Vence el '+fmtD(f.fechaDevolucion)+' \u2014 capital '+fmt(montoCOP)+' + ganancia '+fmt(gananciaCOPCalc)),
       preview.rows&&preview.rows.length>0&&h('button',{onClick:function(){setShowCronoLoan(!showCronoLoan);},style:{marginTop:10,background:'none',border:'none',cursor:'pointer',color:'var(--green)',fontSize:12,fontWeight:600,display:'flex',alignItems:'center',gap:4,padding:0}},
