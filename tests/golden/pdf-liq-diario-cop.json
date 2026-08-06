@@ -1,0 +1,67 @@
+{
+  "version": 2,
+  "caso": "liq-diario-cop",
+  "generador": "generateEstadoLiquidacion",
+  "tema": "light",
+  "entradaHash": "498af931770f6f8503d87bd15f27067d222b443c",
+  "estructura": {
+    "docTitle": "Estado de Liquidacion - Nilda Paredes",
+    "h1": [],
+    "cabeceras": [
+      "Corte",
+      "Fecha",
+      "Intereses",
+      "Abono a capital",
+      "Total"
+    ],
+    "etiquetas": []
+  },
+  "valores": {
+    "bytes": 7532,
+    "nFilas": 4,
+    "nCeldas": 20,
+    "celdasPorTr": [
+      5,
+      5,
+      5,
+      5
+    ],
+    "nMontos": 15,
+    "hashMontos": "8ba9f758a33c62ab8aff7ddf4ca3a22f51f98e9f",
+    "hashFname": "3d8448506feb4ff3ba5a9eaaa011252db7642674",
+    "hashTexto": "577ad8ba375cf932d609c1ea9653751bc9c5aa9d",
+    "clases": [
+      "b",
+      "h",
+      "lq-brand",
+      "lq-cc",
+      "lq-d",
+      "lq-date",
+      "lq-desg",
+      "lq-foot",
+      "lq-head",
+      "lq-lab",
+      "lq-meta",
+      "lq-name",
+      "lq-num",
+      "lq-pagar",
+      "lq-row",
+      "lq-sec",
+      "lq-sm",
+      "lq-st",
+      "lq-sub",
+      "lq-total",
+      "lq-type",
+      "lq-val",
+      "lq-vig",
+      "lq-wm",
+      "n",
+      "q",
+      "qs",
+      "s",
+      "t",
+      "tot",
+      "v"
+    ]
+  }
+}

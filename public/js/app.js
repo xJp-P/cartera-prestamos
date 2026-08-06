@@ -827,7 +827,7 @@ function App(){
     // v2.0.0 — LiquidarModal a nivel App (antes vivia DENTRO de DebtorModal, por eso era
     // inalcanzable desde AbonoModal). La logica de confirmacion es la MISMA de v1.19.0:
     // registrarAbono(...,liquidar=true,...) con el mismo obs y el mismo intExtra.
-    liquidarModal&&h(LiquidarModal,{loan:liquidarModal.loan,pays:pays,
+    liquidarModal&&h(LiquidarModal,{loan:liquidarModal.loan,pays:pays,datosPago:cfg.datos_pago,
       onClose:function(){if(liquidarModal.fromDeudor){setDebtorModal(liquidarModal.fromDeudor);} setLiquidarModal(null);},
       onConfirm:function(loanId,monto,intExtra){var obs='Liquidacion total'+(intExtra>0?' + intereses anticipados proximo mes: $'+Math.round(intExtra).toLocaleString('es-CO'):'');
       // v1.18.1: se devuelve la promesa para que el modal de liquidacion libere su guarda.

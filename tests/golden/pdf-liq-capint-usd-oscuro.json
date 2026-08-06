@@ -1,0 +1,72 @@
+{
+  "version": 2,
+  "caso": "liq-capint-usd-oscuro",
+  "generador": "generateEstadoLiquidacion",
+  "tema": "dark",
+  "entradaHash": "0ea0ce3f581b29f1340fc61330d8aaffa80279db",
+  "estructura": {
+    "docTitle": "Estado de Liquidacion - Gabriela Rios",
+    "h1": [],
+    "cabeceras": [
+      "#",
+      "Vence",
+      "Valor cuota",
+      "Interes",
+      "Abono a capital",
+      "Pagado",
+      "Recaudado",
+      "Estado"
+    ],
+    "etiquetas": []
+  },
+  "valores": {
+    "bytes": 8223,
+    "nFilas": 4,
+    "nCeldas": 32,
+    "celdasPorTr": [
+      8,
+      8,
+      8,
+      8
+    ],
+    "nMontos": 17,
+    "hashMontos": "fc9edf856229b5243df6859e85690c8d71133c33",
+    "hashFname": "b23fd7721da175cc70e6d83b5754106a05cfef26",
+    "hashTexto": "770ef6da48a10e46e9bfd898b7661c7a80f65c55",
+    "clases": [
+      "b",
+      "bdg b-mora",
+      "bdg b-ok",
+      "h",
+      "lq-brand",
+      "lq-cc",
+      "lq-d",
+      "lq-date",
+      "lq-desg",
+      "lq-foot",
+      "lq-head",
+      "lq-lab",
+      "lq-meta",
+      "lq-name",
+      "lq-num",
+      "lq-pagar",
+      "lq-row",
+      "lq-sec",
+      "lq-sm",
+      "lq-st",
+      "lq-sub",
+      "lq-total",
+      "lq-type",
+      "lq-val",
+      "lq-vig",
+      "lq-wm",
+      "n",
+      "q",
+      "qs",
+      "s",
+      "t",
+      "tot",
+      "v"
+    ]
+  }
+}

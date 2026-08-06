@@ -114,7 +114,8 @@ const S   = FE.simbolos;
 const CAP = FE.captura;
 
 const GENERADORES = ['generateCronogramaPDF', 'generateReportePrestamosPDF',
-                     'generateRecibo', 'generateFacturaCobro', 'generateReciboAbono'];
+                     'generateRecibo', 'generateFacturaCobro', 'generateReciboAbono',
+                     'generateEstadoLiquidacion'];
 const faltantes = GENERADORES.filter(n => typeof S[n] !== 'function');
 if (faltantes.length) {
   abortar('El frontend no expone estos generadores como funciones top-level: ' + faltantes.join(', ') +
@@ -344,6 +345,49 @@ const CASOS = [
       monto: 400000, fecha: '2026-07-30', recalcMode: 'fijarCuota',
       pre: snapshotPrevio(L(LOAN_PARCIAL), paysParcial, 400000) }),
     contiene: ['Nueva cuota fija', 'ya abonado', 'TOTAL A PAGAR'] },
+
+  // ── generateEstadoLiquidacion — desglose + respaldo, con y sin el mes opcional ────────
+  // `hasta` se pasa SIEMPRE fijo: el valor de liquidacion depende del dia, asi que sin
+  // anclarlo el golden caducaria cada 24 h (por eso el generador lo recibe por parametro).
+  { nombre: 'liq-capint-cop-con-mes', gen: 'generateEstadoLiquidacion', tema: 'light', celdas: 8,
+    entrada: () => ({ loanId: '1776205975507jkph', incluye: true, tema: 'light' }),
+    ejecutar: () => S.generateEstadoLiquidacion(L('1776205975507jkph'), pays, config.datos_pago,
+      { incluyeProxMes: true, hasta: '2026-07-31' }),
+    contiene: ['Estado de Liquidacion', 'Total a liquidar hoy', 'Interes del mes en curso',
+               'valido unicamente', 'LQ-'] },
+
+  // Control del mismo prestamo SIN el mes opcional: el bloque no debe aparecer.
+  { nombre: 'liq-capint-cop-sin-mes', gen: 'generateEstadoLiquidacion', tema: 'light', celdas: 8,
+    entrada: () => ({ loanId: '1776205975507jkph', incluye: false, tema: 'light' }),
+    ejecutar: () => S.generateEstadoLiquidacion(L('1776205975507jkph'), pays, config.datos_pago,
+      { incluyeProxMes: false, hasta: '2026-07-31' }),
+    contiene: ['Total a liquidar hoy', 'Respaldo'] },
+
+  { nombre: 'liq-intereses-cop-mora', gen: 'generateEstadoLiquidacion', tema: 'light', celdas: 8,
+    entrada: () => ({ loanId: '1773655076017', incluye: true, tema: 'light' }),
+    ejecutar: () => S.generateEstadoLiquidacion(L('1773655076017'), pays, config.datos_pago,
+      { incluyeProxMes: true, hasta: '2026-07-31' }),
+    contiene: ['Intereses atrasados', 'Total a liquidar hoy'] },
+
+  { nombre: 'liq-capint-usd-oscuro', gen: 'generateEstadoLiquidacion', tema: 'dark', celdas: 8,
+    entrada: () => ({ loanId: '1782151590658w66y', incluye: true, tema: 'dark' }),
+    ejecutar: () => S.generateEstadoLiquidacion(L('1782151590658w66y'), pays, config.datos_pago,
+      { incluyeProxMes: true, hasta: '2026-07-31' }),
+    contiene: ['USD $', '#0d1117', 'Total a liquidar hoy'] },
+
+  // Rama propia del credito abierto: sin bloque de mora, con el devengo explicado en dias.
+  { nombre: 'liq-diario-cop', gen: 'generateEstadoLiquidacion', tema: 'light', celdas: 5,
+    entrada: () => ({ loanId: 'fixture-diario-01', incluye: false, tema: 'light' }),
+    ejecutar: () => S.generateEstadoLiquidacion(L('fixture-diario-01'), pays, config.datos_pago,
+      { incluyeProxMes: false, hasta: '2026-07-31' }),
+    contiene: ['Interes acumulado', 'por dia', 'Corte'] },
+
+  // El parcial en vuelo TIENE que restarse del total y anunciarse en el respaldo.
+  { nombre: 'liq-capint-parcial', gen: 'generateEstadoLiquidacion', tema: 'light', celdas: 8,
+    entrada: () => ({ loanId: LOAN_PARCIAL, incluye: false, parcial: true, tema: 'light' }),
+    ejecutar: () => S.generateEstadoLiquidacion(L(LOAN_PARCIAL), paysParcial, config.datos_pago,
+      { incluyeProxMes: false, hasta: '2026-07-31' }),
+    contiene: ['Abonos parciales ya recibidos', 'ya estan descontados'] },
 ];
 
 // ── Extraccion de la huella ──────────────────────────────────────────────────────────────
@@ -623,9 +667,12 @@ R.seccion('cobertura de la suite');
 R.check('se ejercitaron al menos 8 casos', nCasosOK >= 8, 'casos con salida: ' + nCasosOK + ' de ' + CASOS.length);
 R.check('los 21 casos definidos produjeron documento', nCasosOK === CASOS.length,
         'con salida: ' + nCasosOK + ' / definidos: ' + CASOS.length);
-R.eq('los 5 generadores fueron ejercitados', GENERADORES.filter(g => generadoresVistos.has(g)).sort(), GENERADORES.slice().sort());
+// El conteo se DERIVA de la lista (leccion del Bug #48: un numero escrito a mano en el
+// titulo se desincroniza y la suite acaba mintiendo sobre su propia cobertura).
+R.eq('los ' + GENERADORES.length + ' generadores fueron ejercitados',
+     GENERADORES.filter(g => generadoresVistos.has(g)).sort(), GENERADORES.slice().sort());
 
-// Cobertura declarada en el encargo: 4 modalidades, ambas monedas, mora, parcial, 2 temas.
+// Cobertura declarada en el encargo: las 5 modalidades, ambas monedas, mora, parcial, 2 temas.
 const modsCubiertas = new Set();
 const monedas = new Set();
 for (const c of CASOS) {
@@ -634,8 +681,11 @@ for (const c of CASOS) {
   const l = L(e.loanId);
   if (l) { modsCubiertas.add(l.modalidad); monedas.add(l.moneda); }
 }
-R.eq('las 4 modalidades estan cubiertas', [...modsCubiertas].sort(),
-     ['Capital + Intereses', 'Intereses', 'Pago Unico', 'Prestamo']);
+// 'Interes Diario' entra aqui con el Estado de Liquidacion: es el primer caso de
+// pdf-render que ejercita la 5a modalidad (los 2 generadores propios del credito
+// abierto, generateEstadoCuentaDiario y generateReciboCorte, siguen sin cubrir).
+const MODALIDADES = ['Capital + Intereses', 'Interes Diario', 'Intereses', 'Pago Unico', 'Prestamo'];
+R.eq('las ' + MODALIDADES.length + ' modalidades estan cubiertas', [...modsCubiertas].sort(), MODALIDADES);
 R.eq('COP y USD cubiertos', [...monedas].sort(), ['COP', 'USD']);
 R.eq('temas claro y oscuro cubiertos', [...new Set(CASOS.map(c => c.tema))].sort(), ['dark', 'light']);
 R.check('hay un caso con pago PARCIAL en vuelo', CASOS.some(c => c.entrada().parcial === true));

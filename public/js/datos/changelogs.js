@@ -553,5 +553,14 @@ export const CHANGELOGS = {
     'Se corrigio que la meta mensual de recaudo contara como pendiente un dinero que ya se habia cobrado.',
     'Se corrigieron dos huecos que podian hacer perder el registro de un pago parcial al reconstruir un cronograma, y uno que dejaba un cierre forzoso sin contar los intereses.',
     'Sincronizar datos ahora avisa si algun prestamo no se pudo recalcular, en vez de decir que todo salio bien.'
+  ],
+  '2.6.0': [
+    'NUEVO documento ESTADO DE LIQUIDACION: el papel que le entregas al deudor cuando pide cerrar el credito. Desglosa capital, intereses atrasados y abonos ya recibidos hasta el total exacto a pagar hoy.',
+    'Se genera desde el modal de Liquidar deuda, ANTES de confirmar: primero entregas el documento y cobras, y solo despues cierras el credito.',
+    'El documento incluye el historial del credito a la fecha (cuotas pagadas con su fecha real de recaudo y los abonos a capital), para que el deudor vea el respaldo de cada peso y no haya discusiones.',
+    'Lleva fecha de validez visible: un valor de liquidacion caduca porque el credito sigue generando intereses. Asi nadie aparece semanas despues exigiendo un monto viejo.',
+    'Si marcas o desmarcas el mes de interes adicional, el documento se recalcula solo: siempre imprime lo mismo que muestra la pantalla.',
+    'La casilla del mes adicional ahora explica que se cobra y por que, en vez de solo preguntar.',
+    'En los creditos de Interes Diario el modal de liquidacion ya muestra el interes acumulado con su formula. Antes el total incluia ese valor sin decir de donde salia.'
   ]
 };

@@ -1,0 +1,73 @@
+{
+  "version": 2,
+  "caso": "liq-capint-parcial",
+  "generador": "generateEstadoLiquidacion",
+  "tema": "light",
+  "entradaHash": "2b3f8a187a29a267ecdbd723a08577650cba37bc",
+  "estructura": {
+    "docTitle": "Estado de Liquidacion - Nicolas Duarte",
+    "h1": [],
+    "cabeceras": [
+      "#",
+      "Vence",
+      "Valor cuota",
+      "Interes",
+      "Abono a capital",
+      "Pagado",
+      "Recaudado",
+      "Estado"
+    ],
+    "etiquetas": []
+  },
+  "valores": {
+    "bytes": 8256,
+    "nFilas": 5,
+    "nCeldas": 40,
+    "celdasPorTr": [
+      8,
+      8,
+      8,
+      8,
+      8
+    ],
+    "nMontos": 20,
+    "hashMontos": "b7a36eab651376de7f20ce12531aab9a622ad10f",
+    "hashFname": "090c8416d2791de42c562d3ab4f335f7c830052f",
+    "hashTexto": "6a8b501893b7df57c7e4d02b51fccecbf82663cb",
+    "clases": [
+      "b",
+      "bdg b-ok",
+      "bdg b-par",
+      "h",
+      "lq-brand",
+      "lq-cc",
+      "lq-d",
+      "lq-date",
+      "lq-desg",
+      "lq-foot",
+      "lq-head",
+      "lq-lab",
+      "lq-meta",
+      "lq-name",
+      "lq-num",
+      "lq-pagar",
+      "lq-row",
+      "lq-sec",
+      "lq-sm",
+      "lq-st",
+      "lq-sub",
+      "lq-total",
+      "lq-type",
+      "lq-val",
+      "lq-vig",
+      "lq-wm",
+      "n",
+      "q",
+      "qs",
+      "s",
+      "t",
+      "tot",
+      "v"
+    ]
+  }
+}
