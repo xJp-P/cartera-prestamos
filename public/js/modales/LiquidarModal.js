@@ -79,7 +79,8 @@ export function LiquidarModal(props){
         h('div',{className:'mono',style:{fontSize:20,fontWeight:700,color:'var(--red)'}},fmt(L.total)),
         cEsUSD&&h('div',{className:'mono',style:{fontSize:11,color:'var(--blue)',fontWeight:500}},copToUsd(L.total,cLoan.trmAcordada)))),
     // Documento PREVIO al cobro: se entrega, el deudor paga, y solo entonces se confirma.
-    // Lleva el monto en la etiqueta para que el vinculo con la casilla se vea sin explicarlo.
+    // SIN el monto en la etiqueta: el total ya esta destacado en rojo justo encima y
+    // repetirlo aqui solo compite con el.
     // NO escribe en BD, asi que no necesita _submitGuard; la guarda local solo evita que un
     // doble clic abra dos ventanas de impresion.
     h('button',{onClick:function(){
@@ -89,7 +90,7 @@ export function LiquidarModal(props){
         finally{ setTimeout(function(){setPdfBusy(false);},600); }
       },disabled:pdfBusy,className:'btn-primary',style:{background:'transparent',border:'1px solid var(--border)',color:'var(--text2)',cursor:pdfBusy?'wait':'pointer',marginBottom:14,display:'flex',alignItems:'center',justifyContent:'center',gap:8}},
       h(Ico,{name:'receipt',size:15,color:'var(--text3)',sw:2}),
-      'Generar PDF de liquidacion • '+fmt(L.total)),
+      'Generar PDF de liquidacion'),
     h('div',{style:{fontSize:11,color:'var(--text3)',marginBottom:14,lineHeight:1.5}},'Al confirmar, las cuotas pendientes y en mora se marcaran como pagadas y el prestamo se cerrara.'),
     h('button',{onClick:function(){_submitGuard(liqSending,setLiqSending,function(){return onConfirm(cLoan.id,L.capitalPendiente,L.intExtra);});},disabled:liqSending,className:'btn-primary',style:{background:liqSending?'var(--bg3)':'var(--red-bg)',border:'1px solid '+(liqSending?'var(--border)':'var(--red-bd)'),color:liqSending?'var(--text3)':'var(--red)',cursor:liqSending?'not-allowed':'pointer',marginBottom:6}},liqSending?'Procesando...':'Confirmar liquidacion'),
     h('button',{onClick:onClose,className:'btn-primary',style:{background:'var(--bg3)',border:'1px solid var(--border)',color:'var(--text2)'}},'Cancelar'));

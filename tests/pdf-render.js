@@ -353,15 +353,18 @@ const CASOS = [
     entrada: () => ({ loanId: '1776205975507jkph', incluye: true, tema: 'light' }),
     ejecutar: () => S.generateEstadoLiquidacion(L('1776205975507jkph'), pays, config.datos_pago,
       { incluyeProxMes: true, hasta: '2026-07-31' }),
+    // Cobrando el mes en curso, el deudor queda cubierto HASTA el proximo vencimiento:
+    // decir "solo por hoy" lo presionaria con un vencimiento que no existe.
     contiene: ['Estado de Liquidacion', 'Total a liquidar hoy', 'Interes del mes en curso',
-               'valido unicamente', 'LQ-'] },
+               'valido hasta', 'Incluye el interes de este periodo', 'LQ-'] },
 
-  // Control del mismo prestamo SIN el mes opcional: el bloque no debe aparecer.
+  // Control del mismo prestamo SIN el mes opcional: el bloque no aparece y el
+  // disclaimer cambia de razon (vence la proxima cuota) sin cambiar de fecha.
   { nombre: 'liq-capint-cop-sin-mes', gen: 'generateEstadoLiquidacion', tema: 'light', celdas: 8,
     entrada: () => ({ loanId: '1776205975507jkph', incluye: false, tema: 'light' }),
     ejecutar: () => S.generateEstadoLiquidacion(L('1776205975507jkph'), pays, config.datos_pago,
       { incluyeProxMes: false, hasta: '2026-07-31' }),
-    contiene: ['Total a liquidar hoy', 'Respaldo'] },
+    contiene: ['Total a liquidar hoy', 'Respaldo', 'valido hasta', 'vence la proxima cuota'] },
 
   { nombre: 'liq-intereses-cop-mora', gen: 'generateEstadoLiquidacion', tema: 'light', celdas: 8,
     entrada: () => ({ loanId: '1773655076017', incluye: true, tema: 'light' }),
@@ -380,7 +383,9 @@ const CASOS = [
     entrada: () => ({ loanId: 'fixture-diario-01', incluye: false, tema: 'light' }),
     ejecutar: () => S.generateEstadoLiquidacion(L('fixture-diario-01'), pays, config.datos_pago,
       { incluyeProxMes: false, hasta: '2026-07-31' }),
-    contiene: ['Interes acumulado', 'por dia', 'Corte'] },
+    // El credito abierto SI caduca cada dia: aqui el disclaimer debe seguir siendo el
+    // estricto. Es el control de que la rama nueva no se lo comio.
+    contiene: ['Interes acumulado', 'por dia', 'Corte', 'valido unicamente para el'] },
 
   // El parcial en vuelo TIENE que restarse del total y anunciarse en el respaldo.
   { nombre: 'liq-capint-parcial', gen: 'generateEstadoLiquidacion', tema: 'light', celdas: 8,

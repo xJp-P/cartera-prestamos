@@ -20,7 +20,7 @@
     "etiquetas": []
   },
   "valores": {
-    "bytes": 8223,
+    "bytes": 8064,
     "nFilas": 4,
     "nCeldas": 32,
     "celdasPorTr": [
@@ -32,7 +32,7 @@
     "nMontos": 17,
     "hashMontos": "fc9edf856229b5243df6859e85690c8d71133c33",
     "hashFname": "b23fd7721da175cc70e6d83b5754106a05cfef26",
-    "hashTexto": "770ef6da48a10e46e9bfd898b7661c7a80f65c55",
+    "hashTexto": "cd9f96bd1cf2a50b8c2ca50320fb08e55f062a5e",
     "clases": [
       "b",
       "bdg b-mora",

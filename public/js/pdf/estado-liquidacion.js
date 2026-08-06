@@ -30,7 +30,7 @@
 import { fmt, fmtD, copToUsd } from '../core/format.js';
 import { nowStr, properCase } from '../core/ui.js';
 import { computeLiquidacion, imputarCobros, esDiario } from '../core/dominio.js';
-import { esAbono, esCorte } from '../core/ids.js';
+import { esAbono, esCorte, esCuotaRegular } from '../core/ids.js';
 
 // Descarta ""/null/undefined/"0" — sin esto salia "C.C. 0" en los documentos.
 function campoValido(v){
@@ -238,6 +238,47 @@ export function generateEstadoLiquidacion(loan, allPays, datosPago, opts) {
       esc(datosPago).replace(/\n/g, '<br>') + '</div></div>'
     : '';
 
+  // ── VIGENCIA DEL VALOR ─────────────────────────────────────────────────────
+  // Cuando caduca esta cifra depende del PRODUCTO, y decirlo mal es un error de
+  // negocio en las dos direcciones: en un credito abierto el interes corre cada dia,
+  // asi que manana el monto ya es otro; en uno de cuotas NO pasa nada hasta el
+  // proximo vencimiento — y si ademas se esta cobrando el interes de este periodo,
+  // el deudor queda cubierto justo hasta esa fecha. Anunciar "solo por hoy" en ese
+  // caso presiona al cliente con un vencimiento que no existe.
+  //
+  // La fecha sale de las FILAS PERSISTIDAS del cronograma, nunca de `diaPago` ni de
+  // un calculo de calendario: asi respeta sola cualquier prorroga o cambio de dia de
+  // cobro (`fechaBaseCronograma`, /cambiar-dia-pago) hecho a ese credito en concreto.
+  var proxVenc = null;
+  if (!diario) {
+    var futuras = pays
+      .filter(function(p){
+        return esCuotaRegular(p) && p.estadoPago !== 'Pagado' && String(p.fechaPago) > String(hasta);
+      })
+      .map(function(p){ return String(p.fechaPago); })
+      .sort();
+    proxVenc = futuras.length ? futuras[0] : null;
+  }
+
+  var vigencia;
+  if (L.capitalPendiente <= 0 && L.total <= 0) {
+    vigencia = '<b>El capital ya fue devuelto en su totalidad.</b> Este documento deja constancia del cierre.';
+  } else if (diario) {
+    vigencia = '<b>Este valor es valido unicamente para el ' + fmtD(hasta) + '.</b> ' +
+      'El credito genera intereses cada dia, asi que a partir del dia siguiente el monto a pagar cambia. ' +
+      'Si el deudor liquida en otra fecha, solicita un documento actualizado.';
+  } else if (proxVenc && L.incluyeProxMes) {
+    vigencia = '<b>Este valor de liquidacion es valido hasta el ' + fmtD(proxVenc) + '.</b> ' +
+      'Incluye el interes de este periodo, de modo que el monto no cambia hasta esa fecha. ' +
+      'Si el pago se realiza despues, se generaran nuevos intereses.';
+  } else if (proxVenc) {
+    vigencia = '<b>Este valor de liquidacion es valido hasta el ' + fmtD(proxVenc) + '.</b> ' +
+      'Ese dia vence la proxima cuota y se generan nuevos intereses, con lo que el monto a pagar aumenta.';
+  } else {
+    vigencia = '<b>Este valor corresponde al ' + fmtD(hasta) + '.</b> ' +
+      'Si el pago se realiza mas adelante, solicita un documento actualizado.';
+  }
+
   var tasaTxt = diario
     ? (L.tasaMensual + '% mensual &nbsp;&middot;&nbsp; ' + money(L.interesDia) + ' por dia')
     : (L.tasaMensual + '% mensual');
@@ -245,14 +286,17 @@ export function generateEstadoLiquidacion(loan, allPays, datosPago, opts) {
   var html = [
     '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Estado de Liquidacion - ' + esc(loan.nombre) + '</title><style>',
     '*{box-sizing:border-box}',
-    'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;margin:0;padding:26px 30px;background:' + C.bg + ';color:' + C.text + ';font-size:12px;line-height:1.45;max-width:700px}',
+    // Una sola familia en todo el documento. Los valores NO llevan monoespaciada: la
+    // mezcla desentonaba junto al texto. `tabular-nums` mantiene las cifras alineadas
+    // en columna, que es lo unico que aportaba la monoespaciada.
+    'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;margin:0;padding:26px 30px;background:' + C.bg + ';color:' + C.text + ';font-size:12px;line-height:1.45;max-width:700px;font-variant-numeric:tabular-nums}',
     '.lq-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding-bottom:11px;border-bottom:2px solid ' + C.headBd + ';margin-bottom:14px}',
     '.lq-brand{display:flex;align-items:center;gap:9px}',
     '.lq-wm{font-size:17px;font-weight:700;letter-spacing:-.3px}',
     '.lq-sub{font-size:9.5px;color:' + C.muted + ';margin-top:1px}',
     '.lq-meta{text-align:right}',
     '.lq-type{font-size:11px;font-weight:700;color:' + C.red + ';letter-spacing:.5px;text-transform:uppercase}',
-    '.lq-num{font-family:ui-monospace,monospace;font-size:10.5px;color:' + C.muted + ';margin-top:2px}',
+    '.lq-num{font-size:10.5px;color:' + C.muted + ';margin-top:2px}',
     '.lq-date{font-size:9.5px;color:' + C.foot + ';margin-top:1px}',
     '.lq-st{font-size:9.5px;color:' + C.muted + ';text-transform:uppercase;letter-spacing:.7px}',
     '.lq-name{font-size:16px;font-weight:700;margin:2px 0 1px}',
@@ -260,7 +304,7 @@ export function generateEstadoLiquidacion(loan, allPays, datosPago, opts) {
     '.lq-sec{font-size:9.5px;font-weight:700;color:' + C.muted + ';letter-spacing:.8px;text-transform:uppercase;margin:16px 0 6px}',
     '.lq-row{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid ' + C.rowbd + ';font-size:11.5px}',
     '.lq-lab{color:' + C.muted + '}',
-    '.lq-val{font-family:ui-monospace,monospace;font-weight:600;white-space:nowrap}',
+    '.lq-val{font-weight:600;white-space:nowrap}',
     '.lq-sm{font-size:9.5px;color:' + C.foot + '}',
     '.lq-vig{margin-top:14px;padding:9px 13px;background:' + C.amberBg + ';border:1px solid ' + C.amberBd + ';border-radius:9px;font-size:10.5px;line-height:1.5;color:' + C.amber + '}',
     '.lq-desg{margin-top:6px;border:1px solid ' + C.bd + ';border-radius:9px;overflow:hidden}',
@@ -268,17 +312,17 @@ export function generateEstadoLiquidacion(loan, allPays, datosPago, opts) {
     '.lq-d:last-child{border-bottom:none}',
     '.lq-d .t{font-size:11.5px;font-weight:600}',
     '.lq-d .s{font-size:9.5px;color:' + C.foot + ';margin-top:1px}',
-    '.lq-d .v{font-family:ui-monospace,monospace;font-size:12.5px;font-weight:600;white-space:nowrap}',
+    '.lq-d .v{font-size:12.5px;font-weight:600;white-space:nowrap}',
     '.lq-total{margin-top:11px;padding:13px 16px;border-radius:9px;display:flex;justify-content:space-between;align-items:center;gap:14px;background:' + C.redBg + ';border:1px solid ' + C.redBd + '}',
     '.lq-total .q{font-size:11px;font-weight:700;color:' + C.red + ';letter-spacing:.4px;text-transform:uppercase}',
     '.lq-total .qs{font-size:9.5px;color:' + C.foot + ';margin-top:2px;font-weight:400;letter-spacing:0;text-transform:none}',
-    '.lq-total .v{font-size:25px;font-weight:700;font-family:ui-monospace,monospace;color:' + C.red + ';white-space:nowrap}',
+    '.lq-total .v{font-size:25px;font-weight:700;color:' + C.red + ';white-space:nowrap}',
     // 8 columnas en ~640px utiles: padding lateral 4px, tipografia 9/10px y nowrap
     // (mismo tratamiento que absorbio la 7a columna del cronograma en v1.18.0).
     'table{width:100%;border-collapse:collapse;font-size:10px}',
     'th{text-align:left;background:' + C.panel + ';color:' + C.muted + ';font-size:9px;letter-spacing:.3px;text-transform:uppercase;padding:5px 4px;border-bottom:1px solid ' + C.bd + ';white-space:nowrap}',
     'td{padding:4px;border-bottom:1px solid ' + C.rowbd + ';white-space:nowrap}',
-    'td.n,th.n{text-align:right;font-family:ui-monospace,monospace}',
+    'td.n,th.n{text-align:right}',
     'tr.ab td{background:' + C.blueBg + ';color:' + C.blue + ';font-weight:600}',
     'tr.tot td{background:' + C.panel + ';font-weight:700;border-top:2px solid ' + C.bd + ';border-bottom:none}',
     '.bdg{display:inline-block;font-size:8.5px;font-weight:700;padding:1px 5px;border-radius:4px;letter-spacing:.2px}',
@@ -308,10 +352,7 @@ export function generateEstadoLiquidacion(loan, allPays, datosPago, opts) {
     '<div class="lq-name">' + esc(loan.nombre) + '</div>',
     (deudorMeta ? '<div class="lq-cc">' + deudorMeta + '</div>' : ''),
 
-    '<div class="lq-vig"><b>Este valor es valido unicamente para el ' + fmtD(hasta) + '.</b> ' +
-      (L.capitalPendiente > 0
-        ? 'El credito sigue generando intereses, asi que a partir del dia siguiente el monto a pagar cambia. Si el deudor liquida en otra fecha, solicita un documento actualizado.'
-        : 'El capital ya fue devuelto en su totalidad.') + '</div>',
+    '<div class="lq-vig">' + vigencia + '</div>',
 
     '<div class="lq-sec">Condiciones del credito</div>',
     row('Capital prestado', money(origCOP)),

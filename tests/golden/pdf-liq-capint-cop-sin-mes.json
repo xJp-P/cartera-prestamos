@@ -20,7 +20,7 @@
     "etiquetas": []
   },
   "valores": {
-    "bytes": 8282,
+    "bytes": 8076,
     "nFilas": 6,
     "nCeldas": 48,
     "celdasPorTr": [
@@ -34,7 +34,7 @@
     "nMontos": 22,
     "hashMontos": "0076c21e33fd72c75b85cac1d08c5b3398fbb7c4",
     "hashFname": "bd3f04180e2ae666f613c3412cd401dad66509fd",
-    "hashTexto": "59991836f9c59b5e99231de00e987970bb3eb2ca",
+    "hashTexto": "c9769a83bd747c7e18f896d5056002069e0c0eec",
     "clases": [
       "ab",
       "b",
