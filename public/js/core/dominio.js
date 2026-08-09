@@ -111,22 +111,34 @@ export function imputarCobros(pay){
     cobrado+=cop;
     return {fecha:e.fecha,cop:cop,interes:ai,capital:ac,ajuste:0};
   });
-  // Cuota SALDADA: el remanente de composicion que la caja no alcanzo a cubrir (tipico en USD
-  // cuando la TRM bajo) se ancla al ULTIMO evento, para que los totales cuadren con el motor.
-  // El desfase resultante queda visible como ajuste, no disfrazado de capital cobrado.
-  if(saldada&&out.length>0&&(intPend>0||capPend>0)){
+  // Se imputa la OBLIGACION EXTINGUIDA, no la caja. En COP son la misma cifra; en un
+  // prestamo USD la obligacion puede ser MAYOR, porque la deuda esta denominada en dolares
+  // y se valua a la TRM pactada mientras la caja entra a la del dia. Ese hueco es efecto
+  // cambiario — no dinero que el deudor siga debiendo — y por eso se reparte entre interes
+  // y capital en vez de quedar como saldo vivo.
+  //   - cuota SALDADA: la obligacion es la composicion completa (comportamiento previo).
+  //   - parcial VIVO : la obligacion es `partialPaid`, que /partial ya escribe valuado a la
+  //                    TRM pactada. En COP coincide con la caja -> extra 0 -> cero cambio.
+  // El remanente se ancla al ULTIMO evento, para que los totales cuadren con el motor y el
+  // desfase quede visible como `ajuste` en vez de disfrazarse de capital cobrado.
+  var oblTotal=saldada?(intTotal+capTotal):Math.round(pay.partialPaid||0);
+  var extra=Math.max(0,oblTotal-cobrado), absorbido=0;
+  if(out.length>0&&extra>0&&(intPend>0||capPend>0)){
     var u=out[out.length-1];
-    u.interes+=intPend; u.capital+=capPend;
-    intPend=0; capPend=0;
+    var ei=Math.min(extra,intPend); u.interes+=ei; intPend-=ei; extra-=ei; absorbido+=ei;
+    var ec=Math.min(extra,capPend); u.capital+=ec; capPend-=ec;            absorbido+=ec;
   }
   // Identidad (1), calculada al final para que valga en TODOS los casos: si sobro caja sin
-  // composicion que cubrir, el excedente cae aqui en vez de inflar un rubro.
+  // composicion que cubrir, el excedente cae aqui en vez de inflar un rubro. `ajuste` es
+  // NEGATIVO cuando la obligacion supero a la caja (perdida cambiaria).
   var ti=0,tc=0,ta=0;
   out.forEach(function(r){ r.ajuste=r.cop-r.interes-r.capital; ti+=r.interes; tc+=r.capital; ta+=r.ajuste; });
   // Dinero registrado en partialPaid que NINGUN evento representa: solo puede ocurrir en filas
   // legacy anteriores al ledger `recibos` (v1.11.4). Se reporta en vez de inventarle una fecha,
   // para no romper la identidad "KPI == suma del grafico" que cobrosDe garantiza.
-  var sinLedger=Math.max(0,Math.round(pay.partialPaid||0)-cobrado);
+  // Se descuenta lo `absorbido`: ese hueco SI esta representado (es el efecto cambiario del
+  // evento), y contarlo aqui marcaria la fila con el asterisco de baja fidelidad sin motivo.
+  var sinLedger=Math.max(0,Math.round(pay.partialPaid||0)-cobrado-absorbido);
   return {eventos:out,totales:{cobrado:cobrado,interes:ti,capital:tc,ajuste:ta},
           sinLedger:sinLedger,saldada:saldada};
 }

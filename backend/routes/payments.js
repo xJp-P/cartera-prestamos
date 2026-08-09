@@ -173,21 +173,51 @@ module.exports = function crearRutasPayments(ctx) {
     // cobrar. Aceptar un parcial encima lo convertiria en algo a medio pagar y le sumaria un
     // evento al ledger `recibos`, inflando "Cobros del Mes" con plata que nunca se recibio.
     if (esCorte(pay)) throw new ClientError('No se pueden aplicar pagos parciales sobre un corte de interes diario: ya es un movimiento consumado');
+    // ── CAJA vs OBLIGACION: dos magnitudes distintas que antes compartian variable ──
+    // `montoNum` es la CAJA: los pesos que entraron de verdad, a la TRM del dia. Es lo que
+    // va al ledger `recibos` y a montoCOPRecibido, y lo que miden "Cobros del Mes" y el
+    // Flujo de Caja.
+    //
+    // `obligacion` es cuanta DEUDA se extinguio. En un prestamo USD la deuda esta
+    // denominada en dolares, asi que se valua a la TRM PACTADA: si el cliente entrego
+    // USD 120 de una cuota de USD 250, extinguio 120/250 aunque la TRM del dia rindiera
+    // menos pesos. Valuarla a la TRM del dia (que es lo que hacia usar `montoNum`) deja
+    // deuda fantasma viva pese a que el cliente entrego los dolares pactados — misma
+    // doctrina que ya aplica `/abono` desde v2.0.0 (Bug #37) y que `completaUSD` (Bug #23)
+    // aplicaba solo para decidir si la cuota se cerraba, nunca para decidir CUANTO.
+    //
+    // La diferencia entre ambas ES el efecto cambiario, y queda derivable como
+    // `partialPaid - montoCOPRecibido` sin necesidad de otra columna.
     const montoNum = Math.round(+monto || 0);
     if (montoNum <= 0) throw new ClientError('El monto debe ser mayor a 0');
+
+    const loanPay = db.prepare('SELECT moneda, trmAcordada FROM loans WHERE id = ?').get(pay.prestamoId);
+    const esUSDLoan = !!(loanPay && loanPay.moneda === 'USD' && loanPay.trmAcordada > 0);
+    const usdNum = Math.round((+montoUSD || 0) * 100) / 100;
+    // Sin USD declarado se cae a la caja: mantiene el contrato para cualquier llamador que
+    // no lo envie (la UI si lo exige en prestamos USD desde este sprint).
+    const obligacion = (esUSDLoan && usdNum > 0) ? Math.round(usdNum * loanPay.trmAcordada) : montoNum;
+
     const yaPagado = pay.partialPaid || 0;
     const restante = pay.cuotaTotal - yaPagado;
-    if (montoNum > restante) throw new ClientError('El monto supera el saldo pendiente de la cuota ($' + Math.round(restante).toLocaleString() + ')');
 
-    const nuevoPartial = yaPagado + montoNum;
     // v1.12.x FIX (pago bimonetario): en prestamos USD, si el USD recibido cubre la cuota en USD
     // (cuotaTotal / trmAcordada), la cuota se completa aunque los COP sean menores por una baja de
     // la TRM. Se acepta el deficit/superavit cambiario sin penalizar el estado de la cuota.
-    const loanPay = db.prepare('SELECT moneda, trmAcordada FROM loans WHERE id = ?').get(pay.prestamoId);
-    const cuotaEnUSD = (loanPay && loanPay.moneda === 'USD' && loanPay.trmAcordada > 0)
-      ? Math.round((pay.cuotaTotal / loanPay.trmAcordada) * 100) / 100 : 0;
-    const usdRecibidoAcum = Math.round(((pay.montoUSDRecibido || 0) + (+montoUSD || 0)) * 100) / 100;
+    const cuotaEnUSD = esUSDLoan ? Math.round((pay.cuotaTotal / loanPay.trmAcordada) * 100) / 100 : 0;
+    const usdRecibidoAcum = Math.round(((pay.montoUSDRecibido || 0) + usdNum) * 100) / 100;
     const completaUSD = cuotaEnUSD > 0 && usdRecibidoAcum >= cuotaEnUSD - 0.005; // tolerancia de centavo
+
+    // Se valida OBLIGACION contra OBLIGACION. Comparar la caja contra el restante rechazaba
+    // pagos legitimos en USD cuando la TRM subia, y aceptaba de mas cuando bajaba.
+    // `completaUSD` exime: ahi el redondeo del ultimo pago puede pasarse por centavos y la
+    // cuota se ancla a cuotaTotal igual.
+    if (obligacion > restante && !completaUSD) {
+      throw new ClientError('El monto supera el saldo pendiente de la cuota ($' + Math.round(restante).toLocaleString() + ')'
+        + (esUSDLoan ? ' — en dolares: ' + Math.round((restante / loanPay.trmAcordada) * 100) / 100 : ''));
+    }
+
+    const nuevoPartial = yaPagado + obligacion;
     const completa = nuevoPartial >= pay.cuotaTotal || completaUSD;
     const fechaPago = fecha || hoyStr();
     const obsPrev = pay.observaciones || '';
@@ -212,10 +242,15 @@ module.exports = function crearRutasPayments(ctx) {
       payload: { ok: true, completa, partialPaid: nuevoPartial, restante: Math.max(0, pay.cuotaTotal - nuevoPartial) },
       aplicar: () => {
     if (completa) {
-      // Completa la cuota: marcar Pagado
-      const usdAcum = (pay.montoUSDRecibido || 0) + (+montoUSD || 0);
+      // Completa la cuota: marcar Pagado.
+      // montoCOPRecibido acumula CAJA, no obligacion: antes se escribia `nuevoPartial`, que
+      // en un prestamo COP coincide con la caja pero desde este sprint ya no tiene por que
+      // (en USD la obligacion se valua a la TRM pactada). Escribir la obligacion aqui
+      // inflaria "Cobros del Mes" con pesos que nunca entraron.
+      const copAcum = (pay.montoCOPRecibido || 0) + montoNum;
+      const usdAcum = (pay.montoUSDRecibido || 0) + usdNum;
       db.prepare("UPDATE payments SET estadoPago=?, fechaRecaudo=?, observaciones=?, montoCOPRecibido=?, montoUSDRecibido=?, partialPaid=?, recibos=?, paidAt=datetime('now','localtime') WHERE id=?")
-        .run('Pagado', fechaPago, obsCombinada, nuevoPartial, Math.round(usdAcum * 100) / 100, pay.cuotaTotal, recibosJSON, req.params.id);
+        .run('Pagado', fechaPago, obsCombinada, copAcum, Math.round(usdAcum * 100) / 100, pay.cuotaTotal, recibosJSON, req.params.id);
 
       // Si era la cuota con proximaCuotaExtra, limpiarla del loan
       const loanRow = db.prepare('SELECT proximaCuotaExtraN FROM loans WHERE id = ?').get(pay.prestamoId);
@@ -231,8 +266,8 @@ module.exports = function crearRutasPayments(ctx) {
       }
     } else {
       // Solo suma al partialPaid, estado permanece
-      const copAcum = (pay.montoCOPRecibido || 0) + montoNum;
-      const usdAcum = (pay.montoUSDRecibido || 0) + (+montoUSD || 0);
+      const copAcum = (pay.montoCOPRecibido || 0) + montoNum;   // CAJA
+      const usdAcum = (pay.montoUSDRecibido || 0) + usdNum;
       db.prepare('UPDATE payments SET partialPaid=?, observaciones=?, montoCOPRecibido=?, montoUSDRecibido=?, recibos=? WHERE id=?')
         .run(nuevoPartial, obsCombinada, copAcum, Math.round(usdAcum * 100) / 100, recibosJSON, req.params.id);
     }

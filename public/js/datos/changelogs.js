@@ -562,5 +562,13 @@ export const CHANGELOGS = {
     'Si marcas o desmarcas el mes de interes adicional, el documento se recalcula solo: siempre imprime lo mismo que muestra la pantalla.',
     'La casilla del mes adicional ahora explica que se cobra y por que, en vez de solo preguntar.',
     'En los creditos de Interes Diario el modal de liquidacion ya muestra el interes acumulado con su formula. Antes el total incluia ese valor sin decir de donde salia.'
+  ],
+  '2.6.1': [
+    'CORRECCION IMPORTANTE en los pagos de prestamos en dolares: la deuda ahora baja por los dolares que entrega el cliente, valuados a la tasa pactada. Antes se valuaba con los pesos del dia, asi que si la tasa habia bajado quedaba deuda pendiente aunque el cliente hubiera entregado los dolares acordados.',
+    'Al registrar un pago de un prestamo en dolares, el campo de USD pasa a ser obligatorio: es el que define cuanta deuda se abona.',
+    'El modal de pago muestra en vivo la tasa implicita de la operacion y cuanto se gano o se perdio por el cambio, antes de confirmar.',
+    'Los pesos realmente recibidos se siguen registrando aparte como caja real, de modo que los cobros del mes y el flujo de caja no se alteran.',
+    'El recibo de pago refleja el mismo criterio: el monto abonado y el saldo restante se expresan en los dolares que el cliente entrego.',
+    'Se corrigio el registro de un pago afectado por este error.'
   ]
 };

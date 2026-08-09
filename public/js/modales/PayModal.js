@@ -57,7 +57,15 @@ export function PayModal(props){
     if(sending) return;
     var m=+montoParcial||0;
     if(m<=0){showError('Ingresa el monto del pago parcial');return;}
-    if(m>restante){showError('El monto supera el saldo pendiente ('+fmt(restante)+')');return;}
+    // En un prestamo USD el dolar NO es opcional: es lo que define cuanta DEUDA se extingue
+    // (se valua a la TRM pactada). Sin el, el backend cae a los COP de caja y la deuda baja
+    // de menos cuando la TRM del dia esta por debajo de la pactada — el cliente entrega los
+    // dolares pactados y le queda deuda fantasma. Misma doctrina que AbonoModal (v2.0.0).
+    if(esUSD&&(+parcialUSD||0)<=0){showError('Ingresa los USD recibidos: en prestamos en dolares son los que definen cuanta deuda se abona');return;}
+    // La obligacion se mide en la MISMA moneda que el restante (ambos a TRM pactada).
+    if(esUSD){
+      if(Math.round((+parcialUSD||0)*loan.trmAcordada)>restante+1){showError('Los USD ingresados superan el saldo pendiente ('+copToUsd(restante,loan.trmAcordada)+')');return;}
+    } else if(m>restante){showError('El monto supera el saldo pendiente ('+fmt(restante)+')');return;}
     // v2.3.0: el recibo se emite DESPUES de confirmar la escritura. Antes se imprimia primero, asi
     // que un fallo de red dejaba en manos del deudor el comprobante de un pago NUNCA registrado.
     // `allPays` se captura aqui a proposito: es el estado PREVIO, que es el que generateRecibo
@@ -70,6 +78,9 @@ export function PayModal(props){
   function submitCompleto(){
     if(sending) return;
     if(esUSD&&(!copRec||+copRec<=0)){showError('Ingresa el monto COP recibido para prestamos en USD');return;}
+    // Mismo motivo que en el parcial: sin el dolar declarado, el efecto cambiario de este
+    // cobro es irregistrable y la cuota se valua con los COP del dia.
+    if(esUSD&&(+usdRec||0)<=0){showError('Ingresa los USD recibidos: son los que confirman que la cuota quedo cubierta en dolares');return;}
     if(yaPagado>0){
       // Habia pagos parciales: el recibo es "Pago final" que completa la cuota
       _run(function(){return onPartial(pay.id,restante,fecha,obs,+usdRec||0).then(function(r){
@@ -110,15 +121,27 @@ export function PayModal(props){
         h('input',{type:'text',inputMode:'numeric',value:fmtNumInput(montoParcial),onChange:function(e){setMontoParcial(parseNum(e.target.value));},placeholder:'0',className:'inp',style:{border:'1px solid var(--yellow)'}}),
         montoParcial>0&&h('div',{style:{fontSize:11,marginTop:4,fontFamily:'monospace',color:+montoParcial>=restante?'var(--green)':'var(--text2)'}},
           +montoParcial>=restante?'Con este pago la cuota quedaria COMPLETA':'Quedarian pendientes: '+fmt(restante-(+montoParcial||0)))),
-      esUSD&&h(Fld,{label:'USD recibidos (opcional)'},
-        h('input',{type:'text',inputMode:'decimal',value:parcialUSD,onChange:function(e){setParcialUSD(parseDecimalInput(e.target.value));},placeholder:'Ej: 6.50',className:'inp',style:{border:'1px solid var(--blue)'}}))),
+      esUSD&&h(Fld,{label:'USD recibidos *'},
+        h('input',{type:'text',inputMode:'decimal',value:parcialUSD,onChange:function(e){setParcialUSD(parseDecimalInput(e.target.value));},placeholder:'Ej: 120.00',className:'inp',style:{border:'1px solid var(--blue)'}})),
+      // Doble entrada visible: el dolar define la deuda que se extingue, los COP son la caja
+      // real. La diferencia entre ambos ES el efecto cambiario, y aqui se ve antes de guardar.
+      esUSD&&(+parcialUSD||0)>0&&(+montoParcial||0)>0&&(function(){
+        var oblig=Math.round((+parcialUSD)*loan.trmAcordada);
+        var efecto=(+montoParcial)-oblig;
+        var trmImp=Math.round((+montoParcial)/(+parcialUSD));
+        return h('div',{style:{fontSize:10.5,color:'var(--text3)',marginTop:6,lineHeight:1.5}},
+          'Abona '+fmt(oblig)+' de deuda (TRM pactada $'+fmtN(loan.trmAcordada)+'). ',
+          'TRM implicita $'+fmtN(trmImp)+' — ',
+          h('span',{style:{color:efecto<0?'var(--red)':'var(--green)',fontWeight:600}},
+            (efecto<0?'perdida':'ganancia')+' por TRM '+fmt(Math.abs(efecto))));
+      })()),
 
     // ── Modo Completo (USD fields) ──
     tipoPago==='completo'&&esUSD&&pay.estadoPago!=='Pagado'&&h('div',{style:{background:'rgba(187,128,9,.1)',border:'1px solid var(--yellow)',borderRadius:12,padding:'10px 12px',marginBottom:4}},
       h(Fld,{label:'COP realmente recibidos *'},
         h('input',{type:'text',inputMode:'numeric',value:fmtNumInput(copRec),onChange:function(e){setCopRec(parseNum(e.target.value));},placeholder:'Monto en pesos recibido',className:'inp',style:{border:'1px solid var(--yellow)'}})),
-      h(Fld,{label:'USD recibidos (opcional)'},
-        h('input',{type:'text',inputMode:'decimal',value:usdRec,onChange:function(e){setUsdRec(parseDecimalInput(e.target.value));},placeholder:'Ej: 6.50',className:'inp',style:{border:'1px solid var(--blue)'}}))),
+      h(Fld,{label:'USD recibidos *'},
+        h('input',{type:'text',inputMode:'decimal',value:usdRec,onChange:function(e){setUsdRec(parseDecimalInput(e.target.value));},placeholder:'Ej: 250.00',className:'inp',style:{border:'1px solid var(--blue)'}}))),
 
     h(Fld,{label:'Observaciones'},h('input',{value:obs,onChange:function(e){setObs(e.target.value);},placeholder:'Notas opcionales...',className:'inp'})),
     pay.estadoPago!=='Pagado'&&h('label',{style:{display:'flex',alignItems:'center',gap:8,marginTop:14,cursor:'pointer',fontSize:12,color:'var(--text2)'}},

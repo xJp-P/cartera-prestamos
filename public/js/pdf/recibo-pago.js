@@ -28,15 +28,26 @@ export function generateRecibo(pay, loan, copRec, usdRec, allPays, opts) {
   // OJO: el recibo se emite ANTES de persistir, asi que `allPays` es el estado PREVIO y el ledger
   // aun no contiene este evento. Por eso se parte de lo que la cuota debia (pendienteDeCuota) y se
   // aplica la cascada al monto recibido, en vez de leer el ledger.
+  // CAJA vs OBLIGACION: en un prestamo USD la deuda esta denominada en dolares, asi que lo
+  // que este pago extingue se valua a la TRM PACTADA (usdRec * trm), no a los pesos que
+  // entraron a la TRM del dia. Cascadear la caja hacia interes/capital hacia que el recibo
+  // declarara menos de lo que el cliente realmente abono — el mismo defecto que /partial
+  // tenia al escribir `partialPaid` (misma doctrina que /abono desde v2.0.0, Bug #37).
+  // La diferencia entre ambas es efecto cambiario y NO es deuda viva.
+  var obligRecibida = (esUSD && loan && loan.trmAcordada > 0 && (+usdRec || 0) > 0)
+    ? Math.round((+usdRec) * loan.trmAcordada)
+    : Math.round(montoRecibido);
   var _pendR = pendienteDeCuota(pay);
-  var _iR = Math.min(Math.round(montoRecibido), _pendR.interes);
-  var impPago = { interes: _iR, capital: Math.min(Math.round(montoRecibido) - _iR, _pendR.capital) };
+  var _iR = Math.min(obligRecibida, _pendR.interes);
+  var impPago = { interes: _iR, capital: Math.min(obligRecibida - _iR, _pendR.capital) };
   // Saldo DESPUES del pago = saldo con caja aplicada (previo) menos el capital que este pago cubre.
   // Antes se imprimia `pay.saldoFinal`, el cierre PROYECTADO del cronograma: una TERCERA definicion
   // de saldo, que no coincidia ni con la app ni con los demas PDFs.
   var saldoRestante = loan ? Math.max(0, saldoConCaja(loan, allPays) - impPago.capital) : pay.saldoFinal;
   var yaAbonadoPrev = opts.yaAbonadoPrev || 0;
-  var totalAcum = yaAbonadoPrev + montoRecibido;
+  // `yaAbonadoPrev` viene de partialPaid, que ya esta valuado en obligacion: se le suma la
+  // obligacion de este pago, no la caja, o el "restante" volveria a mentir en USD.
+  var totalAcum = yaAbonadoPrev + obligRecibida;
   // v1.12.x FIX (recibo bimonetario): en prestamos USD, si el USD recibido cubre la cuota en USD
   // (cuotaTotal/trmAcordada), el pago NO es parcial aunque los COP sean menores por la baja de la
   // TRM. Espeja la logica del backend para que el recibo no marque "Abono parcial" por error.
