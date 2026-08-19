@@ -570,5 +570,9 @@ export const CHANGELOGS = {
     'Los pesos realmente recibidos se siguen registrando aparte como caja real, de modo que los cobros del mes y el flujo de caja no se alteran.',
     'El recibo de pago refleja el mismo criterio: el monto abonado y el saldo restante se expresan en los dolares que el cliente entrego.',
     'Se corrigio el registro de un pago afectado por este error.'
+  ],
+  '2.6.2': [
+    'La ultima cuota del cronograma tentativo ya no se muestra 1 o 2 pesos por debajo del valor de las demas. Era un desvio de redondeo en la previsualizacion: el cronograma que se guardaba y el que sale en los PDF siempre estuvieron correctos.',
+    'Afectaba por igual a la previsualizacion del formulario de nuevo prestamo y a la de la Calculadora; ahora ambas usan el mismo calculo que el motor, asi que no pueden volver a separarse.'
   ]
 };

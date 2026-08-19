@@ -327,8 +327,14 @@ async function faseLectura() {
       abonos.filter(p => p.estadoPago !== 'Pagado').map(p => p.id).join(','));
 
     // Cuerpo del golden: sin la cola auto-extendible; estado normalizado.
+    // El filtro NO puede depender de `hoy`: excluia solo las cuotas de 'Intereses' aun
+    // FUTURAS, asi que cada vez que una cruzaba su vencimiento entraba al golden y la
+    // linea base caducaba sola (medido: una fila nueva a los 10 dias, sin tocar codigo).
+    // Se excluyen TODAS las no Pagadas de esa modalidad, que es lo que el comentario ya
+    // decia: su numero es intrinsecamente dependiente del calendario y su resumen vive
+    // aparte en `autoExtend`.
     const cuerpo = pays
-      .filter(p => !(modalidadDe[p.prestamoId] === 'Intereses' && p.estadoPago !== 'Pagado' && p.fechaPago > hoy))
+      .filter(p => !(modalidadDe[p.prestamoId] === 'Intereses' && p.estadoPago !== 'Pagado'))
       .map(p => Object.assign({}, p, { estadoPago: p.estadoPago === 'Pagado' ? 'Pagado' : '<PEND_AUTO>' }))
       .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     golden('GET_api_payments', { filas: cuerpo, autoExtend: resumenAutoExtend });

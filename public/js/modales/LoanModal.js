@@ -8,7 +8,7 @@
 import { Fld, Modal } from '../componentes/base.js';
 import { Ico } from '../componentes/iconos.js';
 import { showError } from '../core/api.js';
-import { pmt } from '../core/calculo.js';
+import { pmt, filasPreview } from '../core/calculo.js';
 import { MODALIDAD_DIARIA, diasEntre } from '../core/dominio.js';
 import {
   copToUsd, fmt, fmtD, fmtN, fmtNumInput, fmtUSD, parseDecimalInput, parseIntInput, parseNum,
@@ -148,7 +148,8 @@ export function LoanModal(props){
     // plazo 0 y daria Infinity.
     else if(f.modalidad===MODALIDAD_DIARIA){c=Math.round(montoCOP*rMensual/30);}
     else{c=Math.round(pmt(r,n,montoCOP));}
-    // Cronograma tentativo (mismo algoritmo que CalcView)
+    // Cronograma tentativo. El bucle vive en `filasPreview` (core/calculo.js), espejo
+    // del motor: antes esta copia y la de CalcView desviaban la ultima cuota (Bug #51).
     var rows=[];
     if(c>0){
       if(f.modalidad==='Prestamo'){
@@ -157,22 +158,8 @@ export function LoanModal(props){
         // v1.10.0 — 1 cuota: interes = ganancia, capital = montoCOP
         rows.push({n:1,interes:gananciaCOPCalc,capital:montoCOP,cuota:montoCOP+gananciaCOPCalc,saldo:0});
       } else {
-        var saldoSim=montoCOP;
         var nFilas=f.modalidad==='Intereses'?Math.min(n||12,24):n;
-        for(var i=0;i<nFilas;i++){
-          var intI=Math.round(saldoSim*r);
-          var isLast=i===nFilas-1;
-          var capI,cuotaI;
-          if(f.modalidad==='Intereses'){
-            capI=0; cuotaI=intI;
-          } else {
-            capI=isLast?Math.round(saldoSim):Math.round(c-intI);
-            cuotaI=isLast?Math.round(intI+saldoSim):c;
-          }
-          var sf=Math.max(0,Math.round(saldoSim-capI));
-          rows.push({n:i+1,interes:intI,capital:capI,cuota:cuotaI,saldo:sf});
-          saldoSim=sf;
-        }
+        rows=filasPreview(montoCOP,r,nFilas,f.modalidad==='Intereses',c);
       }
     }
     var totalInt=rows.reduce(function(s,r){return s+r.interes;},0);

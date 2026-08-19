@@ -8,7 +8,7 @@
 import { Fld } from '../componentes/base.js';
 import { Ico } from '../componentes/iconos.js';
 import { showError } from '../core/api.js';
-import { pmt } from '../core/calculo.js';
+import { pmt, filasPreview } from '../core/calculo.js';
 import { copToUsd, fmt, fmtN, fmtNumInput, parseNum } from '../core/format.js';
 import { h, useMemo, useState } from '../core/react.js';
 
@@ -39,22 +39,10 @@ export function CalcView(props){
       cuota=Math.round(pmt(r,n,pv));
       intP=Math.round(pv*r); capP=cuota-intP;
     }
-    var rows=[]; var saldo=pv;
+    // Mismo bucle que el preview de LoanModal: vive en `filasPreview` (core/calculo.js),
+    // espejo del motor. Antes eran dos copias y ninguna corregia la ultima cuota (Bug #51).
     var nCuotas=modalidad==='Intereses'?Math.min(n||12,24):n;
-    for(var i=0;i<nCuotas;i++){
-      var intI=Math.round(saldo*r);
-      var isLast=i===nCuotas-1;
-      var capI,cuotaI;
-      if(modalidad==='Intereses'){
-        capI=0; cuotaI=intI;
-      } else {
-        capI=isLast?Math.round(saldo):Math.round(cuota-intI);
-        cuotaI=isLast?Math.round(intI+saldo):cuota;
-      }
-      var sf=Math.max(0,Math.round(saldo-capI));
-      rows.push({n:i+1,interes:intI,capital:capI,cuota:cuotaI,saldo:sf});
-      saldo=sf;
-    }
+    var rows=filasPreview(pv,r,nCuotas,modalidad==='Intereses',cuota);
     var totalInt=rows.reduce(function(s,r){return s+r.interes;},0);
     var totalPagar=rows.reduce(function(s,r){return s+r.cuota;},0);
     return {cuota:cuota,intP:intP,capP:capP,rows:rows,totalInt:totalInt,totalPagar:totalPagar,montoCOP:pv};
