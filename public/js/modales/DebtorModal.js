@@ -21,7 +21,7 @@ import { esAbono } from '../core/ids.js';
 
 // ── DebtorModal ───────────────────────────────────────────────────────────────
 export function DebtorModal(props){
-  var d=props.deudor,pays=props.pays,loans=props.loans,onClose=props.onClose,onNewLoan=props.onNewLoan,onAbono=props.onAbono,onCorte=props.onCorte,onRequestLiquidar=props.onRequestLiquidar,onReload=props.onReload,onReestructurar=props.onReestructurar,datosPago=props.datosPago;
+  var d=props.deudor,pays=props.pays,loans=props.loans,onClose=props.onClose,onNewLoan=props.onNewLoan,onAbono=props.onAbono,onCobro=props.onCobro,onCorte=props.onCorte,onRequestLiquidar=props.onRequestLiquidar,onReload=props.onReload,onReestructurar=props.onReestructurar,datosPago=props.datosPago;
   var ex=useState(null); var expLoan=ex[0]; var setExpLoan=ex[1];
   var cr=useState(null); var cronoLoan=cr[0]; var setCronoLoan=cr[1];
   // v2.0.0 — confirmLiq / incluyeProxMes / liqSending se movieron al componente LiquidarModal
@@ -490,8 +490,17 @@ export function DebtorModal(props){
                   h('div',{style:labelStyle},'Cobrar'),
                   // En un credito abierto el boton principal es el CORTE: /abono lo rechaza
                   // porque crearia una fila que el motor del devengo no mira.
-                  h('button',{onClick:function(e){e.stopPropagation();if(esDiario(l)&&onCorte){onCorte(l);}else{onAbono(l);}},style:btnPrimary},
-                    h(Ico,{name:esDiario(l)?'receipt':'dollar',size:15,color:'#fff',sw:2.2}),esDiario(l)?'Registrar corte':'Registrar abono'),
+                  //
+                  // En las otras cuatro modalidades el principal es REGISTRAR COBRO, que
+                  // imputa en cascada (intereses vencidos -> capital vencido -> abono).
+                  // "Registrar abono" baja a secundario y conserva su semantica literal:
+                  // mandar el 100% a capital es una decision valida del acreedor (art. 1653
+                  // permite consentir la imputacion a capital), pero deja de ser el camino
+                  // por defecto, que era como se dejaba sin cobrar el interes ya causado.
+                  h('button',{onClick:function(e){e.stopPropagation();if(esDiario(l)&&onCorte){onCorte(l);}else if(onCobro){onCobro(l);}else{onAbono(l);}},style:btnPrimary},
+                    h(Ico,{name:esDiario(l)?'receipt':'dollar',size:15,color:'#fff',sw:2.2}),esDiario(l)?'Registrar corte':'Registrar cobro'),
+                  !esDiario(l)&&onCobro&&h('button',{onClick:function(e){e.stopPropagation();onAbono(l);},style:Object.assign({},btnNeutral,{marginTop:6})},
+                    h(Ico,{name:'trending',size:15,color:'var(--text2)',sw:2.2}),'Abono directo a capital'),
                   h('button',{onClick:function(e){e.stopPropagation();onRequestLiquidar(l);},style:Object.assign({},btnSecondary,{marginTop:6})},
                     h(Ico,{name:'check',size:15,color:'var(--green)',sw:2.4}),'Liquidar deuda'),
                   // Cobro del interes devengado. Solo en credito abierto: en las otras 4

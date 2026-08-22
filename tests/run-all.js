@@ -36,6 +36,7 @@ const SUITES = [
   { nombre: 'props-dominio', archivo: 'props-dominio.js', desc: 'invariantes de imputacion, saldos y flujo de caja' },
   { nombre: 'pdf-render',    archivo: 'pdf-render.js',    desc: 'estructura de los 5 generadores de PDF' },
   { nombre: 'e2e-api',       archivo: 'e2e-api.js',       desc: 'los 25 endpoints contra el server.js real' },
+  { nombre: 'cascada-cobro', archivo: 'cascada-cobro.js', desc: 'orquestador de cobro en cascada (mora -> abono) contra el server real' },
 ];
 
 const args  = process.argv.slice(2);

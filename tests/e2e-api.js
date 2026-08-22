@@ -1273,8 +1273,16 @@ async function faseBlindaje() {
       // Se corrompe la modalidad DIRECTO en la BD, saltandose la validacion del POST: es
       // como llegaria un dato heredado o una migracion futura a medio aplicar.
       conDbW(DB, d => d.prepare("UPDATE loans SET modalidad='Modalidad Corrupta' WHERE id=?").run(victima.id));
-      const pendAntes = conDb(DB, d => d.prepare(
-        "SELECT COUNT(*) c FROM payments WHERE prestamoId=? AND estadoPago='Pendiente'").get(victima.id).c);
+      // Se cuentan las cuotas NO Pagadas (Pendiente + En Mora), no solo las Pendientes.
+      // Lo que este aserto vigila es que /recalculate no BORRE el cronograma del prestamo
+      // que rechazo; pero la auto-mora del housekeeping mueve legitimamente Pendiente ->
+      // En Mora en cuanto una cuota del fixture queda vencida respecto de la fecha de hoy,
+      // y eso hacia caducar el test con el calendario (la misma clase de fallo que el
+      // saneo del golden de GET /api/payments en v2.6.2). Contar ambos estados es inmune
+      // al paso del tiempo y sigue detectando el borrado, que es el fallo real.
+      const noPagadas = id => conDb(DB, d => d.prepare(
+        "SELECT COUNT(*) c FROM payments WHERE prestamoId=? AND estadoPago IN ('Pendiente','En Mora')").get(id).c);
+      const pendAntes = noPagadas(victima.id);
       const rRec = await pedir(S, 'POST', '/api/recalculate', {});
       R.eq('E6 responde 200 pese al prestamo corrupto', rRec.status, 200);
       R.check('E6 lo REPORTA en `omitidos` en vez de callarlo',
@@ -1283,8 +1291,7 @@ async function faseBlindaje() {
       R.check('E6 recalculo los demas prestamos', rRec.json && rRec.json.updated > 0,
         'updated=' + ((rRec.json || {}).updated));
       R.eq('E6 el corrupto quedo INTACTO (su transaccion revirtio sola)',
-        conDb(DB, d => d.prepare("SELECT COUNT(*) c FROM payments WHERE prestamoId=? AND estadoPago='Pendiente'").get(victima.id).c),
-        pendAntes);
+        noPagadas(victima.id), pendAntes);
       conDbW(DB, d => d.prepare("UPDATE loans SET modalidad='Capital + Intereses' WHERE id=?").run(victima.id));
 
       // ── E7 — PUT /loans no puede huerfanar un pago parcial ──────────────────

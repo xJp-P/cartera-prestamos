@@ -14,7 +14,7 @@ import { esAbono } from '../core/ids.js';
 
 // ── Cartera ───────────────────────────────────────────────────────────────────
 export function CarteraView(props){
-  var loans=props.loans,pays=props.pays,onAdd=props.onAdd,onEdit=props.onEdit,onDelete=props.onDelete,onAbono=props.onAbono,onCorte=props.onCorte,onForceClose=props.onForceClose;
+  var loans=props.loans,pays=props.pays,onAdd=props.onAdd,onEdit=props.onEdit,onDelete=props.onDelete,onAbono=props.onAbono,onCobro=props.onCobro,onCorte=props.onCorte,onForceClose=props.onForceClose;
   var es=useState(null); var exp=es[0]; var setExp=es[1];
   var ft=useState('Activo'); var filtro=ft[0]; var setFiltro=ft[1];
   var active=loans.filter(function(l){return l.estado==='Activo';});
@@ -103,7 +103,7 @@ export function CarteraView(props){
                 // En un credito abierto el abono NO va por /abono (crearia una fila que el
                 // motor del devengo no mira): va por CORTE, que baja capital y liquida el
                 // interes en el mismo movimiento.
-                loan.estado==='Activo'&&h('button',{onClick:function(){if(esDiario(loan)&&onCorte){onCorte(loan);}else{onAbono(loan);}},title:esDiario(loan)?'Registrar corte':'Abono a capital',style:{padding:7,background:'var(--green-bg)',border:'none',borderRadius:8,cursor:'pointer',display:'flex'}},h(Ico,{name:esDiario(loan)?'receipt':'dollar',size:14,color:'var(--green)',sw:1.8})),
+                loan.estado==='Activo'&&h('button',{onClick:function(){if(esDiario(loan)&&onCorte){onCorte(loan);}else if(onCobro){onCobro(loan);}else{onAbono(loan);}},title:esDiario(loan)?'Registrar corte':'Registrar cobro',style:{padding:7,background:'var(--green-bg)',border:'none',borderRadius:8,cursor:'pointer',display:'flex'}},h(Ico,{name:esDiario(loan)?'receipt':'dollar',size:14,color:'var(--green)',sw:1.8})),
                 loan.estado==='Activo'&&onForceClose&&h('button',{onClick:function(){onForceClose(loan);},title:'Cerrar prestamo (forzar)',style:{padding:7,background:'var(--yellow-bg)',border:'none',borderRadius:8,cursor:'pointer',display:'flex'}},h(Ico,{name:'xCircle',size:14,color:'var(--yellow)',sw:1.8})),
                 h('button',{onClick:function(){onEdit(loan);},title:'Editar',style:{padding:7,background:'var(--blue-bg)',border:'none',borderRadius:8,cursor:'pointer',display:'flex'}},h(Ico,{name:'edit',size:14,color:'var(--blue)',sw:1.8})),
                 h('button',{onClick:function(){onDelete(loan.id);},title:'Eliminar prestamo',style:{padding:7,background:'var(--red-bg)',border:'none',borderRadius:8,cursor:'pointer',display:'flex'}},h(Ico,{name:'trash',size:14,color:'var(--red)',sw:1.8})))),

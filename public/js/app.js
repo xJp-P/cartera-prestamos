@@ -52,6 +52,7 @@ import { DebtorModal } from './modales/DebtorModal.js';
 import { PayModal } from './modales/PayModal.js';
 import { PreflightMoraModal } from './modales/PreflightMoraModal.js';
 import { AbonoModal } from './modales/AbonoModal.js';
+import { CobroModal } from './modales/CobroModal.js';
 import { CorteModal } from './modales/CorteModal.js';
 import { LiquidarModal } from './modales/LiquidarModal.js';
 import { RestructureModal } from './modales/RestructureModal.js';
@@ -98,6 +99,8 @@ function App(){
   // `var s13` en este bloque (funciona por el orden de asignacion, pero no hace falta
   // sumar una tercera colision).
   var sCorte=useState(null); var corteModal=sCorte[0]; var setCorteModal=sCorte[1];
+  // Cobro con imputacion en cascada (mora -> abono). Modal hermano de AbonoModal.
+  var sCobro=useState(null); var cobroModal=sCobro[0]; var setCobroModal=sCobro[1];
   var s13=useState(false); var menuOpen=s13[0]; var setMenuOpen=s13[1];
   var s14=useState(null); var calcData=s14[0]; var setCalcData=s14[1];
   var s15=useState(null); var toast=s15[0]; var setToast=s15[1];
@@ -477,6 +480,67 @@ function App(){
         });
       });
   }
+  // ── ORQUESTADOR DE COBRO EN CASCADA ─────────────────────────────────────────
+  // Recorre los pasos de `planCascada` contra los endpoints que YA existen:
+  // `/partial` para cada cuota En Mora y `/abono` para el remanente. El backend no
+  // se entera de que hay una cascada — solo ve las mismas peticiones de siempre.
+  //
+  // ESTRICTAMENTE EN SERIE, nunca `Promise.all`: cada paso muta el estado que lee el
+  // siguiente (saldar una cuota En Mora mueve su capital de bucket, y `/abono`
+  // regenera el cronograma). Lanzarlos en paralelo seria una carrera contra la misma
+  // fila.
+  //
+  // AL PRIMER FALLO SE CORTA. Los helpers de API no rechazan: atrapan el error y
+  // resuelven `null` (por eso aqui se comprueba `!r || r.error` y no hay `.catch`,
+  // misma doctrina que `_submitGuard`). Seguir tras un fallo podria encadenar
+  // escrituras sobre un estado que ya no es el que se planeo, asi que se devuelve
+  // que SI se aplico y que no, y el modal lo muestra en vez de cerrarse.
+  //
+  // Cada paso es su propia entrada en el journal: si algo queda a medias, se
+  // deshace pieza por pieza desde el Historial.
+  function _doCobroCascada(loanId,plan,fecha,obs){
+    var fromDeudor=cobroModal&&cobroModal.fromDeudor;
+    var estado={ok:true,hechos:[],error:null,pasoFallido:null};
+    var cadena=plan.pasos.reduce(function(prev,paso){
+      return prev.then(function(){
+        if(!estado.ok) return;
+        var pet=paso.tipo==='partial'
+          // /partial: `monto` es CAJA, `montoUSD` define la OBLIGACION extinguida.
+          ? API.post('/api/payments/'+paso.payId+'/partial',{
+              monto:paso.cajaCOP,fecha:fecha,observaciones:obs,montoUSD:paso.obligacionUSD||0})
+          // /abono: `monto` es el CAPITAL (a TRM pactada) y `montoCOPRecibido` la CAJA.
+          // recalcMode 'mantener' = conserva el plazo y baja la cuota, que es lo que el
+          // preview del modal dibuja con `filasPreview`.
+          : API.post('/api/loans/'+loanId+'/abono',{
+              monto:paso.obligacionCOP,fecha:fecha,observaciones:obs,
+              montoUSD:paso.obligacionUSD||0,montoCOPRecibido:paso.cajaCOP,
+              liquidar:false,recalcMode:'mantener',recalcValor:null,intExtra:0});
+        return pet.then(function(r){
+          if(!r||r.error){
+            estado.ok=false;
+            estado.error=(r&&r.error)||'No se pudo contactar la aplicación.';
+            estado.pasoFallido=paso;
+            return;
+          }
+          estado.hechos.push(paso);
+        });
+      });
+    },Promise.resolve());
+    return cadena.then(function(){
+      return reload().then(function(){
+        if(estado.ok){
+          setCobroModal(null);
+          if(fromDeudor) setDebtorModal(fromDeudor);
+          showToast(plan.pasos.length>1
+            ? 'Cobro registrado en '+plan.pasos.length+' movimientos'
+            : 'Cobro registrado');
+        } else {
+          showToast(estado.error,'error');
+        }
+        return estado;
+      });
+    });
+  }
   function _doReestructurar(loanId,mode,valor,fromDeudor){
     return API.post('/api/loans/'+loanId+'/reestructurar',{recalcMode:mode,recalcValor:valor})
       .then(function(r){
@@ -795,7 +859,7 @@ function App(){
         h('button',{onClick:function(){window.electronAPI.installUpdate();},style:{background:'var(--green2)',color:'#fff',border:'none',borderRadius:8,padding:'6px 14px',fontSize:11,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}},'Reiniciar e instalar')),
       h('div',{className:'main-content'},
       view==='dashboard'  && h(DashView,  {metrics:metrics,isEmpty:loans.length===0,onNav:navTo,loans:loans,pays:pays,onNameClick:openDebtorByName,onNewLoan:function(){navTo('cartera');setLoanModal('new');}}),
-      view==='cartera'    && h(CarteraView,{loans:loans,pays:pays,onAdd:function(){setLoanModal('new');},onEdit:setLoanModal,onDelete:delLoan,onAbono:setAbonoModal,onCorte:setCorteModal,onForceClose:forceCloseLoan}),
+      view==='cartera'    && h(CarteraView,{loans:loans,pays:pays,onAdd:function(){setLoanModal('new');},onEdit:setLoanModal,onDelete:delLoan,onAbono:setAbonoModal,onCobro:function(l){setCobroModal({loan:l});},onCorte:setCorteModal,onForceClose:forceCloseLoan}),
       view==='deudores'   && h(DeudoresView,{deudores:deudores,pays:pays,onSelect:setDebtorModal,onAdd:function(){setLoanModal('new');}}),
       view==='pagos'      && h(PagosView,  {pays:filtPays,allPays:pays,loans:loans,searchQ:searchQ,setSearchQ:setSearchQ,fMonth:fMonth,setFMonth:setFMonth,onSelect:openPayModal,onQuickPay:quickPay,onNameClick:openDebtorByName,datosPago:cfg.datos_pago}),
       view==='rendimiento'&& h(PortfolioView,{loans:loans,pays:pays}),
@@ -817,9 +881,14 @@ function App(){
       // modal de liquidacion CONSERVANDO fromDeudor, para que Cancelar devuelva al perfil.
       // No se reutiliza onClose a proposito: ese re-abriria DebtorModal encima.
       onRequestLiquidar:function(l){var fd=abonoModal&&abonoModal.fromDeudor;setAbonoModal(null);setLiquidarModal({loan:l,fromDeudor:fd});}}),
+    cobroModal&&h(CobroModal,{loan:cobroModal.loan||cobroModal,pays:pays,onConfirm:_doCobroCascada,
+      onClose:function(){if(cobroModal.fromDeudor){setDebtorModal(cobroModal.fromDeudor);} setCobroModal(null);},
+      // Mismo patron que el CTA de AbonoModal: si el dinero supera todo lo que el credito
+      // debe hoy, la herramienta correcta es Liquidar, no capar el monto en silencio.
+      onRequestLiquidar:function(l){var fd=cobroModal&&cobroModal.fromDeudor;setCobroModal(null);setLiquidarModal({loan:l,fromDeudor:fd});}}),
     corteModal&&h(CorteModal,{loan:corteModal.loan||corteModal,pays:pays,onSave:registrarCorte,
       onClose:function(){if(corteModal.fromDeudor){setDebtorModal(corteModal.fromDeudor);} setCorteModal(null);}}),
-    debtorModal&&h(DebtorModal,{deudor:debtorModal,pays:pays,loans:loans,onClose:function(){setDebtorModal(null);},onNewLoan:function(d){setDebtorModal(null);setLoanModal({_prefill:{nombre:d.nombre,cedula:d.cedula,telefono:d.telefono}});},onAbono:function(l){var dRef=debtorModal;setDebtorModal(null);setAbonoModal({loan:l,fromDeudor:dRef});},
+    debtorModal&&h(DebtorModal,{deudor:debtorModal,pays:pays,loans:loans,onClose:function(){setDebtorModal(null);},onNewLoan:function(d){setDebtorModal(null);setLoanModal({_prefill:{nombre:d.nombre,cedula:d.cedula,telefono:d.telefono}});},onAbono:function(l){var dRef=debtorModal;setDebtorModal(null);setAbonoModal({loan:l,fromDeudor:dRef});},onCobro:function(l){var dRef=debtorModal;setDebtorModal(null);setCobroModal({loan:l,fromDeudor:dRef});},
       onCorte:function(l){var dRef=debtorModal;setDebtorModal(null);setCorteModal({loan:l,fromDeudor:dRef});},onReestructurar:function(l){var dRef=debtorModal;setDebtorModal(null);setRestructureModal({loan:l,fromDeudor:dRef});},
       // v2.0.0 — el modal de liquidacion se elevo a App; aqui solo se DISPARA, con el mismo
       // patron fromDeudor de onAbono/onReestructurar (Cancelar devuelve al perfil).

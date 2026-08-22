@@ -574,5 +574,12 @@ export const CHANGELOGS = {
   '2.6.2': [
     'La ultima cuota del cronograma tentativo ya no se muestra 1 o 2 pesos por debajo del valor de las demas. Era un desvio de redondeo en la previsualizacion: el cronograma que se guardaba y el que sale en los PDF siempre estuvieron correctos.',
     'Afectaba por igual a la previsualizacion del formulario de nuevo prestamo y a la de la Calculadora; ahora ambas usan el mismo calculo que el motor, asi que no pueden volver a separarse.'
+  ],
+  '2.7.0': [
+    'Nuevo boton "Registrar cobro": escribes cuanto dinero recibiste y la app lo reparte sola, en el orden correcto — primero los intereses vencidos, luego el capital de las cuotas vencidas y al final lo que sobre como abono extraordinario a capital.',
+    'Antes, registrar un pago como "abono a capital" mandaba el 100% del dinero a capital y dejaba sin cobrar los intereses de las cuotas ya vencidas. Como una cuota en mora no genera intereses nuevos, eso amortizaba la parte del credito que si rendia y dejaba viva la que no.',
+    'El modal muestra el desglose completo antes de confirmar y una previsualizacion de como queda el cronograma despues del cobro, con la cuota nueva y las que faltan.',
+    'Cada cobro se registra como movimientos independientes y reversibles por separado desde el Historial.',
+    'El boton anterior sigue disponible como "Abono directo a capital", para cuando quieras mandar todo el dinero a capital a proposito.'
   ]
 };
