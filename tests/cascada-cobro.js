@@ -12,6 +12,9 @@
 // 3. La cadena es multi-peticion y NO es una transaccion. Por eso la prueba mas
 //    importante es la del FALLO A MITAD (seccion D): que se corte al primer error,
 //    que lo ya aplicado quede integro, y que lo posterior no se toque.
+// 4. El modal PROMETE como quedara el cronograma, y lo dibuja con `filasPreview`, una
+//    segunda implementacion de `buildSchedule`. La seccion F ata esas dos copias contra
+//    el motor real: es la clase de divergencia silenciosa que causo el Bug #51.
 //
 // Ejecutar:  ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron tests/cascada-cobro.js
 
@@ -44,23 +47,30 @@ function aplanar(entrada, vistos, orden) {
     .replace(/^[ \t]*export\s*\{[^}]*\}\s*;?[ \t]*$/gm, '');
   orden.push(src);
 }
+// `calculo.js` entra en el mismo contexto porque la seccion F necesita `filasPreview`
+// —el espejo del motor que dibuja el preview del modal— junto con `_pmt`/`_tasaPeriodo`,
+// que son los que el propio CobroModal usa para alimentarlo.
 function cargarCascada() {
   const orden = [], vistos = new Set();
   aplanar(path.join(REPO, 'public', 'js', 'core', 'cascada.js'), vistos, orden);
+  aplanar(path.join(REPO, 'public', 'js', 'core', 'calculo.js'), vistos, orden);
   const sb = { console };
   sb.globalThis = sb;
   const ctx = vm.createContext(sb);
   vm.runInContext(orden.join('\n'), ctx);
-  return vm.runInContext('({planCascada,cobrableTotal,contextoCascada})', ctx);
+  return vm.runInContext('({planCascada,cobrableTotal,contextoCascada,filasPreview,_pmt,_tasaPeriodo})', ctx);
 }
 
 // ── Servidor real sobre copia ────────────────────────────────────────────────
 const PORT = 3971;
-function pedir(method, ruta, body) {
+// La seccion F levanta su PROPIA copia y su propio servidor (ver alli el por que),
+// asi que `pedir` y `ejecutarPlan` aceptan un puerto.
+const PORT_F = 3972;
+function pedir(method, ruta, body, port) {
   return new Promise((res, rej) => {
     const data = body ? JSON.stringify(body) : null;
     const r = http.request({
-      host: '127.0.0.1', port: PORT, path: ruta, method,
+      host: '127.0.0.1', port: port || PORT, path: ruta, method,
       headers: Object.assign({ 'Content-Type': 'application/json' },
         data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
     }, x => {
@@ -78,15 +88,15 @@ function pedir(method, ruta, body) {
 // Se replica en vez de importarse porque vive dentro del componente App y sacarlo
 // de ahi solo para el test cambiaria el codigo de produccion por conveniencia del
 // arnes. Lo que se verifica aqui es el CONTRATO: orden, corte y campos enviados.
-async function ejecutarPlan(loanId, plan, fecha, obs) {
+async function ejecutarPlan(loanId, plan, fecha, obs, port) {
   const estado = { ok: true, hechos: [], error: null, pasoFallido: null };
   for (const paso of plan.pasos) {
     const r = paso.tipo === 'partial'
       ? await pedir('POST', '/api/payments/' + paso.payId + '/partial',
-          { monto: paso.cajaCOP, fecha, observaciones: obs, montoUSD: paso.obligacionUSD || 0 })
+          { monto: paso.cajaCOP, fecha, observaciones: obs, montoUSD: paso.obligacionUSD || 0 }, port)
       : await pedir('POST', '/api/loans/' + loanId + '/abono',
           { monto: paso.obligacionCOP, fecha, observaciones: obs, montoUSD: paso.obligacionUSD || 0,
-            montoCOPRecibido: paso.cajaCOP, liquidar: false, recalcMode: 'mantener', recalcValor: null, intExtra: 0 });
+            montoCOPRecibido: paso.cajaCOP, liquidar: false, recalcMode: 'mantener', recalcValor: null, intExtra: 0 }, port);
     if (r.status >= 400 || !r.json || r.json.error) {
       estado.ok = false;
       estado.error = (r.json && r.json.error) || ('HTTP ' + r.status);
@@ -99,8 +109,10 @@ async function ejecutarPlan(loanId, plan, fecha, obs) {
 }
 
 (async function main() {
-  const { planCascada, cobrableTotal } = cargarCascada();
+  const { planCascada, cobrableTotal, filasPreview, _pmt, _tasaPeriodo } = cargarCascada();
   R.check('el modulo real de cascada se cargo', typeof planCascada === 'function' && typeof cobrableTotal === 'function');
+  R.check('el modulo real de calculo se cargo (preview del cronograma)',
+    typeof filasPreview === 'function' && typeof _pmt === 'function' && typeof _tasaPeriodo === 'function');
 
   const DB = copiaDeProduccion('cascada-cobro');
   const app = require(path.join(REPO, 'backend', 'server.js'))(DB);
@@ -314,6 +326,102 @@ async function ejecutarPlan(loanId, plan, fecha, obs) {
     }
     R.check('E ANTI-VACIO: se probaron combinaciones reales', casos >= 12, 'casos=' + casos);
     R.eq('E ninguna violacion en ' + casos + ' combinaciones', violaciones, 0);
+  }
+
+  // ── F — EL PREVIEW DEL CRONOGRAMA ES ESPEJO DEL MOTOR ──────────────────────
+  // `CobroModal` promete al usuario como quedaran sus cuotas DESPUES del cobro, y lo
+  // dibuja con `filasPreview`, que es una SEGUNDA implementacion de lo que hace
+  // `buildSchedule` en el backend. El proyecto ya pago ese precio: el Bug #51 existio
+  // porque las dos copias divergieron y nadie se entero (el motor se arreglo en v2.2.0
+  // y el preview siguio mal hasta v2.6.2). La cascada es un consumidor NUEVO de ese
+  // espejo, asi que aqui se fija: se calcula el preview sobre el estado PREVIO, se
+  // ejecuta la cascada contra el motor real, y se comparan fila a fila.
+  //
+  // Copia y servidor PROPIOS a proposito: si esta seccion dependiera de lo que A-E
+  // dejaron, reordenarlas o cambiar sus montos podria dejarla sin cuotas que comparar
+  // y el check se volveria verde en vacio, que es justo el modo de fallo que persigue.
+  R.seccion('F — el preview del modal coincide con lo que el motor persiste');
+  {
+    const DB_F = copiaDeProduccion('cascada-preview');
+    const appF = require(path.join(REPO, 'backend', 'server.js'))(DB_F);
+    const srvF = http.createServer(appF);
+    await new Promise(ok => srvF.listen(PORT_F, '127.0.0.1', ok));
+    const conDbF = fn => { const d = new Database(DB_F, { readonly: true }); try { return fn(d); } finally { d.close(); } };
+    const cargarF = () => ({
+      loans: conDbF(d => d.prepare('SELECT * FROM loans').all()),
+      pays:  conDbF(d => d.prepare('SELECT * FROM payments').all()),
+    });
+    await pedir('GET', '/api/payments', null, PORT_F);   // auto-mora, como en la app real
+
+    // Se prueban las DOS formas en que el modal llega al preview: con mora previa
+    // (donde `regularConsumed` y `saldoTrasCascada` los fija la cascada) y sin ella
+    // (donde el cobro degenera en un abono simple).
+    const { loans, pays } = cargarF();
+    const capInt = l => l.estado === 'Activo' && l.modalidad === 'Capital + Intereses' &&
+      pays.some(p => p.prestamoId === l.id && p.estadoPago === 'Pendiente' && !esAbono(p));
+    const conMora = l => pays.some(p => p.prestamoId === l.id && p.estadoPago === 'En Mora' && !esAbono(p));
+    const objetivos = [
+      { etiqueta: 'con mora previa', loan: loans.filter(capInt).filter(conMora)[0] },
+      { etiqueta: 'sin mora',        loan: loans.filter(capInt).filter(l => !conMora(l))[0] },
+    ];
+    R.check('F ANTI-VACIO: hay un C+I con mora y otro sin mora',
+      !!objetivos[0].loan && !!objetivos[1].loan,
+      objetivos.map(o => o.etiqueta + '=' + (o.loan ? o.loan.id : 'NINGUNO')).join(', '));
+
+    let filasComparadas = 0;
+    for (const obj of objetivos) {
+      const loan = obj.loan;
+      if (!loan) continue;
+      const esUSD = loan.moneda === 'USD';
+      const cob = cobrableTotal(loan, pays);
+      // Hace falta que el plan incluya un ABONO: es el paso que regenera el cronograma.
+      // Sin abono el motor no recalcula nada y el espejo no se ejercita.
+      const objetivoCOP = Math.round(cob.mora + Math.min(cob.abonable, Math.max(100000, cob.abonable * 0.2)));
+      const plan = planCascada(loan, pays, esUSD
+        ? { obligacionUSD: Math.round(objetivoCOP / loan.trmAcordada * 100) / 100, cajaCOP: objetivoCOP, obligacionCOP: 0 }
+        : { obligacionCOP: objetivoCOP, cajaCOP: objetivoCOP, obligacionUSD: 0 });
+      R.check('F (' + obj.etiqueta + ') ANTI-VACIO: el plan incluye un abono, que es lo que regenera el cronograma',
+        plan.ok && plan.pasos.some(p => p.tipo === 'abono'),
+        (plan.error || '') + ' | ' + plan.pasos.map(p => p.tipo).join(' -> '));
+      if (!plan.ok || !plan.pasos.some(p => p.tipo === 'abono')) continue;
+
+      // REPLICA EXACTA del bloque `cronoPreview` de CobroModal.js. Si aquello cambia y
+      // esto no, el check deja de medir lo que el usuario ve: van juntos a proposito.
+      const saldo   = plan.saldoTrasCascada;
+      const n       = Math.max(0, (+loan.plazoMeses || 0) - plan.ctx.regularConsumed);
+      const r       = _tasaPeriodo((+loan.tasaMensual || 0) / 100, loan.frecuencia || 'Mensual');
+      const nominal = Math.round(_pmt(r, n, saldo));
+      const filas   = filasPreview(saldo, r, n, false, nominal);
+      R.check('F (' + obj.etiqueta + ') ANTI-VACIO: el preview dibuja filas', filas.length > 0, 'n=' + n);
+
+      const est = await ejecutarPlan(loan.id, plan, hoy, 'test preview', PORT_F);
+      R.check('F (' + obj.etiqueta + ') la cascada se aplico contra el motor real', est.ok, est.error || '');
+      if (!est.ok) continue;
+
+      const post = cargarF().pays
+        .filter(p => p.prestamoId === loan.id && !esAbono(p) && p.estadoPago === 'Pendiente')
+        .sort((a, b) => a.cuotaN - b.cuotaN);
+      R.eq('F (' + obj.etiqueta + ') el preview dibuja tantas filas como cuotas persistio el motor',
+        filas.length, post.length);
+
+      // Se comparan los TRES numeros de cada fila. Solo la cuota no basta: el Bug #43
+      // desviaba el reparto interes/capital dejando el total intacto.
+      const dif = [];
+      for (let i = 0; i < Math.min(filas.length, post.length); i++) {
+        const f = filas[i], p = post[i];
+        const dc = Math.round(f.cuota)   - Math.round(p.cuotaTotal);
+        const di = Math.round(f.interes) - Math.round(p.interesPeriodo);
+        const dk = Math.round(f.capital) - Math.round(p.abonoCapital);
+        filasComparadas++;
+        if (dc || di || dk) dif.push('#' + p.cuotaN + ' cuota' + (dc >= 0 ? '+' : '') + dc +
+          ' int' + (di >= 0 ? '+' : '') + di + ' cap' + (dk >= 0 ? '+' : '') + dk);
+      }
+      R.check('F (' + obj.etiqueta + ') preview == motor en cuota, interes y capital de cada fila',
+        dif.length === 0, dif.join(' | '));
+    }
+    R.check('F ANTI-VACIO: se comparo un cronograma de verdad', filasComparadas >= 2,
+      'filas comparadas=' + filasComparadas);
+    srvF.close();
   }
 
   srv.close();

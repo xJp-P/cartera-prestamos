@@ -245,8 +245,17 @@ export function CobroModal(props){
         'Lo demás NO se aplicó. Revisa el crédito antes de reintentar: si repites el cobro completo, lo ya registrado se duplicará.')),
 
     // ── Nota sobre el recibo ──
-    plan&&plan.ok&&plan.pasos.length>1&&h('div',{style:{fontSize:11,color:'var(--text3)',lineHeight:1.55}},
-      'Este cobro se registra como ',h('b',null,plan.pasos.length),' movimientos, cada uno reversible por separado desde el Historial. El recibo se genera aparte desde el cronograma.'),
+    // El aviso va en TODO cobro valido, no solo en los de varios pasos. La cascada
+    // dispara `API.post` directo y nunca atraviesa `_doAbono`, que es el UNICO punto del
+    // que cuelga `generateReciboAbono` (un solo call site en app.js). Tampoco hay una via
+    // para emitirlo despues: `generateRecibo` solo sale de PayModal y del cronograma solo
+    // sale `generateCronogramaPDF`, que es un cronograma, no un comprobante. En un cobro
+    // de UN paso la asimetria es maxima —el mismo abono por "Abono directo a capital" SI
+    // emite recibo—, asi que callarlo justo ahi seria donde mas confunde.
+    plan&&plan.ok&&plan.pasos.length>0&&h('div',{style:{fontSize:11,color:'var(--text3)',lineHeight:1.55}},
+      plan.pasos.length>1?h('span',null,'Este cobro se registra como ',h('b',null,plan.pasos.length),' movimientos, cada uno reversible por separado desde el Historial. '):null,
+      h('b',{style:{color:'var(--text2)'}},'No se emite recibo. '),
+      'La generación de un comprobante consolidado para el cobro en cascada todavía no está disponible.'),
 
     // ── Acciones ──
     h('div',{style:{display:'flex',gap:10,marginTop:8}},
