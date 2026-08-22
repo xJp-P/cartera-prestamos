@@ -44,6 +44,7 @@ export function CobroModal(props){
   var s6=useState(false); var sending=s6[0]; var setSending=s6[1];
   var s7=useState(true); var verCron=s7[0]; var setVerCron=s7[1];
   var s8=useState(null); var fallo=s8[0]; var setFallo=s8[1];           // resultado parcial si un paso falla
+  var s9=useState(true); var genRecibo=s9[0]; var setGenRecibo=s9[1];    // recibo consolidado (mismo patron que PayModal/AbonoModal)
 
   var loanPays=allPays.filter(function(p){ return String(p.prestamoId)===String(loan.id); });
   var cob=cobrableTotal(loan, allPays);
@@ -93,7 +94,7 @@ export function CobroModal(props){
     if(!plan||!plan.ok||!plan.pasos.length) return;
     setFallo(null);
     return _submitGuard(sending,setSending,function(){
-      return onConfirm(loan.id, plan, fecha, obs).then(function(res){
+      return onConfirm(loan.id, plan, fecha, obs, genRecibo).then(function(res){
         // El orquestador devuelve {ok, hechos, error, pasoFallido} — si algo fallo a
         // mitad, el modal SE QUEDA ABIERTO mostrando exactamente que si se aplico.
         // Cerrar en silencio dejaria al usuario sin saber en que estado quedo.
@@ -244,18 +245,17 @@ export function CobroModal(props){
       h('div',{style:{marginTop:7,color:'var(--text2)'}},
         'Lo demás NO se aplicó. Revisa el crédito antes de reintentar: si repites el cobro completo, lo ya registrado se duplicará.')),
 
-    // ── Nota sobre el recibo ──
-    // El aviso va en TODO cobro valido, no solo en los de varios pasos. La cascada
-    // dispara `API.post` directo y nunca atraviesa `_doAbono`, que es el UNICO punto del
-    // que cuelga `generateReciboAbono` (un solo call site en app.js). Tampoco hay una via
-    // para emitirlo despues: `generateRecibo` solo sale de PayModal y del cronograma solo
-    // sale `generateCronogramaPDF`, que es un cronograma, no un comprobante. En un cobro
-    // de UN paso la asimetria es maxima —el mismo abono por "Abono directo a capital" SI
-    // emite recibo—, asi que callarlo justo ahi seria donde mas confunde.
-    plan&&plan.ok&&plan.pasos.length>0&&h('div',{style:{fontSize:11,color:'var(--text3)',lineHeight:1.55}},
-      plan.pasos.length>1?h('span',null,'Este cobro se registra como ',h('b',null,plan.pasos.length),' movimientos, cada uno reversible por separado desde el Historial. '):null,
-      h('b',{style:{color:'var(--text2)'}},'No se emite recibo. '),
-      'La generación de un comprobante consolidado para el cobro en cascada todavía no está disponible.'),
+    // ── Recibo consolidado ──
+    // Un cobro en cascada son N movimientos, pero para el cliente fue UNA entrega:
+    // se emite UN solo comprobante por el total, no uno por paso. El checkbox replica
+    // el patron de PayModal y AbonoModal (por defecto activado).
+    plan&&plan.ok&&plan.pasos.length>0&&h('div',null,
+      plan.pasos.length>1&&h('div',{style:{fontSize:11,color:'var(--text3)',lineHeight:1.55,marginBottom:8}},
+        'Este cobro se registra como ',h('b',null,plan.pasos.length),' movimientos, cada uno reversible por separado desde el Historial. Se emite ',
+        h('b',{style:{color:'var(--text2)'}},'un solo recibo'),' por el total recibido.'),
+      h('label',{style:{display:'flex',alignItems:'center',gap:8,cursor:'pointer',fontSize:12,color:'var(--text2)'}},
+        h('input',{type:'checkbox',checked:genRecibo,onChange:function(){setGenRecibo(!genRecibo);},style:{width:16,height:16,accentColor:'var(--blue)',cursor:'pointer'}}),
+        'Generar recibo de cobro')),
 
     // ── Acciones ──
     h('div',{style:{display:'flex',gap:10,marginTop:8}},

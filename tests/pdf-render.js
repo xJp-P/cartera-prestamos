@@ -1,6 +1,6 @@
-// tests/pdf-render.js — BASELINE DE REGRESION DE LOS 5 GENERADORES DE PDF.
+// tests/pdf-render.js — BASELINE DE REGRESION DE LOS GENERADORES DE PDF.
 //
-// Que hace: ejecuta los generadores REALES de `public/index.html` (via cargarFrontend,
+// Que hace: ejecuta los generadores REALES de `public/js/pdf/` (via cargarFrontend,
 // que los evalua en un contexto `vm`) alimentados con datos REALES de una COPIA de la BD
 // de produccion, captura el HTML que emiten por `window.electronAPI.printPDF` y comprueba
 // que la ESTRUCTURA del documento no cambio.
@@ -43,9 +43,12 @@
 //    la 1a corrida y verde en la 2a.
 //
 // B. CREAR una linea base es un ACTO EXPLICITO (`PDF_GOLDEN_INIT=1`). Sin eso, un golden que
-//    falta o esta corrupto es un FALLO, no un aviso. `tests/golden/` no se trackea en git:
-//    antes, `rm tests/golden/*` era la forma mas rapida de poner la suite en verde (21 casos
-//    "creados", 0 comparados, exit 0).
+//    falta o esta corrupto es un FALLO, no un aviso: antes, `rm tests/golden/*` era la forma
+//    mas rapida de poner la suite en verde (21 casos "creados", 0 comparados, exit 0).
+//    Las lineas base SI se commitean —el comentario original afirmaba lo contrario, pero los
+//    ficheros `pdf-*.json` estan trackeados—, de modo que un clone limpio compara desde la
+//    primera corrida en vez de auto-establecerse en vacio. Al agregar un caso hay que crear
+//    su linea base con PDF_GOLDEN_INIT=1 y commitearla junto al caso.
 //
 // C. La huella incluye un DIGESTO DEL TEXTO COMPLETO del documento. La extraccion por lista
 //    de clases (`CLASES_ETIQUETA`) es un allowlist: todo lo que no este en la lista solo
@@ -115,7 +118,7 @@ const CAP = FE.captura;
 
 const GENERADORES = ['generateCronogramaPDF', 'generateReportePrestamosPDF',
                      'generateRecibo', 'generateFacturaCobro', 'generateReciboAbono',
-                     'generateEstadoLiquidacion'];
+                     'generateEstadoLiquidacion', 'generateReciboCobro'];
 const faltantes = GENERADORES.filter(n => typeof S[n] !== 'function');
 if (faltantes.length) {
   abortar('El frontend no expone estos generadores como funciones top-level: ' + faltantes.join(', ') +
@@ -196,6 +199,31 @@ function snapshotPrevio(loan, arrPays, monto) {
     cuotas:    pend.length,
     intereses: pend.reduce((s, p) => s + p.interesPeriodo, 0),
     plazo:     loan.plazoMeses,
+  };
+}
+
+// Arma el argumento `cobro` del Recibo de Cobro usando el planificador REAL. Se cobra toda
+// la mora mas una parte del capital amortizable, que es el caso que obliga al documento a
+// explicar los dos tipos de movimiento. En USD la caja se aparta a proposito de la
+// obligacion (TRM del dia por debajo de la pactada) para que el recibo declare ambas.
+function cobroDe(loan, arrPays) {
+  const esUSD = loan.moneda === 'USD';
+  const cob = S.cobrableTotal(loan, arrPays);
+  const objetivo = Math.round(cob.mora + Math.min(cob.abonable, Math.max(100000, cob.abonable * 0.2)));
+  const plan = S.planCascada(loan, arrPays, esUSD
+    ? { obligacionUSD: Math.round(objetivo / loan.trmAcordada * 100) / 100,
+        cajaCOP: Math.round(objetivo * 0.96), obligacionCOP: 0 }
+    : { obligacionCOP: objetivo, cajaCOP: objetivo, obligacionUSD: 0 });
+  if (!plan.ok || !plan.pasos.length) {
+    abortar('cobroDe(' + loan.id + '): planCascada no produjo pasos (' + (plan.error || 'sin error') + '). ' +
+            'Los datos del fixture cambiaron: elegi otro prestamo para el caso del Recibo de Cobro.');
+  }
+  const lp = arrPays.filter(p => p.prestamoId === loan.id);
+  const pend = lp.filter(p => p.id.indexOf('-ab-') === -1 && p.estadoPago === 'Pendiente')
+                 .sort((a, b) => a.cuotaN - b.cuotaN);
+  return {
+    fecha: '2026-07-20', pasos: plan.pasos, observaciones: 'Cobro de prueba',
+    pre: { saldoCaja: S.saldoConCaja(loan, lp), cuota: pend.length ? pend[0].cuotaTotal : 0 },
   };
 }
 
@@ -331,6 +359,44 @@ const CASOS = [
       monto: 100000, fecha: '2026-07-20', recalcMode: 'mantener',
       pre: snapshotPrevio(L('1773656070840'), pays, 100000) }),
     contiene: ['Resumen', 'Nuevo saldo pendiente'] },
+
+  // ── generateReciboCobro — comprobante consolidado del cobro en cascada ────────────────
+  // Los pasos se construyen con `planCascada` REAL sobre los datos del fixture: escribirlos
+  // a mano fijaria una forma que podria dejar de ser la que el orquestador produce, y este
+  // documento existe precisamente para describir esa forma.
+  { nombre: 'cobro-cascada-usd-oscuro', gen: 'generateReciboCobro', tema: 'dark', celdas: null,
+    entrada: () => ({ loanId: '1782151590658w66y', cascada: true, tema: 'dark', dark: true }),
+    ejecutar: () => S.generateReciboCobro(L('1782151590658w66y'), pays,
+      cobroDe(L('1782151590658w66y'), pays)),
+    contiene: ['Recibo de Cobro', 'Como se aplico tu pago', 'rc-paso', 'Total aplicado',
+               'Caja registrada en pesos', 'USD $', 'RC-', '#0d1117'] },
+
+  { nombre: 'cobro-cascada-cop-intereses', gen: 'generateReciboCobro', tema: 'light', celdas: null,
+    entrada: () => ({ loanId: '1773655076017', cascada: true, tema: 'light', dark: false }),
+    ejecutar: () => S.generateReciboCobro(L('1773655076017'), pays,
+      cobroDe(L('1773655076017'), pays)),
+    contiene: ['Recibo de Cobro', 'Intereses vencidos', 'Como se imputa el pago',
+               'Tu credito despues de este pago'] },
+
+  // Un cobro de UN solo paso: sin mora, la cascada degenera en un abono. Aqui la nota que
+  // explica el orden de imputacion no debe aparecer (no hay nada que repartir).
+  { nombre: 'cobro-un-solo-paso', gen: 'generateReciboCobro', tema: 'light', celdas: null,
+    entrada: () => ({ loanId: '17795544041379obc', cascada: true, unPaso: true, tema: 'light', dark: false }),
+    ejecutar: () => S.generateReciboCobro(L('17795544041379obc'), pays,
+      cobroDe(L('17795544041379obc'), pays)),
+    contiene: ['Abono extraordinario a capital', 'Saldo de capital'] },
+
+  // Variante PAZ Y SALVO. Es la unica que se alimenta de un paso sintetico: pdf-render no
+  // escribe en la BD, asi que ningun cobro sobre un prestamo activo puede dejarlo en cero
+  // dentro de este arnes. Se usa un prestamo YA saldado del fixture, que es el estado en el
+  // que el generador entra a esa variante.
+  { nombre: 'cobro-paz-y-salvo', gen: 'generateReciboCobro', tema: 'light', celdas: null,
+    entrada: () => ({ loanId: '1773652420812', cascada: true, sintetico: true, tema: 'light', dark: false }),
+    ejecutar: () => S.generateReciboCobro(L('1773652420812'), pays, {
+      fecha: '2026-07-20', pre: { saldoCaja: 200000, cuota: 0 },
+      pasos: [{ tipo: 'abono', obligacionCOP: 200000, obligacionUSD: 0,
+                interes: 0, capital: 200000, cajaCOP: 200000 }] }),
+    contiene: ['PAZ Y SALVO', 'Paz y Salvo', 'cancelada la totalidad'] },
 
   { nombre: 'abono-paz-y-salvo', gen: 'generateReciboAbono', tema: 'light', celdas: null,
     entrada: () => ({ loanId: '1773652420812', monto: 200000, mode: 'mantener', tema: 'light' }),
@@ -670,7 +736,7 @@ for (const caso of CASOS) {
 
 R.seccion('cobertura de la suite');
 R.check('se ejercitaron al menos 8 casos', nCasosOK >= 8, 'casos con salida: ' + nCasosOK + ' de ' + CASOS.length);
-R.check('los 21 casos definidos produjeron documento', nCasosOK === CASOS.length,
+R.check('los ' + CASOS.length + ' casos definidos produjeron documento', nCasosOK === CASOS.length,
         'con salida: ' + nCasosOK + ' / definidos: ' + CASOS.length);
 // El conteo se DERIVA de la lista (leccion del Bug #48: un numero escrito a mano en el
 // titulo se desincroniza y la suite acaba mintiendo sobre su propia cobertura).

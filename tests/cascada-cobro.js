@@ -50,15 +50,29 @@ function aplanar(entrada, vistos, orden) {
 // `calculo.js` entra en el mismo contexto porque la seccion F necesita `filasPreview`
 // —el espejo del motor que dibuja el preview del modal— junto con `_pmt`/`_tasaPeriodo`,
 // que son los que el propio CobroModal usa para alimentarlo.
+//
+// `pdf/recibo-cobro.js` entra por la seccion G, que comprueba que el PAPEL que se le
+// entrega al deudor no contradiga lo que el motor acaba de persistir. Necesita un DOM
+// minimo: el generador solo lee el tema de `document.documentElement` y emite por
+// `electronAPI.printPDF`, que aqui se sustituye por una captura del HTML.
 function cargarCascada() {
   const orden = [], vistos = new Set();
   aplanar(path.join(REPO, 'public', 'js', 'core', 'cascada.js'), vistos, orden);
   aplanar(path.join(REPO, 'public', 'js', 'core', 'calculo.js'), vistos, orden);
-  const sb = { console };
+  aplanar(path.join(REPO, 'public', 'js', 'pdf', 'recibo-cobro.js'), vistos, orden);
+  const pdfs = [];
+  const sb = {
+    console,
+    document: { documentElement: { getAttribute: () => 'light' } },
+    window:   { electronAPI: { printPDF: (html, fname) => { pdfs.push({ html, fname }); } } },
+  };
   sb.globalThis = sb;
   const ctx = vm.createContext(sb);
   vm.runInContext(orden.join('\n'), ctx);
-  return vm.runInContext('({planCascada,cobrableTotal,contextoCascada,filasPreview,_pmt,_tasaPeriodo})', ctx);
+  const api = vm.runInContext(
+    '({planCascada,cobrableTotal,contextoCascada,filasPreview,_pmt,_tasaPeriodo,generateReciboCobro,saldoConCaja})', ctx);
+  api.pdfs = pdfs;
+  return api;
 }
 
 // ── Servidor real sobre copia ────────────────────────────────────────────────
@@ -66,6 +80,8 @@ const PORT = 3971;
 // La seccion F levanta su PROPIA copia y su propio servidor (ver alli el por que),
 // asi que `pedir` y `ejecutarPlan` aceptan un puerto.
 const PORT_F = 3972;
+// La seccion G hace lo mismo: su propia copia, su propio servidor.
+const PORT_G = 3973;
 function pedir(method, ruta, body, port) {
   return new Promise((res, rej) => {
     const data = body ? JSON.stringify(body) : null;
@@ -109,10 +125,13 @@ async function ejecutarPlan(loanId, plan, fecha, obs, port) {
 }
 
 (async function main() {
-  const { planCascada, cobrableTotal, filasPreview, _pmt, _tasaPeriodo } = cargarCascada();
+  const { planCascada, cobrableTotal, filasPreview, _pmt, _tasaPeriodo,
+          generateReciboCobro, saldoConCaja, pdfs } = cargarCascada();
   R.check('el modulo real de cascada se cargo', typeof planCascada === 'function' && typeof cobrableTotal === 'function');
   R.check('el modulo real de calculo se cargo (preview del cronograma)',
     typeof filasPreview === 'function' && typeof _pmt === 'function' && typeof _tasaPeriodo === 'function');
+  R.check('el generador real del recibo consolidado se cargo',
+    typeof generateReciboCobro === 'function' && typeof saldoConCaja === 'function');
 
   const DB = copiaDeProduccion('cascada-cobro');
   const app = require(path.join(REPO, 'backend', 'server.js'))(DB);
@@ -422,6 +441,281 @@ async function ejecutarPlan(loanId, plan, fecha, obs, port) {
     R.check('F ANTI-VACIO: se comparo un cronograma de verdad', filasComparadas >= 2,
       'filas comparadas=' + filasComparadas);
     srvF.close();
+  }
+
+  // ── G — EL PAPEL NO PUEDE CONTRADECIR AL MOTOR ─────────────────────────────
+  // El recibo consolidado es lo unico que se lleva el cliente de un cobro en cascada, y
+  // la doctrina v2.3.0 (Bug #45) es que el papel y la app nunca digan cosas distintas.
+  // Aqui se ejecuta la cascada contra el motor REAL, se genera el recibo con los pasos
+  // que EFECTIVAMENTE se aplicaron y con el cronograma ya persistido, y se comprueban
+  // cinco cosas sobre el HTML emitido:
+  //   1. el hero declara exactamente el dinero que el cliente entrego (la CAJA);
+  //   2. los rubros del desglose suman el total aplicado, en la MONEDA VISIBLE — es la
+  //      identidad que el Bug #31 rompia al reconciliar en COP y convertir despues;
+  //   3. la fila "Capital de cuotas vencidas" aparece si y solo si la mora llevaba
+  //      capital, en vez de imprimir un $0 que confundiria al deudor;
+  //   4. el saldo impreso es el mismo que muestra la app (`saldoConCaja`, nunca el motor);
+  //   5. hay una fila por movimiento aplicado: ni se calla uno ni se inventa otro.
+  //
+  // Los dos objetivos NO son redundantes: en `Capital + Intereses` una cuota En Mora
+  // arrastra capital (3 rubros), mientras que en `Intereses` es puro interes (2 rubros).
+  // Son las dos formas del documento, y la segunda es la que verifica el punto 3.
+  //
+  // La CAJA se aparta a proposito de la obligacion en el caso USD (TRM del dia por
+  // debajo de la pactada), para que el recibo tenga que declarar DOS cifras distintas.
+  // Con caja == obligacion los checks 1 y 2 serian la misma identidad trivial.
+  //
+  // Copia y servidor PROPIOS, misma razon que en F: si dependiera de lo que A-F dejaron,
+  // reordenarlas podria dejar esta seccion sin mora que cobrar y volverla verde en vacio.
+  R.seccion('G — el recibo consolidado dice lo mismo que el motor persistio');
+  {
+    const DB_G = copiaDeProduccion('cascada-recibo');
+    const appG = require(path.join(REPO, 'backend', 'server.js'))(DB_G);
+    const srvG = http.createServer(appG);
+    await new Promise(ok => srvG.listen(PORT_G, '127.0.0.1', ok));
+    const conDbG = fn => { const d = new Database(DB_G, { readonly: true }); try { return fn(d); } finally { d.close(); } };
+    const cargarG = () => ({
+      loans: conDbG(d => d.prepare('SELECT * FROM loans').all()),
+      pays:  conDbG(d => d.prepare('SELECT * FROM payments').all()),
+    });
+    await pedir('GET', '/api/payments', null, PORT_G);   // auto-mora, como en la app real
+
+    // PRIMER importe de un fragmento. Varias celdas llevan dos cifras (la caja y la TRM
+    // del dia), asi que barrer todos los digitos las concatenaria en un numero absurdo.
+    // En COP el punto separa miles; en USD es el decimal: hay que ramificar o
+    // "USD $283.51" se leeria como 28.351.
+    const numDe = t => {
+      const x = String(t == null ? '' : t).replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ');
+      const m = /(USD\s*)?\$\s*([\d.,]+)/.exec(x);
+      if (!m) return NaN;
+      return m[1] ? parseFloat(m[2].replace(/,/g, ''))
+                  : parseInt(m[2].replace(/[^0-9]/g, ''), 10);
+    };
+    const heroDe  = html => (/<div class="rc-ta">([\s\S]*?)<\/div>/.exec(html) || [])[1];
+    const heroSub = html => (/<div class="rc-ts">([\s\S]*?)<\/div>/.exec(html) || [])[1];
+    const filasPanel = html => {
+      const out = [], re = /<div class="rc-row(?: rc-row-tot)?"><span class="rc-lab">([\s\S]*?)<\/span><span class="rc-val"[^>]*>([\s\S]*?)<\/span><\/div>/g;
+      let m; while ((m = re.exec(html)) !== null) out.push({ lab: m[1], val: m[2] });
+      return out;
+    };
+    const tarjetas = html => {
+      const out = [], re = /<div class="rc-card"><div class="rc-cl">([\s\S]*?)<\/div>([\s\S]*?)<div class="rc-new">([\s\S]*?)<\/div><\/div>/g;
+      let m; while ((m = re.exec(html)) !== null) out.push({ lab: m[1], val: m[3] });
+      return out;
+    };
+
+    const inicial = cargarG();
+    const conMoraG = l => inicial.pays.some(p => p.prestamoId === l.id && p.estadoPago === 'En Mora' && !esAbono(p));
+    const candidatos = inicial.loans.filter(l => l.estado === 'Activo' && l.modalidad !== 'Interes Diario').filter(conMoraG);
+    const capInt = candidatos.filter(l => l.moneda === 'USD' && l.modalidad === 'Capital + Intereses')[0];
+    // El ORDEN importa y es deliberado: el primer objetivo deja un parcial EN VUELO sobre
+    // una cuota vencida, que es el unico estado en el que `saldoConCaja` y el saldo del
+    // motor DIFIEREN. Sin el, el check del saldo pasaria igual imprimiendo el del motor y
+    // no verificaria nada. El segundo termina de cobrar esa misma mora y agrega el abono.
+    // Un reordenamiento no deja esto verde en vacio: cada objetivo trae su anti-vacio.
+    const objetivosG = [
+      { etiqueta: 'USD, parcial sobre cuota vencida', modo: 'parcial', loan: capInt },
+      { etiqueta: 'USD, mora con capital + abono',    modo: 'mixto',   loan: capInt },
+      { etiqueta: 'COP, mora solo interes + abono',   modo: 'mixto',
+        loan: candidatos.filter(l => l.moneda !== 'USD' && l.modalidad === 'Intereses')[0] },
+    ];
+    R.check('G ANTI-VACIO: hay un credito con capital en mora y otro con mora de puro interes',
+      objetivosG.every(o => !!o.loan),
+      objetivosG.map(o => o.etiqueta + '=' + (o.loan ? o.loan.id : 'NINGUNO')).join(', '));
+
+    let recibosVerificados = 0;
+    const rubrosVistos = {};   // que los tres rubros se hayan ejercitado con valor alguna vez
+    for (const obj of objetivosG) {
+      const loan = obj.loan;
+      if (!loan) continue;
+      const et = 'G (' + obj.etiqueta + ') ';
+      const esUSD = loan.moneda === 'USD';
+      const trm = +loan.trmAcordada || 1;
+      const antes = cargarG().pays;
+
+      // 'mixto': toda la mora mas parte del capital amortizable -> el plan tiene los DOS
+      // tipos de paso y el recibo debe explicar ambos.
+      // 'parcial': solo el interes de la cuota vencida mas parte de su capital -> UN paso
+      // que NO la salda, y deja capital imputado sin amortizar.
+      const cob = cobrableTotal(loan, antes);
+      const c0 = cob.ctx.moraCuotas[0];
+      const objetivoCOP = obj.modo === 'parcial'
+        ? Math.round(Math.round(c0.interesPeriodo) + Math.round(c0.abonoCapital) * 0.4)
+        : Math.round(cob.mora + Math.min(cob.abonable, Math.max(100000, cob.abonable * 0.2)));
+      const cajaCOP = esUSD ? Math.round(objetivoCOP * 0.94) : objetivoCOP;
+      const oblUSD  = esUSD ? Math.round(objetivoCOP / trm * 100) / 100 : 0;
+      const plan = planCascada(loan, antes, esUSD
+        ? { obligacionUSD: oblUSD, cajaCOP: cajaCOP, obligacionCOP: 0 }
+        : { obligacionCOP: objetivoCOP, cajaCOP: cajaCOP, obligacionUSD: 0 });
+      R.check(et + (obj.modo === 'parcial'
+          ? 'ANTI-VACIO: el plan es UN parcial que no salda la cuota'
+          : 'ANTI-VACIO: el plan mezcla mora y abono (el recibo debe explicar los dos)'),
+        plan.ok && (obj.modo === 'parcial'
+          ? (plan.pasos.length === 1 && plan.pasos[0].tipo === 'partial' && !plan.pasos[0].salda)
+          : (plan.pasos.some(p => p.tipo === 'partial') && plan.pasos.some(p => p.tipo === 'abono'))),
+        (plan.error || '') + ' | ' + plan.pasos.map(p => p.tipo + (p.salda ? '(salda)' : '')).join(' -> '));
+      if (!plan.ok) continue;
+
+      // Snapshot PREVIO, replica de `_snapshotAbono` (app.js): es lo que el recibo
+      // imprime tachado como "antes".
+      const lpAntes   = antes.filter(p => p.prestamoId === loan.id);
+      const pendAntes = lpAntes.filter(p => !esAbono(p) && p.estadoPago === 'Pendiente').sort((a, b) => a.cuotaN - b.cuotaN);
+      const pre = { saldoCaja: saldoConCaja(loan, lpAntes), cuota: pendAntes.length ? pendAntes[0].cuotaTotal : 0 };
+
+      const est = await ejecutarPlan(loan.id, plan, hoy, 'test recibo', PORT_G);
+      R.check(et + 'la cascada se aplico contra el motor real', est.ok, est.error || '');
+      if (!est.ok) continue;
+
+      const post = cargarG();
+      const loanPost = post.loans.find(l => l.id === loan.id);
+      const lpPost = post.pays.filter(p => p.prestamoId === loan.id);
+      pdfs.length = 0;
+      // Se alimenta de `est.hechos` — lo APLICADO, nunca de `plan.pasos`.
+      generateReciboCobro(loanPost, post.pays, { fecha: hoy, pasos: est.hechos, pre: pre, observaciones: 'test recibo' });
+      R.eq(et + 'se emitio exactamente un documento', pdfs.length, 1);
+      if (pdfs.length !== 1) continue;
+      const html = pdfs[0].html;
+      recibosVerificados++;
+      // Se deriva de lo APLICADO (est.hechos), no del plan: son iguales en exito, pero la
+      // regla del documento es "lo aplicado" y el test la respeta igual.
+      const esperaCapMora = est.hechos.filter(p => p.tipo === 'partial').reduce((s, p) => s + p.capital, 0) > 0;
+
+      // 1. EL HERO DECLARA LO QUE EL CLIENTE ENTREGO.
+      if (esUSD) {
+        // En USD el protagonista es el dolar, y los pesos van en la sub-linea: son la
+        // CAJA, y tienen que cuadrar al peso o "Cobros del Mes" queda descuadrado.
+        R.check(et + 'el hero declara los dolares entregados',
+          Math.abs(numDe(heroDe(html)) - oblUSD) <= 0.05,
+          'hero=' + heroDe(html) + ' esperado=' + oblUSD);
+        R.eq(et + 'la sub-linea declara la caja en pesos, exacta', numDe(heroSub(html)), cajaCOP);
+      } else {
+        R.eq(et + 'el hero declara la caja recibida, exacta', numDe(heroDe(html)), cajaCOP);
+      }
+
+      // 2. IDENTIDAD DEL DESGLOSE, en la moneda visible (Bug #31).
+      const filas = filasPanel(html);
+      const fila = lab => filas.find(x => x.lab === lab);
+      const val  = lab => { const f = fila(lab); return f ? numDe(f.val) : 0; };
+      const totalDoc = val('Total aplicado');
+      const sumaRubros = val('Intereses vencidos') + val('Capital de cuotas vencidas') + val('Abono extraordinario a capital');
+      R.eq(et + 'intereses + capital de mora + abono == total aplicado',
+        esUSD ? Math.round(sumaRubros * 100) / 100 : Math.round(sumaRubros), totalDoc);
+      // El aserto anterior es NECESARIO pero no suficiente: el generador calcula el total
+      // COMO la suma de los rubros, asi que se cumple solo. Este es el que ata el papel al
+      // dinero — el total declarado tiene que ser la obligacion que de verdad se extinguio.
+      const oblAplicada = est.hechos.reduce((s, p) => s + Math.round(p.obligacionCOP), 0);
+      R.eq(et + 'el total declarado == la obligacion realmente extinguida',
+        totalDoc, esUSD ? Math.round(oblAplicada / trm * 100) / 100 : oblAplicada);
+
+      // 3. CADA RUBRO APARECE SI Y SOLO SI ESTE COBRO LO TIENE.
+      // La expectativa se DERIVA de los pasos aplicados, no se cablea: un rubro en cero
+      // impreso como "$0" confundiria al deudor, y uno omitido teniendo valor le
+      // escondería a donde fue su dinero. Los tres casos se dan de verdad en este bucle:
+      // sin capital en la mora (modalidad Intereses) y sin intereses (cuota cuyo interes
+      // ya lo cobro el parcial del objetivo anterior).
+      const espera = {
+        'Intereses vencidos':             est.hechos.reduce((s, p) => s + p.interes, 0) > 0,
+        'Capital de cuotas vencidas':     esperaCapMora,
+        'Abono extraordinario a capital': est.hechos.filter(p => p.tipo === 'abono').length > 0,
+      };
+      Object.keys(espera).forEach(lab => {
+        const hay = !!fila(lab);
+        rubrosVistos[lab] = rubrosVistos[lab] || (hay && val(lab) > 0);
+        R.check(et + (espera[lab] ? ('declara "' + lab + '"')
+                                  : ('omite "' + lab + '" en vez de imprimir un cero')),
+          espera[lab] ? (hay && val(lab) > 0) : !hay,
+          filas.map(f => f.lab).join(' | '));
+      });
+
+      if (esUSD) {
+        R.eq(et + 'la caja en pesos tambien se declara en el desglose',
+          numDe((fila('Caja registrada en pesos') || {}).val), cajaCOP);
+      }
+
+      // 4. EL SALDO IMPRESO ES EL QUE MUESTRA LA APP (nunca el del motor).
+      const cards = tarjetas(html);
+      const cSaldo = cards.find(c => c.lab === 'Saldo de capital');
+      R.check(et + 'el recibo imprime el saldo resultante', !!cSaldo, cards.map(c => c.lab).join(' | '));
+      if (cSaldo) {
+        const saldoApp = saldoConCaja(loanPost, lpPost);
+        // Saldo del MOTOR, la formula canonica. Con un parcial en vuelo los dos numeros
+        // DIFIEREN, y ahi es donde el check muerde: sin este anti-trivial, imprimir el del
+        // motor pasaria igual y la doctrina v2.3.0 quedaria sin verificar.
+        const origCOP = esUSD ? Math.round(loanPost.montoOrigen * trm) : Math.round(loanPost.montoOrigen);
+        const saldoMotor = Math.max(0, origCOP - Math.round(lpPost.filter(p => p.estadoPago === 'Pagado')
+          .reduce((s, p) => s + p.abonoCapital, 0)));
+        if (obj.modo === 'parcial') {
+          R.check(et + 'ANTI-TRIVIAL: con el parcial en vuelo, el saldo con caja NO es el del motor',
+            saldoApp !== saldoMotor, 'conCaja=' + saldoApp + ' motor=' + saldoMotor);
+        }
+        R.eq(et + 'el saldo del recibo == saldoConCaja de la app',
+          numDe(cSaldo.val), esUSD ? Math.round(saldoApp / trm * 100) / 100 : Math.round(saldoApp));
+      }
+
+      // 5. UNA FILA POR MOVIMIENTO APLICADO.
+      R.eq(et + 'el recibo lista tantos movimientos como se aplicaron',
+        (html.match(/<div class="rc-paso">/g) || []).length, est.hechos.length);
+    }
+    // ── El borde del Bug #31, forzado a proposito ─────────────────────────────
+    // En USD, redondear cada rubro por separado y sumarlos NO siempre da lo mismo que
+    // redondear el total: 363.25 + 96.74 = 459.99, no 460.00. Por eso el generador ancla
+    // el capital al total (capital = obligacion - interes) en vez de convertir rubro a
+    // rubro. Con los importes que hay hoy en la cartera esa colision puede no darse nunca
+    // —se comprobo: cambiar el anclaje por una conversion rubro a rubro dejaba las tres
+    // objetivos en verde—, asi que aqui se BUSCA una combinacion que colisione de verdad
+    // y se comprueba que el documento la resuelve.
+    //
+    // El aserto que muerde no es "los rubros suman el total" (eso es tautologico: el
+    // generador calcula el total como la suma de los rubros), sino "el total declarado es
+    // la obligacion que de verdad se extinguio". Ahi es donde una reconciliacion mal hecha
+    // se separa del dinero.
+    {
+      const loanU = capInt;
+      if (loanU) {
+        const trmU = +loanU.trmAcordada || 1;
+        const cent = n => Math.round(n / trmU * 100);
+        let I = 0, K = 0;
+        buscar:
+        for (let i = 100000; i < 100400 && !I; i++) {
+          for (let k = 200000; k < 200400; k++) {
+            if (cent(i) + cent(k) !== cent(i + k)) { I = i; K = k; break buscar; }
+          }
+        }
+        R.check('G ANTI-VACIO: se hallo un reparto donde el redondeo en dolares colisiona',
+          I > 0, 'interes=' + I + ' capital=' + K + ' trm=' + trmU +
+          ' | rubros=' + (cent(I) + cent(K)) + ' vs total=' + cent(I + K));
+        if (I > 0) {
+          const post = cargarG();
+          const loanPost = post.loans.find(l => l.id === loanU.id);
+          const pasoSint = {
+            tipo: 'partial', payId: 'sintetico', cuotaN: 1, fechaPago: hoy,
+            obligacionCOP: I + K, obligacionUSD: Math.round((I + K) / trmU * 100) / 100,
+            interes: I, capital: K, salda: false, restanteCuota: 0, cajaCOP: I + K,
+          };
+          pdfs.length = 0;
+          generateReciboCobro(loanPost, post.pays,
+            { fecha: hoy, pasos: [pasoSint], pre: { saldoCaja: 0, cuota: 0 } });
+          R.eq('G (borde #31) se emitio el documento', pdfs.length, 1);
+          if (pdfs.length === 1) {
+            const filasB = filasPanel(pdfs[0].html);
+            const valB = lab => { const f = filasB.find(x => x.lab === lab); return f ? numDe(f.val) : 0; };
+            R.eq('G (borde #31) el total declarado == la obligacion extinguida',
+              valB('Total aplicado'), Math.round((I + K) / trmU * 100) / 100);
+            R.eq('G (borde #31) intereses + capital == total, sin perder el centavo',
+              Math.round((valB('Intereses vencidos') + valB('Capital de cuotas vencidas')) * 100) / 100,
+              valB('Total aplicado'));
+          }
+        }
+      }
+    }
+
+    R.check('G ANTI-VACIO: se verificaron los tres recibos', recibosVerificados === 3,
+      'recibos verificados=' + recibosVerificados);
+    R.check('G ANTI-VACIO: los tres rubros del desglose se ejercitaron con valor',
+      ['Intereses vencidos', 'Capital de cuotas vencidas', 'Abono extraordinario a capital']
+        .every(k => rubrosVistos[k]),
+      JSON.stringify(rubrosVistos));
+    srvG.close();
   }
 
   srv.close();

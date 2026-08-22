@@ -1,0 +1,58 @@
+{
+  "version": 2,
+  "caso": "cobro-paz-y-salvo",
+  "generador": "generateReciboCobro",
+  "tema": "light",
+  "entradaHash": "88b09581d8f51cd412b35001b6d286e000572a06",
+  "estructura": {
+    "docTitle": "Paz y Salvo",
+    "h1": [],
+    "cabeceras": [],
+    "etiquetas": [
+      "Abono extraordinario a capital",
+      "Total aplicado"
+    ]
+  },
+  "valores": {
+    "bytes": 6610,
+    "nFilas": 0,
+    "nCeldas": 0,
+    "celdasPorTr": [],
+    "nMontos": 5,
+    "hashMontos": "580f307280968f09db160fcbae8544d935090b67",
+    "hashFname": "f23766d697ef28e15cdacfec4fdf4f3b4ec0457a",
+    "hashTexto": "663a0a5d10b6a3497f3bf36ef436cf93da6fc0aa",
+    "clases": [
+      "rc-brand",
+      "rc-cc",
+      "rc-chipf",
+      "rc-date",
+      "rc-foot",
+      "rc-head",
+      "rc-lab",
+      "rc-meta",
+      "rc-n",
+      "rc-name",
+      "rc-num",
+      "rc-panel",
+      "rc-paso",
+      "rc-paso-d",
+      "rc-paso-h",
+      "rc-paso-t",
+      "rc-paso-v",
+      "rc-paz",
+      "rc-paz-s",
+      "rc-paz-t",
+      "rc-row",
+      "rc-row rc-row-tot",
+      "rc-st",
+      "rc-sub",
+      "rc-ta",
+      "rc-tl",
+      "rc-total",
+      "rc-type",
+      "rc-val",
+      "rc-wm"
+    ]
+  }
+}

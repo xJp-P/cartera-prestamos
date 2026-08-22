@@ -1,0 +1,61 @@
+{
+  "version": 2,
+  "caso": "cobro-un-solo-paso",
+  "generador": "generateReciboCobro",
+  "tema": "light",
+  "entradaHash": "20712bc901e5d320ad24cec3bd6aad7588169624",
+  "estructura": {
+    "docTitle": "Recibo de Cobro",
+    "h1": [],
+    "cabeceras": [],
+    "etiquetas": [
+      "Abono extraordinario a capital",
+      "Total aplicado"
+    ]
+  },
+  "valores": {
+    "bytes": 6935,
+    "nFilas": 0,
+    "nCeldas": 0,
+    "celdasPorTr": [],
+    "nMontos": 7,
+    "hashMontos": "0e47c2fb291e129b81c982335a79b34166059804",
+    "hashFname": "43d0da45abcc78c038251914663bcde6744f0d53",
+    "hashTexto": "588d7bd3b373314d1722e8559e4b4e191087d5bd",
+    "clases": [
+      "rc-brand",
+      "rc-card",
+      "rc-cc",
+      "rc-chipf",
+      "rc-cl",
+      "rc-date",
+      "rc-foot",
+      "rc-head",
+      "rc-imp",
+      "rc-lab",
+      "rc-meta",
+      "rc-n",
+      "rc-name",
+      "rc-new",
+      "rc-num",
+      "rc-obs",
+      "rc-panel",
+      "rc-paso",
+      "rc-paso-d",
+      "rc-paso-h",
+      "rc-paso-t",
+      "rc-paso-v",
+      "rc-pie",
+      "rc-row",
+      "rc-row rc-row-tot",
+      "rc-st",
+      "rc-sub",
+      "rc-ta",
+      "rc-tl",
+      "rc-total",
+      "rc-type",
+      "rc-val",
+      "rc-wm"
+    ]
+  }
+}

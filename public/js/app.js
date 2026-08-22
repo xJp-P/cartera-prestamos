@@ -35,6 +35,7 @@ import { Ico } from './componentes/iconos.js';
 import { generateCronogramaPDF } from './pdf/cronograma.js';
 import { generateReciboCorte } from './pdf/recibo-corte.js';
 import { generateReciboAbono }   from './pdf/recibo-abono.js';
+import { generateReciboCobro }   from './pdf/recibo-cobro.js';
 
 // Vistas — Etapa 3/B7. El estado sigue en `App` y baja por props.
 import { DashView } from './vistas/DashView.js';
@@ -498,8 +499,11 @@ function App(){
   //
   // Cada paso es su propia entrada en el journal: si algo queda a medias, se
   // deshace pieza por pieza desde el Historial.
-  function _doCobroCascada(loanId,plan,fecha,obs){
+  function _doCobroCascada(loanId,plan,fecha,obs,genRecibo){
     var fromDeudor=cobroModal&&cobroModal.fromDeudor;
+    // Estado PREVIO, capturado antes de la primera escritura: es lo que el recibo
+    // imprime como "antes" del saldo y de la cuota. Despues de la cadena ya no existe.
+    var pre=_snapshotAbono(loanId);
     var estado={ok:true,hechos:[],error:null,pasoFallido:null};
     var cadena=plan.pasos.reduce(function(prev,paso){
       return prev.then(function(){
@@ -527,13 +531,29 @@ function App(){
       });
     },Promise.resolve());
     return cadena.then(function(){
-      return reload().then(function(){
+      return reload().then(function(fresh){
         if(estado.ok){
           setCobroModal(null);
           if(fromDeudor) setDebtorModal(fromDeudor);
           showToast(plan.pasos.length>1
             ? 'Cobro registrado en '+plan.pasos.length+' movimientos'
             : 'Cobro registrado');
+          // RECIBO CONSOLIDADO — un cobro en cascada son N movimientos, pero para el
+          // cliente fue UNA entrega: se emite un solo comprobante. Se alimenta de
+          // `estado.hechos` (lo que se aplico), NUNCA de `plan.pasos` (lo que se
+          // pretendia), y del cronograma YA persistido tras el reload; el motor no se
+          // replica aqui. Mismo try/catch que _doAbono: un fallo del PDF nunca puede
+          // romper un cobro que ya quedo registrado.
+          //
+          // SOLO en exito total. En un fallo parcial la caja de los pasos aplicados es
+          // MENOR que lo que el cliente entrego, asi que el recibo declararia menos
+          // dinero del recibido — un papel que juega en contra del cliente. El modal se
+          // queda abierto listando que si se aplico: esa es la via de recuperacion.
+          try{
+            var fl=((fresh&&fresh[0])||loans).find(function(x){return x.id===loanId;});
+            var fp=(fresh&&fresh[1])||pays;
+            if(fl&&genRecibo!==false) generateReciboCobro(fl,fp,{fecha:fecha,pasos:estado.hechos,pre:pre,observaciones:obs});
+          }catch(e){}
         } else {
           showToast(estado.error,'error');
         }

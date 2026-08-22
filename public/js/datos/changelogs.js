@@ -581,5 +581,13 @@ export const CHANGELOGS = {
     'El modal muestra el desglose completo antes de confirmar y una previsualizacion de como queda el cronograma despues del cobro, con la cuota nueva y las que faltan.',
     'Cada cobro se registra como movimientos independientes y reversibles por separado desde el Historial.',
     'El boton anterior sigue disponible como "Abono directo a capital", para cuando quieras mandar todo el dinero a capital a proposito.'
+  ],
+  '2.8.0': [
+    'El cobro en cascada ya entrega comprobante: un unico Recibo de Cobro en PDF por todo el dinero recibido, aunque por dentro se haya registrado como varios movimientos.',
+    'El recibo muestra el total recibido, contra que se aplico cada peso (intereses vencidos, capital de las cuotas vencidas y abono a capital) y como queda el credito despues: saldo, valor de la cuota, cuantas faltan y cuando vence la proxima.',
+    'Si el cobro alcanza a cancelar el credito completo, el documento sale como Paz y Salvo.',
+    'En prestamos en dolares el recibo esta expresado en dolares, con los pesos realmente recibidos y la tasa del dia debajo.',
+    'El recibo es opcional: un checkbox en el modal decide si se genera, igual que en los pagos y los abonos.',
+    'Si algun movimiento del cobro llegara a fallar, no se emite recibo: un comprobante por menos dinero del que entrego el cliente seria peor que ninguno.'
   ]
 };
