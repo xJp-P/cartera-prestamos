@@ -754,6 +754,189 @@ module.exports = function crearRutasLoans(ctx) {
     });
   });
 
+  // ── API: Condonar intereses ───────────────────────────────────────────────
+  // "Devuelveme el capital y te perdono los intereses". Hasta ahora ese acuerdo no
+  // tenia herramienta y los tres caminos disponibles mentian de formas distintas:
+  //   - Liquidar    -> FABRICA CAJA: registra como recibido el interes que se perdono
+  //                    (medido: $4.800.000 declarados por $3.000.000 que entraron),
+  //                    inflando "Cobros del Mes" y "Ganancias" a la vez.
+  //   - Abono puro  -> deja las cuotas En Mora vivas: el credito nunca cierra.
+  //   - Abono + cierre forzoso -> da los numeros exactos, pero marca 'Cancelado', que
+  //                    Rendimiento pinta como "Perdida total" aunque se haya recuperado
+  //                    el 100% del capital.
+  //
+  // LA IDEA: esto MODIFICA LA OBLIGACION, no registra un pago. Pone `interesPeriodo`
+  // en 0 y baja `cuotaTotal` al capital de las cuotas En Mora. Despues de eso el motor
+  // existente funciona SIN casos especiales: el deudor paga el capital por la via
+  // normal (el cobro en cascada) y el credito cierra como 'Finalizado' por la rama de
+  // /abono, no por un cierre forzoso. Por eso `afectaCaja: false` y por eso este
+  // endpoint NO cierra nada por su cuenta (salvo que ya no quede nada que deber).
+  //
+  // SOLO LAS CUOTAS EN MORA. Las Pendientes las REGENERA `/recalculate` con el interes
+  // de vuelta, asi que condonarlas no sobreviviria al siguiente arranque. Las En Mora
+  // son las unicas que las 5 rutas que regeneran preservan, y por eso son el unico
+  // sitio donde una condonacion es DURABLE. Condonar interes futuro es otro mecanismo
+  // (bajar la tasa) y otro sprint.
+  //
+  // Excluye `Prestamo` (0%: no hay nada que condonar) y `Pago Unico`, cuya ganancia
+  // pactada vive ADEMAS en la columna `loans.gananciaFija`: anular el `interesPeriodo`
+  // de la cuota dejaria las dos fuentes contradiciendose.
+  router.post('/api/loans/:id/condonar-intereses', (req, res) => {
+    const { cuotas, observaciones } = req.body;
+    const loan = db.prepare('SELECT * FROM loans WHERE id = ?').get(req.params.id);
+    if (!loan) return res.status(404).json({ error: 'No encontrado' });
+    // `accion` = 'condonacion' tambien como logTipo: el Historial lo pinta con icono y
+    // color propios. No se reusa 'pago' (como hizo /corte) porque esto NO es un cobro —
+    // confundirlos es justo el error que el endpoint viene a eliminar.
+    return mutacionAtomica(req, res, { accion: 'condonacion', endpoint: 'POST /api/loans/:id/condonar-intereses', scopeTipo: 'loan', scopeId: req.params.id }, () => {
+      // ── FASE 1: LECTURA + VALIDACION + COMPUTO (sin escrituras) ─────────────
+      if (loan.estado !== 'Activo') {
+        throw new ClientError('Solo se pueden condonar intereses en creditos activos (este esta ' + loan.estado + ').');
+      }
+      const PERMITIDAS = ['Intereses', 'Capital + Intereses', MODALIDAD_DIARIA];
+      if (PERMITIDAS.indexOf(loan.modalidad) === -1) {
+        throw new ClientError('La condonacion de intereses no aplica a la modalidad ' + loan.modalidad +
+          (loan.modalidad === 'Prestamo'
+            ? ': es un prestamo al 0%, no genera intereses.'
+            : ': la ganancia pactada vive en el propio prestamo, no en el interes de la cuota.'));
+      }
+      const fecha = hoyStr();
+      const nota = String(observaciones || '').trim();
+
+      // ── RAMA CREDITO ABIERTO ────────────────────────────────────────────────
+      // No hay cuotas que tocar: el interes de un credito abierto no esta
+      // materializado en ninguna fila. Vive en `interesAcumuladoPend` (el arrastre)
+      // MAS lo que corre desde `fechaUltimoCorte`. Hay que apagar los dos: poner el
+      // arrastre en 0 y adelantar la fecha del ultimo corte, o el devengo del tramo
+      // abierto reaparece al instante y la condonacion no habria servido de nada.
+      if (loan.modalidad === MODALIDAD_DIARIA) {
+        const dev = devengoDiario(loan, cortesDe(req.params.id), fecha);
+        if (dev.interesPendiente <= 0) {
+          throw new ClientError('Este credito no tiene interes devengado pendiente: no hay nada que condonar.');
+        }
+        const condonado = Math.round(dev.interesPendiente);
+        // Cierre estricto de la modalidad: sin capital vivo Y sin devengo, el credito
+        // se salda. Tras condonar el devengo queda en 0, asi que basta con el capital.
+        const saldado = dev.capitalVivo === 0;
+        return {
+          descripcion: 'Condonaste $' + condonado.toLocaleString('es-CO') + ' de intereses a ' + loan.nombre +
+            ' — interes devengado a la fecha' + (saldado ? ' — credito SALDADO' : '') + (nota ? ' (' + nota + ')' : ''),
+          afectaCaja: false,   // no entro ni salio dinero: se redujo la deuda
+          payload: { ok: true, condonado: condonado, cuotas: [], saldado: saldado, modalidad: loan.modalidad },
+          aplicar: () => {
+            db.prepare('UPDATE loans SET interesAcumuladoPend = 0, fechaUltimoCorte = ?, interesesCondonados = COALESCE(interesesCondonados, 0) + ? WHERE id = ?')
+              .run(fecha, condonado, req.params.id);
+            if (saldado) {
+              db.prepare("UPDATE loans SET estado = 'Finalizado', montoCOP = 0 WHERE id = ? AND estado = 'Activo'").run(req.params.id);
+            }
+          },
+        };
+      }
+
+      // ── RAMA CON CRONOGRAMA (Intereses / Capital + Intereses) ───────────────
+      const mora = db.prepare("SELECT * FROM payments WHERE prestamoId = ? AND estadoPago = 'En Mora' ORDER BY cuotaN")
+        .all(req.params.id).filter(p => !esAbono(p));
+      if (!mora.length) throw new ClientError('Este credito no tiene cuotas en mora: no hay intereses que condonar.');
+
+      // Seleccion por cuota. Sin lista (o vacia) = todas las cuotas En Mora. Se valida
+      // contra el conjunto real en vez de confiar en el cliente: un id de otra cuota
+      // —o de otro prestamo— tiene que rebotar con la BD intacta, no colarse.
+      const pedidas = Array.isArray(cuotas) ? cuotas.map(String) : null;
+      let seleccion = mora;
+      if (pedidas && pedidas.length) {
+        const porId = new Map(mora.map(p => [String(p.id), p]));
+        const ajenas = pedidas.filter(id => !porId.has(id));
+        if (ajenas.length) {
+          throw new ClientError('Estas cuotas no estan En Mora en este credito: ' + ajenas.join(', ') +
+            '. Solo se pueden condonar intereses de cuotas vencidas.');
+        }
+        seleccion = pedidas.map(id => porId.get(id));
+      }
+
+      const condonado = Math.round(seleccion.reduce((s, p) => s + (p.interesPeriodo || 0), 0));
+      if (condonado <= 0) {
+        throw new ClientError('Las cuotas seleccionadas no tienen intereses: no hay nada que condonar.');
+      }
+
+      // Una cuota con MAS dinero encima del que va a costar tras condonar dejaria un
+      // sobrante sin donde vivir: `imputarCobros` lo mandaria a `ajuste`, que significa
+      // efecto cambiario o residuo de redondeo, no "plata de mas". Se rechaza en vez de
+      // tragarselo en silencio; el usuario decide que hacer con ese parcial primero.
+      const excedidas = seleccion.filter(p => Math.round(p.partialPaid || 0) > Math.round(p.abonoCapital || 0));
+      if (excedidas.length) {
+        const c = excedidas[0];
+        throw new ClientError('La cuota #' + c.cuotaN + ' ya tiene abonado $' + Math.round(c.partialPaid).toLocaleString('es-CO') +
+          ', mas que el capital que quedaria debiendo tras condonar ($' + Math.round(c.abonoCapital).toLocaleString('es-CO') +
+          '). Cobrala o revierte ese abono antes de condonar sus intereses.');
+      }
+
+      const filas = seleccion.map(p => {
+        const capital = Math.round(p.abonoCapital || 0);
+        // Tras condonar, la cuota cuesta exactamente su capital. En `Intereses` la mora
+        // es puro interes (capital 0), asi que queda en cero: no hay nada que cobrar y
+        // su estado terminal es 'Pagado'. Lo mismo si el parcial ya cubria ese capital.
+        const cubierta = Math.round(p.partialPaid || 0) >= capital;
+        return {
+          id: p.id, cuotaN: p.cuotaN, interes: Math.round(p.interesPeriodo || 0),
+          capital: capital, saldada: capital <= 0 || cubierta,
+        };
+      });
+
+      const totalCapital = filas.reduce((s, f) => s + f.capital, 0);
+      const nSaldadas = filas.filter(f => f.saldada).length;
+
+      return {
+        descripcion: 'Condonaste $' + condonado.toLocaleString('es-CO') + ' de intereses a ' + loan.nombre +
+          ' — ' + filas.length + ' cuota' + (filas.length === 1 ? '' : 's') + ' vencida' + (filas.length === 1 ? '' : 's') +
+          (totalCapital > 0 ? ' (sigue debiendo $' + totalCapital.toLocaleString('es-CO') + ' de capital)' : '') +
+          (nota ? ' (' + nota + ')' : ''),
+        afectaCaja: false,   // no entro ni salio dinero: se redujo la deuda
+        payload: {
+          ok: true, condonado: condonado, modalidad: loan.modalidad,
+          cuotas: filas.map(f => ({ id: f.id, cuotaN: f.cuotaN, condonado: f.interes, capitalRestante: f.capital })),
+          capitalEnMora: totalCapital, saldadas: nSaldadas,
+        },
+        aplicar: () => {
+          const upd = db.prepare(
+            'UPDATE payments SET interesPeriodo = 0, cuotaTotal = ?, estadoPago = ?, observaciones = ? WHERE id = ?');
+          filas.forEach(f => {
+            const previa = seleccion.find(p => p.id === f.id).observaciones || '';
+            const marca = 'Intereses condonados: $' + f.interes.toLocaleString('es-CO') + ' (' + fecha + ')' +
+              (nota ? ' — ' + nota : '');
+            upd.run(f.capital, f.saldada ? 'Pagado' : 'En Mora',
+              previa ? (previa + ' | ' + marca) : marca, f.id);
+          });
+          // Una fila saldada por condonacion NO produjo caja. Se le limpia el ledger y
+          // se le deja `fechaRecaudo` en NULL A PROPOSITO: `cobrosDe` cae al fallback
+          // solo si hay `fechaRecaudo`, asi que sin ella no emite ningun evento. Con
+          // ella emitiria uno de $0 que ensuciaria "Transacciones del Mes" — y si algun
+          // dia `cuotaTotal` no fuera 0, el fallback `montoCOPRecibido || cuotaTotal`
+          // declararia como ingreso la cuota entera (el `0` es falsy).
+          const limpiar = db.prepare("UPDATE payments SET recibos = '[]', montoCOPRecibido = 0, montoUSDRecibido = 0, fechaRecaudo = NULL, paidAt = NULL WHERE id = ?");
+          filas.filter(f => f.saldada && f.capital <= 0).forEach(f => limpiar.run(f.id));
+
+          db.prepare('UPDATE loans SET interesesCondonados = COALESCE(interesesCondonados, 0) + ? WHERE id = ?')
+            .run(condonado, req.params.id);
+
+          // Auto-finalizacion, releida DESPUES de escribir (dentro de la transaccion).
+          // Sin esto un credito cuyo capital ya estaba pagado quedaria 'Activo' sin nada
+          // que deber — y en modalidad Intereses `autoExtendSoloIntereses` seguiria
+          // generando cuotas de $0 en cada GET /api/payments.
+          const post = db.prepare('SELECT * FROM payments WHERE prestamoId = ?').all(req.params.id);
+          const origCOP = loan.moneda === 'USD'
+            ? Math.round(loan.montoOrigen * loan.trmAcordada) : Math.round(loan.montoOrigen);
+          const capPagado = post.filter(p => p.estadoPago === 'Pagado').reduce((s, p) => s + (p.abonoCapital || 0), 0);
+          const quedaMora = post.some(p => p.estadoPago === 'En Mora');
+          const quedaPend = post.some(p => p.estadoPago === 'Pendiente' && !esAbono(p));
+          if (Math.round(origCOP - capPagado) <= 0 && !quedaMora && !quedaPend) {
+            db.prepare("UPDATE loans SET estado = 'Finalizado', montoCOP = 0, cuotaFijaPactada = 0 WHERE id = ? AND estado = 'Activo'")
+              .run(req.params.id);
+          }
+        },
+      };
+    });
+  });
+
   // ── API: Cambiar día de pago (con prorrateo) ──────────────────────────────
   // Cambia loan.diaPago y regenera el cronograma. La PRIMERA cuota regenerada es
   // TRANSITORIA: su interes se prorratea a los DIAS REALES de su periodo (desde la

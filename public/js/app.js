@@ -54,6 +54,7 @@ import { PayModal } from './modales/PayModal.js';
 import { PreflightMoraModal } from './modales/PreflightMoraModal.js';
 import { AbonoModal } from './modales/AbonoModal.js';
 import { CobroModal } from './modales/CobroModal.js';
+import { CondonarModal } from './modales/CondonarModal.js';
 import { CorteModal } from './modales/CorteModal.js';
 import { LiquidarModal } from './modales/LiquidarModal.js';
 import { RestructureModal } from './modales/RestructureModal.js';
@@ -102,6 +103,8 @@ function App(){
   var sCorte=useState(null); var corteModal=sCorte[0]; var setCorteModal=sCorte[1];
   // Cobro con imputacion en cascada (mora -> abono). Modal hermano de AbonoModal.
   var sCobro=useState(null); var cobroModal=sCobro[0]; var setCobroModal=sCobro[1];
+  // Condonacion de intereses. NO es un cobro: modifica la obligacion sin mover caja.
+  var sCond=useState(null); var condonarModal=sCond[0]; var setCondonarModal=sCond[1];
   var s13=useState(false); var menuOpen=s13[0]; var setMenuOpen=s13[1];
   var s14=useState(null); var calcData=s14[0]; var setCalcData=s14[1];
   var s15=useState(null); var toast=s15[0]; var setToast=s15[1];
@@ -561,6 +564,28 @@ function App(){
       });
     });
   }
+  // ── CONDONACION DE INTERESES ────────────────────────────────────────────────
+  // No emite recibo ni toca caja: lo que cambia es cuanto DEBE el cliente. Por eso
+  // el toast habla de deuda y no de dinero recibido, y por eso el backend marca la
+  // entrada del journal con `afectaCaja: false` (sin la falsa alarma del recibo).
+  function _doCondonar(loanId,cuotas,obs){
+    var fromDeudor=condonarModal&&condonarModal.fromDeudor;
+    var body={observaciones:obs||''};
+    // Sin lista, el backend condona TODAS las cuotas en mora. En credito abierto no
+    // hay cuotas que enviar, asi que el campo se omite en vez de mandar un array vacio.
+    if(cuotas&&cuotas.length) body.cuotas=cuotas;
+    return API.post('/api/loans/'+loanId+'/condonar-intereses',body).then(function(r){
+      // Los helpers de API resuelven `null` en vez de rechazar: sin este guard el
+      // modal se cerraria anunciando exito sobre una escritura que no ocurrio (Bug #33).
+      if(!r){showToast('No se pudo contactar la aplicacion.','error');return;}
+      if(r.error){showToast(r.error,'error');return;}
+      return reload().then(function(){
+        setCondonarModal(null);
+        if(fromDeudor) setDebtorModal(fromDeudor);
+        showToast('Intereses condonados: '+fmt(r.condonado||0));
+      });
+    });
+  }
   function _doReestructurar(loanId,mode,valor,fromDeudor){
     return API.post('/api/loans/'+loanId+'/reestructurar',{recalcMode:mode,recalcValor:valor})
       .then(function(r){
@@ -906,10 +931,13 @@ function App(){
       // Mismo patron que el CTA de AbonoModal: si el dinero supera todo lo que el credito
       // debe hoy, la herramienta correcta es Liquidar, no capar el monto en silencio.
       onRequestLiquidar:function(l){var fd=cobroModal&&cobroModal.fromDeudor;setCobroModal(null);setLiquidarModal({loan:l,fromDeudor:fd});}}),
+    condonarModal&&h(CondonarModal,{loan:condonarModal.loan||condonarModal,pays:pays,onConfirm:_doCondonar,
+      onClose:function(){if(condonarModal.fromDeudor){setDebtorModal(condonarModal.fromDeudor);} setCondonarModal(null);}}),
     corteModal&&h(CorteModal,{loan:corteModal.loan||corteModal,pays:pays,onSave:registrarCorte,
       onClose:function(){if(corteModal.fromDeudor){setDebtorModal(corteModal.fromDeudor);} setCorteModal(null);}}),
     debtorModal&&h(DebtorModal,{deudor:debtorModal,pays:pays,loans:loans,onClose:function(){setDebtorModal(null);},onNewLoan:function(d){setDebtorModal(null);setLoanModal({_prefill:{nombre:d.nombre,cedula:d.cedula,telefono:d.telefono}});},onAbono:function(l){var dRef=debtorModal;setDebtorModal(null);setAbonoModal({loan:l,fromDeudor:dRef});},onCobro:function(l){var dRef=debtorModal;setDebtorModal(null);setCobroModal({loan:l,fromDeudor:dRef});},
       onCorte:function(l){var dRef=debtorModal;setDebtorModal(null);setCorteModal({loan:l,fromDeudor:dRef});},onReestructurar:function(l){var dRef=debtorModal;setDebtorModal(null);setRestructureModal({loan:l,fromDeudor:dRef});},
+      onCondonar:function(l){var dRef=debtorModal;setDebtorModal(null);setCondonarModal({loan:l,fromDeudor:dRef});},
       // v2.0.0 — el modal de liquidacion se elevo a App; aqui solo se DISPARA, con el mismo
       // patron fromDeudor de onAbono/onReestructurar (Cancelar devuelve al perfil).
       onRequestLiquidar:function(l){var dRef=debtorModal;setDebtorModal(null);setLiquidarModal({loan:l,fromDeudor:dRef});},onReload:reload,datosPago:cfg.datos_pago}),

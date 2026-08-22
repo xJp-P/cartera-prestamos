@@ -156,11 +156,23 @@ export function PortfolioView(props){
         var esUSD=l.moneda==='USD';
         var pct=m.cuotasTotal>0?Math.round(m.cuotasPaid/m.cuotasTotal*100):0;
         var esCancelado=l.estado==='Cancelado';
-        var stColor=l.estado==='Activo'?'var(--green)':esCancelado?'var(--red)':'var(--text3)';
-        var stBg=l.estado==='Activo'?'var(--green-bg)':esCancelado?'var(--red-bg)':'var(--bg3)';
-        // Color del saldo: naranja si hay mora, amarillo si activo, rojo si cancelado, gris si finalizado
-        var saldoColor=esCancelado?'var(--red)':l.estado!=='Activo'?'var(--text3)':m.enMora?'var(--red)':'var(--yellow)';
-        var perdidaTotal=esCancelado?Math.round((l.capitalPerdido||0)+(l.interesesPerdidos||0)):0;
+        // CONDONACION HECHA POR LA VIA VIEJA (abono + cierre forzoso), reconocible sin
+        // migracion ni columna nueva: capital perdido CERO con intereses perdidos > 0
+        // solo puede significar que se recupero el 100% del capital y se perdono el
+        // redito. Llamar a eso "Perdida total" —en rojo— es exactamente al reves de lo
+        // que paso. Los creditos condonados con el endpoint nuevo NO pasan por aqui:
+        // cierran como 'Finalizado' y llevan su monto en `loans.interesesCondonados`.
+        // Se declara ANTES que los colores porque los tres lo consumen.
+        var capPerd=Math.round(l.capitalPerdido||0), intPerd=Math.round(l.interesesPerdidos||0);
+        var esCondonadoViejo=esCancelado&&capPerd===0&&intPerd>0;
+        var condonados=Math.round(l.interesesCondonados||0);
+        var perdidaReal=esCancelado&&!esCondonadoViejo;
+        var stColor=l.estado==='Activo'?'var(--green)':perdidaReal?'var(--red)':'var(--text3)';
+        var stBg=l.estado==='Activo'?'var(--green-bg)':perdidaReal?'var(--red-bg)':'var(--bg3)';
+        // Color del saldo: naranja si hay mora, amarillo si activo, rojo si hubo perdida
+        // real, ambar si fue una condonacion, gris si finalizado
+        var saldoColor=esCancelado?(esCondonadoViejo?'var(--yellow)':'var(--red)'):l.estado!=='Activo'?'var(--text3)':m.enMora?'var(--red)':'var(--yellow)';
+        var perdidaTotal=esCancelado?Math.round(capPerd+intPerd):0;
         return h('div',{key:l.id,style:{background:'var(--bg2)',borderRadius:14,padding:'13px 14px',border:'1px solid '+(m.enMora&&l.estado==='Activo'?'var(--red-bd)':'var(--border)')}},
           h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}},
             h('div',{style:{fontWeight:700,fontSize:14,color:'var(--text)'}},l.nombre),
@@ -182,7 +194,7 @@ export function PortfolioView(props){
               esUSD&&h('div',{className:'mono',style:{fontSize:11,color:'var(--blue)'}},fmtUSD(m.gananciaUSD)),
               (esUSD&&l.modalidad==='Prestamo')&&h('div',{style:{fontSize:9,color:'var(--text3)',marginTop:1,fontStyle:'italic'}},m.ganancia<0?'Sin interes · TRM bajo al cobrar':m.ganancia>0?'Sin interes · TRM subio al cobrar':'Sin interes · sin variacion TRM')),
             h('div',null,
-              h('div',{style:{fontSize:11,color:saldoColor,fontWeight:600}},esCancelado?'Perdida total':'Saldo pendiente'),
+              h('div',{style:{fontSize:11,color:saldoColor,fontWeight:600}},esCancelado?(esCondonadoViejo?'Intereses condonados':'Perdida total'):'Saldo pendiente'),
               h('div',{className:'mono',style:{fontSize:15,fontWeight:600,color:saldoColor}},l.estado==='Activo'?fmt(m.saldo):esCancelado?'-'+fmt(perdidaTotal):'Saldado'),
               esUSD&&l.estado==='Activo'&&h('div',{className:'mono',style:{fontSize:11,color:'var(--blue)'}},copToUsd(m.saldo,l.trmAcordada)),
               esCancelado&&(function(){
@@ -191,9 +203,13 @@ export function PortfolioView(props){
                   h('div',{style:{color:'var(--text3)'}},'Capital ',h('span',{className:'mono',style:{color:'var(--red)'}},'-'+fmt(capP))),
                   h('div',{style:{color:'var(--text3)'}},'Intereses ',h('span',{className:'mono',style:{color:'var(--red)'}},'-'+fmt(intP))));
                 if(capP>0) return h('div',{style:{marginTop:2,fontSize:9,color:'var(--text3)',fontStyle:'italic'}},'Solo capital no recuperado');
-                if(intP>0) return h('div',{style:{marginTop:2,fontSize:9,color:'var(--text3)',fontStyle:'italic'}},'Solo intereses no cobrados');
+                if(intP>0) return h('div',{style:{marginTop:2,fontSize:9,color:'var(--text3)',fontStyle:'italic'}},'Capital recuperado al 100%');
                 return null;
               })()),
+            condonados>0&&h('div',{style:{gridColumn:'1/3',marginTop:2}},
+              h('div',{style:{fontSize:11,color:'var(--yellow)',fontWeight:600}},'Intereses condonados'),
+              h('div',{className:'mono',style:{fontSize:14,fontWeight:500,color:'var(--yellow)'}},'-'+fmt(condonados),
+                h('span',{style:{fontSize:9,fontWeight:400,marginLeft:6,color:'var(--text3)',fontStyle:'italic'}},'perdonados por acuerdo'))),
             m.capitalAbonos>0&&h('div',{style:{gridColumn:'1/3',marginTop:2}},
               h('div',{style:{fontSize:11,color:'var(--blue)',fontWeight:600}},'Abonos a capital'),
               h('div',{className:'mono',style:{fontSize:14,fontWeight:500,color:'var(--blue)'}},fmt(m.capitalAbonos),

@@ -65,7 +65,7 @@ const ENDPOINTS = [
   'GET /api/payments', 'PUT /api/payments/:id', 'POST /api/payments/:id/partial',
   'POST /api/loans/:id/abono', 'POST /api/loans/:id/reestructurar',
   'POST /api/loans/:id/force-close', 'POST /api/loans/:id/cambiar-dia-pago',
-  'POST /api/loans/:id/corte',
+  'POST /api/loans/:id/corte', 'POST /api/loans/:id/condonar-intereses',
   'POST /api/recalculate', 'GET /api/config', 'PUT /api/config', 'GET /api/activity',
   'GET /api/undo', 'POST /api/undo/:id',
   'GET /api/debts', 'GET /api/debts/:id', 'POST /api/debts',
@@ -726,6 +726,47 @@ async function faseEscritura() {
       '/api/loans/' + lCierre.id + '/force-close', {}, '4xx');
     await rechazo('POST /api/loans/:id/force-close', 'POST /force-close sobre prestamo inexistente', 'POST',
       '/api/loans/no-existe/force-close', {}, 404);
+
+    // ── POST /api/loans/:id/condonar-intereses ─────────────────────────────
+    // Cobertura de CONTRATO (200, 4xx, undo). Las propiedades economicas —caja cero,
+    // el capital intacto, el escenario completo hasta 'Finalizado'— viven en
+    // tests/condonacion.js, que las mide con los helpers reales del frontend.
+    R.seccion('POST /api/loans/:id/condonar-intereses');
+    const lCond = conDb(DB, d => d.prepare(`
+      SELECT l.* FROM loans l WHERE l.estado='Activo'
+        AND l.modalidad IN ('Intereses','Capital + Intereses')
+        AND EXISTS (SELECT 1 FROM payments p WHERE p.prestamoId=l.id
+                    AND p.estadoPago='En Mora' AND p.id NOT LIKE '%-ab-%' AND p.interesPeriodo > 0)
+      LIMIT 1`).get());
+    R.check('ANTI-VACIO: hay un credito con intereses en mora que condonar',
+      !!lCond, lCond ? lCond.id : 'NINGUNO');
+    if (lCond) {
+      const moraCond = conDb(DB, d => d.prepare(
+        "SELECT * FROM payments WHERE prestamoId=? AND estadoPago='En Mora' AND id NOT LIKE '%-ab-%'").all(lCond.id));
+      const intEsperado = Math.round(moraCond.reduce((s, p) => s + p.interesPeriodo, 0));
+      const capEsperado = Math.round(moraCond.reduce((s, p) => s + p.abonoCapital, 0));
+
+      const rCond = await pedir(S, 'POST', '/api/loans/' + lCond.id + '/condonar-intereses', {});
+      marcar('POST /api/loans/:id/condonar-intereses');
+      R.check('POST /condonar-intereses responde 200', rCond.status === 200,
+        'status=' + rCond.status + ' ' + rCond.text.slice(0, 200));
+      exigirUndoId(rCond, 'POST /condonar-intereses');
+      // El esperado se computa APARTE con los datos previos, no se compara la respuesta
+      // contra si misma (misma leccion que en force-close).
+      R.eq('condonar informa el interes realmente condonado', Math.round(rCond.json.condonado), intEsperado);
+      R.eq('condonar informa el capital que sigue en mora', Math.round(rCond.json.capitalEnMora), capEsperado);
+      R.eq('condonar deja en 0 el interes de esas cuotas',
+        conDb(DB, d => d.prepare(
+          "SELECT count(*) c FROM payments WHERE prestamoId=? AND id NOT LIKE '%-ab-%' AND estadoPago='En Mora' AND interesPeriodo <> 0").get(lCond.id).c), 0);
+      R.eq('condonar acumula en loans.interesesCondonados',
+        Math.round(conDb(DB, d => d.prepare('SELECT * FROM loans WHERE id=?').get(lCond.id)).interesesCondonados),
+        Math.round(lCond.interesesCondonados || 0) + intEsperado);
+
+      await rechazo('POST /api/loans/:id/condonar-intereses', 'condonar dos veces (ya no queda interes)', 'POST',
+        '/api/loans/' + lCond.id + '/condonar-intereses', {}, '4xx');
+      await rechazo('POST /api/loans/:id/condonar-intereses', 'condonar un prestamo inexistente', 'POST',
+        '/api/loans/no-existe/condonar-intereses', {}, 404);
+    }
 
     // ── /api/debts (5 endpoints) ───────────────────────────────────────────
     R.seccion('/api/debts — los 5 endpoints de Mis Deudas');

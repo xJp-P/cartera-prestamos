@@ -169,6 +169,13 @@ function aplicarEsquema(db) {
   try { db.exec("ALTER TABLE loans ADD COLUMN fechaUltimoCorte TEXT"); } catch(_){}
   try { db.exec("ALTER TABLE loans ADD COLUMN interesAcumuladoPend REAL DEFAULT 0"); } catch(_){}
 
+  // interesesCondonados (v2.9.0) — intereses PERDONADOS por acuerdo comercial, ADITIVO
+  // (se puede condonar mas de una vez). NO se reusa `interesesPerdidos`: ese es un
+  // snapshot del cierre forzoso y significa "el deudor no pago"; condonar significa
+  // "recupere el capital y perdone el redito". Conflarlos mantiene el error de
+  // etiqueta que Rendimiento ya comete al pintar esos creditos como perdida total.
+  try { db.exec("ALTER TABLE loans ADD COLUMN interesesCondonados REAL DEFAULT 0"); } catch(_){}
+
   // ── Tabla de historial de acciones ──────────────────────────────────────────
   db.exec(`
     CREATE TABLE IF NOT EXISTS activity_log (

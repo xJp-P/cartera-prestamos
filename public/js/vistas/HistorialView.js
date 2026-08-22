@@ -14,11 +14,11 @@ export function HistorialView(props){
   var undoLog=props.undoLog||[];
   var onUndo=props.onUndo;
   var onRefresh=props.onRefresh;
-  var tipoIcon={prestamo:'plus',edicion:'edit',eliminacion:'trash',pago:'check',abono:'dollar',reestructuracion:'calc',cierre:'alert',deshacer:'refresh','cambio-fecha':'calendar',deuda:'briefcase'};
+  var tipoIcon={prestamo:'plus',edicion:'edit',eliminacion:'trash',pago:'check',abono:'dollar',reestructuracion:'calc',cierre:'alert',deshacer:'refresh','cambio-fecha':'calendar',deuda:'briefcase',condonacion:'alert'};
   // v2.1 — 'deshacer' en purpura: las acciones compensatorias deben destacar de un vistazo sin
   // confundirse con un error (rojo) ni con un cobro (verde).
-  var tipoColor={prestamo:'var(--green)',edicion:'var(--blue)',eliminacion:'var(--red)',pago:'var(--green)',abono:'var(--yellow)',reestructuracion:'var(--blue)',cierre:'var(--red)',deshacer:'var(--purple)','cambio-fecha':'var(--blue)',deuda:'var(--text2)'};
-  var tipoLabel={prestamo:'Nuevo prestamo',edicion:'Edicion',eliminacion:'Eliminacion',pago:'Pago',abono:'Abono',reestructuracion:'Reestructuracion',cierre:'Cierre forzoso',deshacer:'Deshecho','cambio-fecha':'Cambio de fecha',deuda:'Mis deudas'};
+  var tipoColor={prestamo:'var(--green)',edicion:'var(--blue)',eliminacion:'var(--red)',pago:'var(--green)',abono:'var(--yellow)',reestructuracion:'var(--blue)',cierre:'var(--red)',deshacer:'var(--purple)','cambio-fecha':'var(--blue)',deuda:'var(--text2)',condonacion:'var(--yellow)'};
+  var tipoLabel={prestamo:'Nuevo prestamo',edicion:'Edicion',eliminacion:'Eliminacion',pago:'Pago',abono:'Abono',reestructuracion:'Reestructuracion',cierre:'Cierre forzoso',deshacer:'Deshecho','cambio-fecha':'Cambio de fecha',deuda:'Mis deudas',condonacion:'Condonacion'};
 
   function fmtFecha(f){
     if(!f)return '';

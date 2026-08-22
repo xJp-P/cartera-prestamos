@@ -589,5 +589,14 @@ export const CHANGELOGS = {
     'En prestamos en dolares el recibo esta expresado en dolares, con los pesos realmente recibidos y la tasa del dia debajo.',
     'El recibo es opcional: un checkbox en el modal decide si se genera, igual que en los pagos y los abonos.',
     'Si algun movimiento del cobro llegara a fallar, no se emite recibo: un comprobante por menos dinero del que entrego el cliente seria peor que ninguno.'
+  ],
+  '2.9.0': [
+    'Nuevo boton "Condonar intereses" en el perfil del deudor: para el acuerdo de "devuelveme el capital y te perdono los intereses". Perdona el interes de las cuotas vencidas y deja el capital intacto.',
+    'Antes no habia forma correcta de hacerlo. Liquidar registraba como recibido el interes que en realidad se perdonaba, inflando los cobros del mes y las ganancias; y en los creditos de Capital + Intereses directamente no habia camino.',
+    'Podes elegir que cuotas vencidas perdonar, o todas de una. En los creditos de interes diario condona el interes acumulado a la fecha.',
+    'No registra ningun pago: no aparece en Cobros del Mes ni infla las ganancias. Despues cobras el capital con "Registrar cobro" y el credito se cierra solo, como Finalizado.',
+    'Queda en el Historial con su propio color y se puede deshacer.',
+    'Rendimiento deja de mostrar "Perdida total" en rojo cuando se recupero el 100% del capital y solo se perdonaron intereses: ahora dice "Intereses condonados".',
+    'La cabecera del perfil del deudor (saldo, prestamos y cuotas en mora) se actualiza al instante despues de cualquier accion; antes se quedaba con los numeros de antes hasta cerrar y volver a abrir.'
   ]
 };

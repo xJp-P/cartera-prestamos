@@ -10,7 +10,7 @@ import { Modal } from '../componentes/base.js';
 import { Ico } from '../componentes/iconos.js';
 import { API, showError } from '../core/api.js';
 import { _pmt } from '../core/calculo.js';
-import { computeLiquidacion, imputarCobros, pendCuota, esDiario, progresoCapital, estadoDiario } from '../core/dominio.js';
+import { computeLiquidacion, imputarCobros, pendCuota, esDiario, progresoCapital, estadoDiario, saldoConCaja } from '../core/dominio.js';
 import { copToUsd, fmt, fmtD, fmtN, fmtUSD } from '../core/format.js';
 import { h, useState } from '../core/react.js';
 import { freqLabel, nowStr } from '../core/ui.js';
@@ -21,7 +21,7 @@ import { esAbono } from '../core/ids.js';
 
 // ── DebtorModal ───────────────────────────────────────────────────────────────
 export function DebtorModal(props){
-  var d=props.deudor,pays=props.pays,loans=props.loans,onClose=props.onClose,onNewLoan=props.onNewLoan,onAbono=props.onAbono,onCobro=props.onCobro,onCorte=props.onCorte,onRequestLiquidar=props.onRequestLiquidar,onReload=props.onReload,onReestructurar=props.onReestructurar,datosPago=props.datosPago;
+  var d=props.deudor,pays=props.pays,loans=props.loans,onClose=props.onClose,onNewLoan=props.onNewLoan,onAbono=props.onAbono,onCobro=props.onCobro,onCorte=props.onCorte,onRequestLiquidar=props.onRequestLiquidar,onReload=props.onReload,onReestructurar=props.onReestructurar,onCondonar=props.onCondonar,datosPago=props.datosPago;
   var ex=useState(null); var expLoan=ex[0]; var setExpLoan=ex[1];
   var cr=useState(null); var cronoLoan=cr[0]; var setCronoLoan=cr[1];
   // v2.0.0 — confirmLiq / incluyeProxMes / liqSending se movieron al componente LiquidarModal
@@ -46,6 +46,21 @@ export function DebtorModal(props){
   // Cuotas en mora de este deudor (con detalle)
   var cuotasMora=deudorPays.filter(function(p){return p.estadoPago==='En Mora';})
     .sort(function(a,b){return a.fechaPago.localeCompare(b.fechaPago);});
+  // ── LOS PRESTAMOS SE DERIVAN DE LOS DATOS FRESCOS, NO DEL OBJETO `deudor` ──────
+  // `props.deudor` es una AGREGACION que `App` calcula una vez y que los modales
+  // capturan en `fromDeudor` ANTES de mutar (patron de onAbono / onCobro / onCondonar
+  // / onRequestLiquidar). Al reabrirse el perfil, ese objeto sigue siendo el de antes:
+  // sus `loans`, su `mora` y su `totalSaldo` describen un estado que ya no existe.
+  // El resto del componente (la lista de mora, los intereses cobrados, el ultimo pago)
+  // ya se derivaba de `pays`, asi que la cabecera se contradecia con lo que mostraba
+  // justo debajo — medido tras condonar 6 cuotas: la lista quedaba vacia y el KPI
+  // seguia anunciando "CUOTAS EN MORA 6". Se deriva todo de `loans`/`pays`, que llegan
+  // frescos en cada render, y la incoherencia desaparece para TODAS las acciones.
+  var loansDeudor=loans.filter(function(l){return l.nombre===d.nombre;});
+  var activosDeudor=loansDeudor.filter(function(l){return l.estado==='Activo';});
+  var totalSaldoVivo=activosDeudor.reduce(function(s,l){
+    return s+saldoConCaja(l,pays.filter(function(p){return p.prestamoId===l.id;}));
+  },0);
   if(cambioFecha){
     var cfLoan=cambioFecha.loan;
     var cfEsUSD=cfLoan.moneda==='USD';
@@ -196,16 +211,16 @@ export function DebtorModal(props){
     h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginTop:8}},
       h('div',{style:{background:'var(--bg3)',borderRadius:12,padding:'12px'}},
         h('div',{style:{fontSize:10,color:'var(--text3)',fontWeight:600,marginBottom:4}},'SALDO ACTUAL'),
-        h('div',{className:'mono',style:{fontSize:14,fontWeight:600,color:'var(--green)'}},fmt(d.totalSaldo))),
+        h('div',{className:'mono',style:{fontSize:14,fontWeight:600,color:'var(--green)'}},fmt(totalSaldoVivo))),
       h('div',{style:{background:'var(--bg3)',borderRadius:12,padding:'12px'}},
         h('div',{style:{fontSize:10,color:'var(--text3)',fontWeight:600,marginBottom:4}},'INTERESES PAGADOS'),
         h('div',{className:'mono',style:{fontSize:14,fontWeight:600,color:'var(--blue)'}},fmt(interesesPagados))),
       h('div',{style:{background:'var(--bg3)',borderRadius:12,padding:'12px'}},
         h('div',{style:{fontSize:10,color:'var(--text3)',fontWeight:600,marginBottom:4}},'PRESTAMOS'),
-        h('div',{style:{fontSize:14,fontWeight:600,color:'var(--text)'}},d.loans.length+' ('+d.loans.filter(function(l){return l.estado==='Activo';}).length+' activos)')),
-      h('div',{style:{background:d.mora>0?'var(--red-bg)':'var(--bg3)',borderRadius:12,padding:'12px',border:d.mora>0?'1px solid var(--red-bd)':'none'}},
-        h('div',{style:{fontSize:10,color:d.mora>0?'var(--red)':'var(--text3)',fontWeight:600,marginBottom:4}},'CUOTAS EN MORA'),
-        h('div',{style:{fontSize:14,fontWeight:600,color:d.mora>0?'var(--red)':'var(--text)'}},d.mora))),
+        h('div',{style:{fontSize:14,fontWeight:600,color:'var(--text)'}},loansDeudor.length+' ('+activosDeudor.length+' activos)')),
+      h('div',{style:{background:cuotasMora.length>0?'var(--red-bg)':'var(--bg3)',borderRadius:12,padding:'12px',border:cuotasMora.length>0?'1px solid var(--red-bd)':'none'}},
+        h('div',{style:{fontSize:10,color:cuotasMora.length>0?'var(--red)':'var(--text3)',fontWeight:600,marginBottom:4}},'CUOTAS EN MORA'),
+        h('div',{style:{fontSize:14,fontWeight:600,color:cuotasMora.length>0?'var(--red)':'var(--text)'}},cuotasMora.length))),
     cuotasMora.length>0&&h('div',{style:{marginTop:8,background:'var(--red-bg)',borderRadius:10,padding:'10px 12px',border:'1px solid var(--red-bd)'}},
       cuotasMora.map(function(p,i){
         var pend=pendCuota(p);var hasPartial=(p.partialPaid||0)>0;
@@ -224,8 +239,8 @@ export function DebtorModal(props){
     h('div',{style:{marginTop:12}},
       h('div',{style:{fontSize:11,fontWeight:600,color:'var(--text3)',marginBottom:8}},'PRESTAMOS ACTIVOS'),
       h('button',{onClick:function(){onNewLoan(d);},style:{width:'100%',background:'var(--green2)',color:'white',border:'none',borderRadius:10,padding:'10px',fontSize:12,fontWeight:600,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:5,fontFamily:'inherit',marginBottom:10}},h(Ico,{name:'plus',size:13,color:'white'}),' Nuevo prestamo a '+d.nombre),
-      d.loans.filter(function(l){return l.estado==='Activo';}).length===0&&h('div',{style:{fontSize:12,color:'var(--text3)',padding:'8px 0',fontStyle:'italic'}},'Sin prestamos activos'),
-      d.loans.filter(function(l){return l.estado==='Activo';}).slice().sort(function(a,b){return b.fechaInicio.localeCompare(a.fechaInicio);}).map(function(l){
+      activosDeudor.length===0&&h('div',{style:{fontSize:12,color:'var(--text3)',padding:'8px 0',fontStyle:'italic'}},'Sin prestamos activos'),
+      activosDeudor.slice().sort(function(a,b){return b.fechaInicio.localeCompare(a.fechaInicio);}).map(function(l){
         var lp=pays.filter(function(p){return p.prestamoId===l.id;});
         var regulares=lp.filter(function(p){return !esAbono(p);});
         var abonosList=lp.filter(function(p){return esAbono(p);});
@@ -477,6 +492,12 @@ export function DebtorModal(props){
               // v1.10.0: Pago Unico no tiene dia de pago periodico — excluir igual que Prestamo
               var canCambiarFecha=isActive&&l.modalidad!=='Prestamo'&&l.modalidad!=='Pago Unico';
               var imora=enMora.reduce(function(s,p){return s+p.interesPeriodo;},0); // usado por Cambiar fecha
+              // Condonar solo tiene sentido si hay interes vencido que perdonar. En credito
+              // abierto no hay cuotas En Mora —el interes se devenga, no se materializa—, asi
+              // que el gate mira el devengo pendiente en su lugar.
+              var devCond=esDiario(l)?estadoDiario(l,lp,nowStr()):null;
+              var canCondonar=isActive&&onCondonar&&l.modalidad!=='Prestamo'&&l.modalidad!=='Pago Unico'&&
+                (esDiario(l)?(devCond&&devCond.interesPendiente>0):imora>0);
               var labelStyle={fontSize:9,fontWeight:700,color:'var(--text3)',letterSpacing:1.2,textTransform:'uppercase',marginBottom:6};
               var btnBase={width:'100%',padding:'10px 12px',borderRadius:10,fontSize:13,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8,fontFamily:'inherit',transition:'all .15s'};
               var btnPrimary=Object.assign({},btnBase,{background:'var(--green2)',border:'1px solid var(--green2)',color:'#fff'});
@@ -510,12 +531,15 @@ export function DebtorModal(props){
                     h(Ico,{name:'receipt',size:15,color:'var(--green)',sw:2.2}),'Cobrar interes (PDF)')));
               }
               // Tier 2: AJUSTAR CRONOGRAMA
-              if(canReestructurar||canCambiarFecha){
+              if(canReestructurar||canCambiarFecha||canCondonar){
                 var ajs=[h('div',{key:'lbl',style:labelStyle},'Ajustar cronograma')];
                 if(canReestructurar) ajs.push(h('button',{key:'r',onClick:function(e){e.stopPropagation();onReestructurar(l);},style:btnNeutral},
                   h(Ico,{name:'calc',size:14,color:'var(--text2)',sw:2}),'Reestructurar cuotas'));
                 if(canCambiarFecha) ajs.push(h('button',{key:'f',onClick:function(e){e.stopPropagation();var _pg=lp.filter(function(p){return !esAbono(p)&&p.estadoPago==='Pagado';});var _pgf=_pg.map(function(p){return p.fechaPago;}).sort();setCambioFecha({loan:l,saldo:saldo,intMora:imora,moraCount:enMora.length,lastSettled:_pgf.length?_pgf[_pgf.length-1]:l.fechaInicio,regularConsumed:_pg.length,step:'form',nuevoDia:''});},style:Object.assign({},btnNeutral,{marginTop:canReestructurar?6:0})},
                   h(Ico,{name:'calendar',size:14,color:'var(--text2)',sw:2}),'Cambiar fecha de pago'));
+                if(canCondonar) ajs.push(h('button',{key:'c',onClick:function(e){e.stopPropagation();onCondonar(l);},
+                  style:Object.assign({},btnNeutral,{marginTop:(canReestructurar||canCambiarFecha)?6:0})},
+                  h(Ico,{name:'alert',size:14,color:'var(--text2)',sw:2}),'Condonar intereses'));
                 sects.push(h('div',{key:'g2',style:{marginTop:14}},ajs));
               }
               // Tier 3: CRONOGRAMA (Ver detalle + Descargar PDF pareados)
@@ -615,12 +639,12 @@ export function DebtorModal(props){
                   h('span',{className:'mono',style:{fontSize:15,fontWeight:700,color:'var(--blue)'}},fmt(dv.capitalVivo+dv.interesPendiente))));
             }())))}());
       })),
-    d.loans.filter(function(l){return l.estado==='Finalizado'||l.estado==='Cancelado';}).length>0&&h('div',{style:{marginTop:16}},
+    loansDeudor.filter(function(l){return l.estado==='Finalizado'||l.estado==='Cancelado';}).length>0&&h('div',{style:{marginTop:16}},
       h('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:10}},
         h('div',{style:{flex:1,height:1,background:'var(--border)'}}),
         h('span',{style:{fontSize:10,fontWeight:600,color:'var(--text3)',letterSpacing:1}},'HISTORIAL DE CREDITOS'),
         h('div',{style:{flex:1,height:1,background:'var(--border)'}})),
-      d.loans.filter(function(l){return l.estado==='Finalizado'||l.estado==='Cancelado';}).slice().sort(function(a,b){return b.fechaInicio.localeCompare(a.fechaInicio);}).map(function(l){
+      loansDeudor.filter(function(l){return l.estado==='Finalizado'||l.estado==='Cancelado';}).slice().sort(function(a,b){return b.fechaInicio.localeCompare(a.fechaInicio);}).map(function(l){
         var lPays=pays.filter(function(p){return p.prestamoId===l.id;});
         var regulares=lPays.filter(function(p){return !esAbono(p);});
         var abonos=lPays.filter(function(p){return esAbono(p)&&p.estadoPago==='Pagado';});
