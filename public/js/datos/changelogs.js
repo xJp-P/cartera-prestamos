@@ -611,5 +611,11 @@ export const CHANGELOGS = {
     'Nuevo boton "+ Cargo" para registrar que la deuda crecio. Funciona incluso en deudas ya pagadas, que vuelven a quedar activas.',
     'La barra dejo de llamarse "Pagado" y ahora dice cuanto llevas abonado del total cargado: en una deuda que crece, un avance hacia el 100% retrocedia al entrar un cargo nuevo.',
     'Se quito el boton de estado de cuenta: sus movimientos ya viven dentro de la tarjeta, asi que abria una ventana con lo mismo que ya estabas viendo.'
+  ],
+  '2.9.4': [
+    'Corregido un error importante al registrar un cobro en dolares: si escribias centavos (por ejemplo 12.50), la app planeaba un cobro de USD 1.250 en vez de USD 12,50, y dejaba confirmarlo. Ahora lee el monto tal como lo escribis.',
+    'La pantalla de "Registrar cobro" y el recibo que sale de ella ya no muestran cifras distintas: en dolares, el capital de cada movimiento podia diferir en un centavo entre lo que aprobabas y lo que se imprimia.',
+    'En esa misma pantalla, los rubros ahora suman exactamente el total en todos lados: en cada movimiento, en el resumen, en el cronograma de vista previa y en el recuadro de "Total que se puede cobrar hoy".',
+    'El "efecto TRM" que se muestra al cobrar en dolares se calcula contra la deuda que realmente se extingue, no contra una cifra aproximada: antes se desviaba por unos pesos y, cuando la TRM del dia coincidia con la pactada, llegaba a mostrar cero habiendo diferencia.'
   ]
 };

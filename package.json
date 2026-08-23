@@ -1,6 +1,6 @@
 {
   "name": "cartera",
-  "version": "2.9.3",
+  "version": "2.9.4",
   "description": "Gestión integral de activos, pasivos y cartera rotativa.",
   "main": "desktop/main.js",
   "scripts": {

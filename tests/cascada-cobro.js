@@ -24,7 +24,7 @@ const path = require('path');
 const http = require('http');
 const { Reporter }          = require('./lib/report');
 const { copiaDeProduccion } = require('./lib/db');
-const { REPO }              = require('./lib/paths');
+const { REPO, FIXTURE_DB }  = require('./lib/paths');
 
 const R = new Reporter('cascada-cobro');
 
@@ -716,6 +716,281 @@ async function ejecutarPlan(loanId, plan, fecha, obs, port) {
         .every(k => rubrosVistos[k]),
       JSON.stringify(rubrosVistos));
     srvG.close();
+  }
+
+
+  // ── H — LA PANTALLA DEL COBRO NO PUEDE CONTRADECIR AL PAPEL ────────────────
+  // La seccion G fija el PAPEL. Esta fija la PANTALLA desde la que ese papel se
+  // aprueba, y son cosas distintas: el usuario ve las dos cifras una al lado de la
+  // otra, y hasta v2.9.3 imprimian numeros diferentes en la misma linea.
+  //
+  // Se ejecuta el componente REAL (`CobroModal`, via el arnes del frontend)
+  // sembrando `useState` POR POSICION, que es lo mismo que teclear en el
+  // formulario. No hace falta servidor ni copia escribible: el modal es
+  // presentacion pura sobre `loan` + `pays`, y aqui no se aplica nada.
+  //
+  // Lo que se ata:
+  //   1. Bug #56 — el campo de dolares se lee como DECIMAL. `parseNum` esta hecha
+  //      para los campos en pesos (punto = separador de MILES) y lo borraba, asi
+  //      que teclear "12.50" planeaba un cobro de USD 1.250 con el boton ACTIVO.
+  //      Es el unico check de esta seccion que toca dinero de verdad.
+  //   2. La identidad interes + capital == total, en la MONEDA VISIBLE, en las
+  //      TRES superficies del modal: la tarjeta de cada paso, el panel de rubros y
+  //      el preview del cronograma (columnas universales v1.18.0 / Bug #31).
+  //   3. El "efecto TRM" se mide contra la obligacion REALMENTE extinguida —la que
+  //      va anclada al peso exacto de la cuota— y no contra la nominal.
+  //   4. Modal y recibo imprimen los MISMOS numeros sobre los mismos pasos.
+  //
+  // Cada identidad lleva su ANTI-TRIVIAL: se comprueba que la formula ingenua
+  // (convertir cada rubro por separado) SI habria descuadrado en el caso elegido.
+  // Sin eso, un reparto "amable" dejaria la seccion verde sin probar nada.
+  {
+    R.seccion('H — el modal del cobro: lectura del monto y aritmetica visible');
+
+    const { cargarFrontend } = require('./lib/load-frontend');
+    const fe = cargarFrontend({ silenciarConsola: true });
+    const CobroModalReal   = fe.simbolos.CobroModal;
+    const generateReciboH  = fe.simbolos.generateReciboCobro;
+    const parseDecimalH    = fe.simbolos.parseDecimalInput;
+
+    R.check('H el componente real del modal se cargo', typeof CobroModalReal === 'function');
+    R.check('H el generador real del recibo se cargo', typeof generateReciboH === 'function');
+    R.check('H el normalizador real del input se cargo', typeof parseDecimalH === 'function');
+
+    // Siembra del estado en el ORDEN en que el componente llama a useState. Si
+    // alguien reordena o agrega uno, el plan sale null y los ANTI-VACIO gritan;
+    // no puede degradarse en silencio.
+    const sembrar = (vals) => {
+      let i = 0;
+      fe.sandbox.useState = (init) => {
+        const v = (i < vals.length && vals[i] !== undefined)
+          ? vals[i] : (typeof init === 'function' ? init() : init);
+        i++;
+        return [v, () => {}];
+      };
+    };
+    const pintar = (n) => {
+      if (n === null || n === undefined || typeof n === 'boolean') return null;
+      if (typeof n === 'string' || typeof n === 'number') return String(n);
+      if (Array.isArray(n)) return n.map(pintar).filter(x => x !== null);
+      if (typeof n.type === 'function') return pintar(n.type(Object.assign({}, n.props, { children: n.children })));
+      return { tag: n.type, props: n.props, kids: (n.children || []).map(pintar).filter(x => x !== null) };
+    };
+    const textos = (n, out) => {
+      out = out || [];
+      if (typeof n === 'string') { out.push(n); return out; }
+      if (Array.isArray(n)) { n.forEach(x => textos(x, out)); return out; }
+      if (n && n.kids) n.kids.forEach(x => textos(x, out));
+      return out;
+    };
+    const nodos = (n, tag, out) => {
+      out = out || [];
+      if (Array.isArray(n)) { n.forEach(x => nodos(x, tag, out)); return out; }
+      if (n && n.kids) { if (n.tag === tag) out.push(n); n.kids.forEach(x => nodos(x, tag, out)); }
+      return out;
+    };
+    // Mismo lector de dinero que la seccion G: sirve para "$ 1.500.000" y "USD $1,432.13".
+    const numH = (t) => {
+      const m = /(USD\s*)?\$\s*(-?[\d.,]+)/.exec(String(t == null ? '' : t));
+      if (!m) return NaN;
+      return m[1] ? parseFloat(m[2].replace(/,/g, ''))
+                  : parseInt(m[2].replace(/[^0-9-]/g, ''), 10);
+    };
+    // El helper `linea()` emite etiqueta y valor adyacentes: el valor es el
+    // siguiente token con forma de dinero.
+    const trasEtiqueta = (txts, re) => {
+      for (let i = 0; i < txts.length - 1; i++) {
+        if (!re.test(txts[i])) continue;
+        for (let j = i + 1; j < Math.min(i + 3, txts.length); j++) {
+          const v = numH(txts[j]);
+          if (!isNaN(v)) return v;
+        }
+      }
+      return NaN;
+    };
+    const r2H = (x) => Math.round(x * 100) / 100;
+
+    const dbH    = new Database(FIXTURE_DB, { readonly: true });
+    const paysH  = dbH.prepare('SELECT * FROM payments').all();
+    const loansH = dbH.prepare('SELECT * FROM loans').all();
+    dbH.close();
+
+    // Credito USD con mora: es el unico escenario donde la moneda visible no es la
+    // de calculo, que es justo donde el centavo se pierde.
+    const loanH = loansH.find(l => l.moneda === 'USD' && l.modalidad === 'Capital + Intereses' &&
+      l.estado === 'Activo' && +l.trmAcordada > 0 &&
+      paysH.some(p => p.prestamoId === l.id && p.estadoPago === 'En Mora' && !esAbono(p)));
+    R.check('H ANTI-VACIO: hay un C+I en USD con mora en el fixture', !!loanH);
+
+    if (loanH) {
+      const trmH  = +loanH.trmAcordada;
+      const cobH  = cobrableTotal(loanH, paysH);
+      const techo = cobH.total / trmH;
+
+      // Devuelve el arbol pintado y su texto plano: el texto sirve para los rubros
+      // (que `linea()` emite como etiqueta + valor adyacentes) y el arbol para la
+      // tabla del preview, donde hace falta la estructura de filas y celdas.
+      const correr = (tecleado, cajaCOP) => {
+        // Se pasa por el MISMO normalizador del input: el estado guarda lo que
+        // `parseDecimalInput` produce, no lo que el usuario pulso.
+        sembrar(['', parseDecimalH(tecleado), String(cajaCOP), '2026-08-23', '', false, true, null, true]);
+        const arbol = pintar(CobroModalReal({
+          loan: loanH, pays: paysH, onConfirm: () => Promise.resolve({ ok: true }), onClose: () => {},
+        }));
+        return { arbol, txts: textos(arbol) };
+      };
+
+      // ── 1. Bug #56: el monto en dolares se lee como decimal ─────────────────
+      // El valor inflado tiene que CABER bajo el techo cobrable; si se pasara, el
+      // sobrante deshabilitaria el boton y el defecto quedaria tapado.
+      let casosMonto = 0, huboDecimal = false;
+      for (const tecleado of ['12.50', '361.25', '500.00', '500']) {
+        const esperado = parseFloat(tecleado);
+        if (!(esperado > 0 && esperado <= techo)) continue;
+        const aplicado = trasEtiqueta(correr(tecleado, 1500000).txts, /^Total aplicado$/);
+        R.eq('H (#56) teclear USD ' + tecleado + ' planea exactamente USD ' + esperado, aplicado, esperado);
+        casosMonto++;
+        if (tecleado.indexOf('.') !== -1) huboDecimal = true;
+      }
+      R.check('H ANTI-VACIO: se probaron montos con decimales y sin ellos',
+        casosMonto >= 3 && huboDecimal, 'casos=' + casosMonto + ' conDecimal=' + huboDecimal);
+      // ANTI-TRIVIAL: si el campo se leyera como los de pesos, "12.50" daria 1250.
+      // Sin este check, el anterior pasaria tambien con un fixture de puros enteros.
+      R.eq('H ANTI-TRIVIAL: la lectura de campo-en-pesos habria inflado el monto',
+        Number(String(parseDecimalH('12.50')).replace(/\./g, '')), 1250);
+
+      // ── 1b. La caja "Estado actual": mora + abonable == el techo anunciado ──
+      // Mismo defecto, otra superficie: las tres cifras se convertian por separado y
+      // los dos sumandos no daban el total impreso. Visto en la app REAL sobre este
+      // mismo credito: 800.00 + 713.98 rotulado 1,513.99.
+      //
+      // El estado que lo destapa es el del credito con DOS cuotas vencidas, que es a
+      // lo que llega la app sola: la auto-mora del arranque pasa a En Mora toda cuota
+      // regular ya vencida. Aqui se reproduce moviendo la siguiente Pendiente a mano,
+      // en vez de depender de la fecha en que se corra la suite — si dependiera del
+      // calendario, esta comprobacion se volveria fuerte o debil segun el dia.
+      {
+        const sig = paysH
+          .filter(p => p.prestamoId === loanH.id && !esAbono(p) && p.estadoPago === 'Pendiente')
+          .sort((x, y) => (x.cuotaN || 0) - (y.cuotaN || 0))[0];
+        R.check('H ANTI-VACIO: el credito tiene una Pendiente que la auto-mora venceria', !!sig,
+          sig ? ('cuota #' + sig.cuotaN) : 'ninguna');
+
+        if (sig) {
+          const paysCaja = paysH.map(p => (p.id === sig.id ? Object.assign({}, p, { estadoPago: 'En Mora' }) : p));
+          const cCaja = cobrableTotal(loanH, paysCaja);
+          // ANTI-TRIVIAL: en ESTE estado, convertir las tres cifras por separado SI
+          // se desvia del total. Sin esta comprobacion el check de abajo podria pasar
+          // sobre un reparto que no colisiona, sin probar nada.
+          R.check('H ANTI-TRIVIAL: con dos cuotas vencidas, convertir aparte SI descuadra',
+            r2H(r2H(cCaja.mora / trmH) + r2H(cCaja.abonable / trmH)) !== r2H(cCaja.total / trmH),
+            'partes=' + r2H(r2H(cCaja.mora / trmH) + r2H(cCaja.abonable / trmH)) +
+            ' total=' + r2H(cCaja.total / trmH));
+
+          sembrar(['', '', '', '2026-08-23', '', false, true, null, true]);
+          const tl = textos(pintar(CobroModalReal({
+            loan: loanH, pays: paysCaja, onConfirm: () => Promise.resolve({}), onClose: () => {},
+          })));
+          const eMora = trasEtiqueta(tl, /^Cuotas vencidas por cobrar$/);
+          const eAbo  = trasEtiqueta(tl, /^Capital amortizable$/);
+          const eTot  = trasEtiqueta(tl, /^Total que se puede cobrar hoy$/);
+          R.check('H ANTI-VACIO: la caja de estado imprimio sus tres cifras',
+            [eMora, eAbo, eTot].every(v => !isNaN(v)), JSON.stringify([eMora, eAbo, eTot]));
+          R.eq('H estado actual: mora + capital amortizable == el techo anunciado',
+            r2H(eMora + eAbo), eTot);
+        }
+      }
+
+      // ── 2. Identidad interes + capital == total en la moneda visible ────────
+      // Monto que salda la cuota vencida y deja remanente para el abono: asi se
+      // ejercitan los tres rubros del panel y los dos tipos de paso.
+      const cobroUSD = Math.min(techo, r2H(cobH.mora / trmH) + 100);
+      const cajaH    = Math.round(cobroUSD * (trmH - 130)); // TRM del dia por debajo de la pactada
+      const vista    = correr(cobroUSD.toFixed(2), cajaH);
+      const txts     = vista.txts;
+      const plan     = planCascada(loanH, paysH,
+        { obligacionUSD: cobroUSD, obligacionCOP: 0, cajaCOP: cajaH });
+      const T = plan.totales;
+
+      R.check('H ANTI-VACIO: el plan tiene mora y abono (los dos tipos de paso)',
+        plan.ok && plan.pasos.some(p => p.tipo === 'partial') && plan.pasos.some(p => p.tipo === 'abono'),
+        'pasos=' + JSON.stringify(plan.pasos.map(p => p.tipo)));
+
+      const rInt = trasEtiqueta(txts, /^Intereses vencidos$/);
+      const rCap = trasEtiqueta(txts, /^Capital de cuotas vencidas$/);
+      const rAbo = trasEtiqueta(txts, /^Abono extraordinario a capital$/);
+      const rTot = trasEtiqueta(txts, /^Total aplicado$/);
+      R.check('H ANTI-VACIO: el panel del modal imprimio sus cuatro rubros',
+        [rInt, rCap, rAbo, rTot].every(v => !isNaN(v)),
+        JSON.stringify([rInt, rCap, rAbo, rTot]));
+      R.eq('H el panel de rubros suma el total aplicado, al centavo', r2H(rInt + rCap + rAbo), rTot);
+      // ANTI-TRIVIAL: con la formula vieja (cada rubro convertido por separado)
+      // esta misma identidad NO cerraba.
+      const ingenuo = r2H(r2H(T.interesMora / trmH) + r2H(T.capitalMora / trmH) + r2H(T.abonoCapital / trmH));
+      R.check('H ANTI-TRIVIAL: la conversion rubro a rubro SI descuadraba aqui',
+        ingenuo !== r2H(T.aplicado / trmH),
+        'ingenuo=' + ingenuo + ' total=' + r2H(T.aplicado / trmH));
+
+      // La tarjeta del paso de mora: intereses + capital == su propio total.
+      const iCuota = txts.findIndex(t => /^Cuota #\d+ vencida$/.test(t));
+      const iFin   = (() => {
+        for (let j = iCuota + 1; j < txts.length; j++) {
+          if (/^Abono extraordinario a capital$/.test(txts[j])) return j;
+        }
+        return txts.length;
+      })();
+      const card = txts.slice(iCuota, iFin);
+      let pTot = NaN;
+      for (let j = 1; j < card.length && isNaN(pTot); j++) pTot = numH(card[j]);
+      const pInt = trasEtiqueta(card, /intereses\s*$/);
+      const pCap = trasEtiqueta(card, /capital\s*$/);
+      R.check('H ANTI-VACIO: la tarjeta del paso muestra total, interes y capital',
+        iCuota >= 0 && [pTot, pInt, pCap].every(v => !isNaN(v)),
+        'tot=' + pTot + ' int=' + pInt + ' cap=' + pCap);
+      R.eq('H la tarjeta del paso: interes + capital == el total del paso', r2H(pInt + pCap), pTot);
+
+      // ── 3. Preview del cronograma: columnas universales ─────────────────────
+      const filas = nodos(vista.arbol, 'tr')
+        .map(tr => nodos(tr, 'td').map(td => numH(textos(td).join(''))))
+        .filter(c => c.length === 6 && c.slice(2).every(v => !isNaN(v)));
+      R.check('H ANTI-VACIO: el preview del cronograma dibujo filas', filas.length > 0,
+        'filas=' + filas.length);
+      const malas = filas.filter(c => r2H(c[2] + c[3]) !== c[4]);
+      R.check('H preview: INTERES + ABONO A CAPITAL == VALOR CUOTA en todas las filas',
+        malas.length === 0, malas.length + ' de ' + filas.length + ' descuadran');
+
+      // ── 4. Efecto TRM contra la obligacion realmente extinguida ─────────────
+      const efImpreso = Math.abs(trasEtiqueta(txts, /efecto TRM/));
+      const efReal    = Math.abs(T.caja - T.aplicado);
+      const efNominal = Math.abs(T.caja - Math.round(cobroUSD * trmH));
+      R.check('H ANTI-TRIVIAL: la formula nominal y la anclada difieren en este caso',
+        efReal !== efNominal, 'anclada=' + efReal + ' nominal=' + efNominal);
+      R.eq('H el efecto TRM se mide contra la obligacion extinguida (anclada)', efImpreso, efReal);
+
+      // ── 5. El modal y el recibo imprimen los mismos numeros ─────────────────
+      // Mismos pasos, dos renderizadores distintos: es la unica forma de fijar que
+      // no vuelvan a divergir. Se alimenta del plan porque en un cobro con exito
+      // `hechos === pasos`; la seccion G ya cubre la regla "lo APLICADO".
+      fe.captura.pdfs.length = 0;
+      generateReciboH(loanH, paysH,
+        { fecha: '2026-08-23', pasos: plan.pasos, pre: { saldoCaja: 0, cuota: 0 } });
+      R.eq('H el recibo emitio un documento', fe.captura.pdfs.length, 1);
+      if (fe.captura.pdfs.length === 1) {
+        const filasR = [];
+        const reR = /<div class="rc-row(?: rc-row-tot)?"><span class="rc-lab">([\s\S]*?)<\/span><span class="rc-val"[^>]*>([\s\S]*?)<\/span><\/div>/g;
+        let mR; while ((mR = reR.exec(fe.captura.pdfs[0].html)) !== null) filasR.push({ lab: mR[1], val: mR[2] });
+        const valR = lab => {
+          const f = filasR.find(x => x.lab === lab);
+          return f ? numH(String(f.val).replace(/<[^>]*>/g, '')) : NaN;
+        };
+        R.check('H ANTI-VACIO: el recibo imprimio el panel de rubros', filasR.length >= 4,
+          filasR.map(f => f.lab).join(' | '));
+        R.eq('H modal == recibo: intereses vencidos',         rInt, valR('Intereses vencidos'));
+        R.eq('H modal == recibo: capital de cuotas vencidas', rCap, valR('Capital de cuotas vencidas'));
+        R.eq('H modal == recibo: abono extraordinario',       rAbo, valR('Abono extraordinario a capital'));
+        R.eq('H modal == recibo: total aplicado',             rTot, valR('Total aplicado'));
+      }
+    }
   }
 
   srv.close();

@@ -19,12 +19,21 @@
 // hacen falta: sin el dolar la deuda se extingue mal (Bug #50), sin el peso el
 // efecto cambiario es irregistrable (Bug #37). Por eso ambos campos son
 // obligatorios aqui, igual que en AbonoModal y PayModal.
+//
+// ── ARITMETICA EN LA MONEDA VISIBLE ──────────────────────────────────────────
+// Todo rubro que deba SUMAR con otro se calcula en la unidad que se imprime
+// (centavos de dolar en USD, pesos en COP) y el capital se deriva restando:
+// `capital = obligacion - interes`. Convertir cada rubro por separado descuadra
+// un centavo (Bug #31) y hacia que esta pantalla y el Recibo de Cobro —el papel
+// que sale de ella— imprimieran cifras distintas en la linea que el usuario
+// compara. Es la MISMA reconciliacion de `generateReciboCobro`, a proposito:
+// asi los dos coinciden por construccion y no por coincidencia.
 
 import { ABtn, Fld, Modal } from '../componentes/base.js';
 import { Ico } from '../componentes/iconos.js';
 import { cobrableTotal, planCascada } from '../core/cascada.js';
 import { _pmt, _tasaPeriodo, filasPreview } from '../core/calculo.js';
-import { copToUsd, fmt, fmtD, fmtNumInput, parseDecimalInput, parseNum } from '../core/format.js';
+import { fmt, fmtD, fmtNumInput, fmtUSD, parseDecimalInput, parseNum } from '../core/format.js';
 import { h, useState } from '../core/react.js';
 import { _submitGuard, nowStr } from '../core/ui.js';
 import { esAbono } from '../core/ids.js';
@@ -51,7 +60,11 @@ export function CobroModal(props){
   var ctx=cob.ctx;
 
   // ── Entrada normalizada ────────────────────────────────────────────────────
-  var oblUSD=esUSD?(parseNum(montoUSD)||0):0;
+  // `montoUSD` guarda lo que produjo `parseDecimalInput`, donde el punto es el
+  // separador DECIMAL ('361.25'). `parseNum` esta hecha para los campos en pesos,
+  // donde el punto es separador de MILES, y lo elimina: leia 361.25 como 36.125.
+  // Se lee con `+`, igual que AbonoModal y PayModal. Ver Bug #56.
+  var oblUSD=esUSD?(+montoUSD||0):0;
   var oblCOP=esUSD?0:(parseNum(montoCOP)||0);
   var cajaCOP=esUSD?(parseNum(copRecibido)||0):oblCOP;
   var hayEntrada=esUSD?(oblUSD>0):(oblCOP>0);
@@ -60,9 +73,42 @@ export function CobroModal(props){
   var plan=hayEntrada?planCascada(loan, allPays, {obligacionUSD:oblUSD, obligacionCOP:oblCOP, cajaCOP:cajaCOP}):null;
   var T=plan?plan.totales:null;
 
+  // ── Unidad de presentacion: centavos de dolar en USD, pesos en COP ─────────
+  var uni=function(cop){ return esUSD?Math.round((cop||0)/trm*100):Math.round(cop||0); };
+  var fmtUni=function(u){ return esUSD?fmtUSD((u||0)/100):fmt(u||0); };
+  var money=function(cop){ return fmtUni(uni(cop)); };
+
+  // El techo tambien se suma en la unidad visible: `cob.total` es `mora+abonable`
+  // en COP, y convertir las tres cifras por separado imprimia sumandos que no
+  // daban el total (visto en la app: 800.00 + 713.98 rotulado 1,513.99).
+  var cobMoraU=uni(cob.mora), cobAbonableU=uni(cob.abonable);
+
+  // Rubros del panel, DERIVADOS de los pasos igual que en el recibo: el capital
+  // de mora se ancla al total de los pasos de mora (capital = cuota - interes,
+  // doctrina v1.18.0) para que absorba el residuo de redondeo en vez de dejar
+  // un descuadre visible entre los rubros y el "Total aplicado".
+  var vis=(function(){
+    if(!plan||!plan.pasos.length) return null;
+    var oblPartialsU=plan.pasos.filter(function(p){ return p.tipo==='partial'; })
+      .reduce(function(s,p){ return s+uni(p.obligacionCOP); },0);
+    var intU=plan.pasos.reduce(function(s,p){ return s+uni(p.interes); },0);
+    var capMoraU=Math.max(0, oblPartialsU-intU);
+    var abonoU=plan.pasos.filter(function(p){ return p.tipo==='abono'; })
+      .reduce(function(s,p){ return s+uni(p.obligacionCOP); },0);
+    return {intU:intU, capMoraU:capMoraU, abonoU:abonoU, aplicadoU:intU+capMoraU+abonoU};
+  })();
+
   // Efecto cambiario del cobro completo (solo informativo, no decide nada).
+  // Se mide contra la obligacion REALMENTE extinguida (`T.aplicado`), que va
+  // ANCLADA al peso exacto de la cuota cuando un paso la salda. Calcularlo
+  // contra la obligacion nominal (`oblUSD*trm`) se desviaba por ese anclaje
+  // —medido: 12 pesos en produccion, 7 en el fixture— y en el caso en que la TRM
+  // del dia coincide con la pactada llegaba a anunciar un efecto de CERO donde
+  // si lo habia. Es ademas la misma cifra que `imputarCobros` reportara despues
+  // como `ajuste` en el Flujo de Caja. Si el plan no cabe (`sobrante`) la linea
+  // se calla: ahi la diferencia ya no seria solo cambiaria.
   var trmImplicita=(esUSD&&oblUSD>0&&cajaCOP>0)?Math.round(cajaCOP/oblUSD):0;
-  var efectoTRM=(esUSD&&oblUSD>0&&cajaCOP>0)?(cajaCOP-Math.round(oblUSD*trm)):0;
+  var efectoTRM=(esUSD&&plan&&plan.ok&&plan.pasos.length>0&&cajaCOP>0)?(T.caja-T.aplicado):0;
 
   // ── Preview del cronograma resultante ──────────────────────────────────────
   // Solo tiene sentido donde hay amortizacion. `filasPreview` es el espejo del
@@ -87,8 +133,6 @@ export function CobroModal(props){
     });
     return {filas:filas,saldado:false,n:n};
   })();
-
-  var money=function(cop){ return esUSD?copToUsd(cop,trm):fmt(cop); };
 
   function submit(){
     if(!plan||!plan.ok||!plan.pasos.length) return;
@@ -117,6 +161,9 @@ export function CobroModal(props){
   var pasosUI=plan&&plan.pasos.length?h('div',{style:{display:'flex',flexDirection:'column',gap:8}},
     plan.pasos.map(function(p,i){
       var esMora=p.tipo==='partial';
+      // Capital reconciliado en la moneda visible, NUNCA `p.capital` crudo.
+      var totU=uni(p.obligacionCOP), pIntU=uni(p.interes);
+      var pCapU=Math.max(0, totU-pIntU);
       return h('div',{key:i,style:{border:'1px solid var(--border)',borderRadius:10,padding:'9px 11px',background:'var(--bg3)'}},
         h('div',{style:{display:'flex',alignItems:'center',gap:7,marginBottom:5}},
           h('span',{style:{width:18,height:18,borderRadius:99,background:esMora?'var(--red-bg)':'var(--green-bg)',color:esMora?'var(--red)':'var(--green)',fontSize:10,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}},String(i+1)),
@@ -124,11 +171,11 @@ export function CobroModal(props){
             esMora?('Cuota #'+p.cuotaN+' vencida'):'Abono extraordinario a capital'),
           esMora&&(p.salda?chip('SE SALDA','var(--green)','var(--green-bg)'):chip('PARCIAL','var(--yellow)','var(--yellow-bg)')),
           h('span',{style:{flex:1}}),
-          h('span',{className:'mono',style:{fontSize:12,fontWeight:800,color:'var(--text)'}},money(p.obligacionCOP))),
+          h('span',{className:'mono',style:{fontSize:12,fontWeight:800,color:'var(--text)'}},fmtUni(totU))),
         esMora&&h('div',{style:{fontSize:11,color:'var(--text3)',paddingLeft:25,lineHeight:1.6}},
           'venció el ',fmtD(p.fechaPago),
-          p.interes>0&&h('span',null,'  •  intereses ',h('b',{style:{color:'var(--red)'}},money(p.interes))),
-          p.capital>0&&h('span',null,'  •  capital ',h('b',{style:{color:'var(--text2)'}},money(p.capital))),
+          pIntU>0&&h('span',null,'  •  intereses ',h('b',{style:{color:'var(--red)'}},fmtUni(pIntU))),
+          pCapU>0&&h('span',null,'  •  capital ',h('b',{style:{color:'var(--text2)'}},fmtUni(pCapU))),
           !p.salda&&p.restanteCuota>0&&h('div',{style:{color:'var(--yellow)'}},'queda debiendo ',money(p.restanteCuota),' de esta cuota')),
         !esMora&&h('div',{style:{fontSize:11,color:'var(--text3)',paddingLeft:25,lineHeight:1.6}},
           'reduce el capital vivo · se mantiene el plazo y baja la cuota'));
@@ -141,10 +188,10 @@ export function CobroModal(props){
 
     // ── Estado actual del credito ──
     h('div',{style:{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:10,padding:'10px 12px',marginTop:4}},
-      linea('Cuotas vencidas por cobrar', cob.mora>0?money(cob.mora):'—', cob.mora>0?'var(--red)':'var(--text3)'),
-      linea('Capital amortizable', money(cob.abonable), 'var(--text2)'),
+      linea('Cuotas vencidas por cobrar', cob.mora>0?fmtUni(cobMoraU):'—', cob.mora>0?'var(--red)':'var(--text3)'),
+      linea('Capital amortizable', fmtUni(cobAbonableU), 'var(--text2)'),
       h('div',{style:{height:1,background:'var(--border)',margin:'5px 0'}}),
-      linea('Total que se puede cobrar hoy', money(cob.total), 'var(--text)', true)),
+      linea('Total que se puede cobrar hoy', fmtUni(cobMoraU+cobAbonableU), 'var(--text)', true)),
 
     // ── Entrada ──
     esUSD
@@ -184,11 +231,11 @@ export function CobroModal(props){
         'CÓMO SE APLICA ESTE DINERO'),
       pasosUI,
       h('div',{style:{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:10,padding:'9px 12px',marginTop:9}},
-        T.interesMora>0&&linea('Intereses vencidos', money(T.interesMora),'var(--red)'),
-        T.capitalMora>0&&linea('Capital de cuotas vencidas', money(T.capitalMora),'var(--text2)'),
-        T.abonoCapital>0&&linea('Abono extraordinario a capital', money(T.abonoCapital),'var(--green)'),
+        vis.intU>0&&linea('Intereses vencidos', fmtUni(vis.intU),'var(--red)'),
+        vis.capMoraU>0&&linea('Capital de cuotas vencidas', fmtUni(vis.capMoraU),'var(--text2)'),
+        vis.abonoU>0&&linea('Abono extraordinario a capital', fmtUni(vis.abonoU),'var(--green)'),
         h('div',{style:{height:1,background:'var(--border)',margin:'5px 0'}}),
-        linea('Total aplicado', money(T.aplicado),'var(--text)',true),
+        linea('Total aplicado', fmtUni(vis.aplicadoU),'var(--text)',true),
         esUSD&&linea('Caja registrada', fmt(T.caja),'var(--text3)'))),
 
     // Aviso de sobrante
@@ -217,12 +264,15 @@ export function CobroModal(props){
                     return h('th',{key:i,style:{padding:'6px 7px',textAlign:i<2?'left':'right',fontSize:9.5,fontWeight:800,color:'var(--text3)',letterSpacing:.4,whiteSpace:'nowrap'}},t);
                   }))),
                 h('tbody',null,cronoPreview.filas.map(function(f,i){
+                  // Columnas universales (v1.18.0): ABONO A CAPITAL = VALOR CUOTA - INTERES,
+                  // reconciliado en la moneda visible para que la identidad cuadre a la vista.
+                  var qU=uni(f.cuota), iU=uni(f.interes), cU=Math.max(0, qU-iU);
                   return h('tr',{key:i,style:{borderTop:'1px solid var(--border)'}},
                     h('td',{style:{padding:'5px 7px',color:'var(--text2)',fontWeight:700}},f.cuotaN),
                     h('td',{style:{padding:'5px 7px',color:'var(--text3)',whiteSpace:'nowrap'}},f.fecha?fmtD(f.fecha):'—'),
-                    h('td',{className:'mono',style:{padding:'5px 7px',textAlign:'right',color:'var(--text3)',whiteSpace:'nowrap'}},money(f.interes)),
-                    h('td',{className:'mono',style:{padding:'5px 7px',textAlign:'right',color:'var(--text3)',whiteSpace:'nowrap'}},money(f.capital)),
-                    h('td',{className:'mono',style:{padding:'5px 7px',textAlign:'right',color:'var(--text)',fontWeight:700,whiteSpace:'nowrap'}},money(f.cuota)),
+                    h('td',{className:'mono',style:{padding:'5px 7px',textAlign:'right',color:'var(--text3)',whiteSpace:'nowrap'}},fmtUni(iU)),
+                    h('td',{className:'mono',style:{padding:'5px 7px',textAlign:'right',color:'var(--text3)',whiteSpace:'nowrap'}},fmtUni(cU)),
+                    h('td',{className:'mono',style:{padding:'5px 7px',textAlign:'right',color:'var(--text)',fontWeight:700,whiteSpace:'nowrap'}},fmtUni(qU)),
                     h('td',{className:'mono',style:{padding:'5px 7px',textAlign:'right',color:'var(--text2)',whiteSpace:'nowrap'}},money(f.saldo)));
                 })))),
             cronoPreview.filas.length>0&&cronoPreview.filas[0].antes>0&&
