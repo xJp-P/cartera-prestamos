@@ -93,6 +93,51 @@ export function DebtsView(props){
     return function(){ vivo=false; };
   },[clavePendientes]);
 
+  // ── Despliegue: se anima la ALTURA, para que se VEA desplegarse ─────────────
+  // Un fundido deja el contenido en su sitio de golpe; lo que se pidio es ver la
+  // informacion abrirse. Eso obliga a animar la altura, y las dos vias declarativas
+  // estan cerradas (ver el comentario de `.acc` en styles.css): `grid-template-rows`
+  // se atasca en el primer despliegue y `interpolate-size` pide Chromium 129 cuando la
+  // app corre sobre 122. WAAPI mide el contenido y anima entre dos alturas concretas.
+  //
+  // El estado previo se guarda EN EL PROPIO NODO (`_accOpen`), no en un ref por clave:
+  // un nodo recien creado no lo tiene, asi que el primer render coloca la altura sin
+  // animar y no hereda estado viejo al volver a la vista.
+  function animarPanel(el, abrir){
+    var alto=el.scrollHeight;
+    el.style.overflow='hidden';
+    var anim=el.animate(
+      [{height:(abrir?0:alto)+'px',opacity:abrir?0:1},
+       {height:(abrir?alto:0)+'px',opacity:abrir?1:0}],
+      // 380ms con una curva pareja (la estandar de Material). Una curva muy cargada al
+      // arranque —como cubic-bezier(.25,.8,.35,1)— llega al 91% de la altura a mitad de
+      // camino: se ve un salto y luego una cola lenta, no un despliegue.
+      {duration:380,easing:'cubic-bezier(.4,0,.2,1)'});
+    // El estado FINAL se fija ya: si el contenido crece mientras esta abierto (se abre
+    // una deuda dentro), `auto` lo acompana solo. Dejarlo en pixeles lo recortaria.
+    el.style.height=abrir?'auto':'0px';
+    el.style.opacity=abrir?'1':'0';
+    anim.onfinish=function(){ if(abrir){ el.style.overflow=''; el.style.opacity=''; } };
+  }
+  useEffect(function(){
+    var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var paneles=document.querySelectorAll('[data-acc]');
+    for(var i=0;i<paneles.length;i++){
+      var el=paneles[i];
+      var abrir=el.getAttribute('data-open')==='1';
+      if(el._accOpen===abrir) continue;
+      var primera=(el._accOpen===undefined);
+      el._accOpen=abrir;
+      if(primera||reduce){
+        el.style.height=abrir?'auto':'0px';
+        el.style.overflow=abrir?'':'hidden';
+        el.style.opacity='';
+        continue;
+      }
+      animarPanel(el,abrir);
+    }
+  });
+
   function estadoBadge(estado){
     var c=estado==='Pagada'?'var(--green)':'var(--yellow)';
     return h('span',{style:{fontSize:11,fontWeight:700,color:c,background:c+'20',padding:'3px 10px',borderRadius:99,whiteSpace:'nowrap'}},estado);
@@ -220,9 +265,10 @@ export function DebtsView(props){
         h('div',{style:{flexShrink:0}},estadoBadge(d.estado))),
 
       // ── DETALLE (se despliega) ──
-      // Render CONDICIONAL: una deuda cerrada no monta su ledger. La animacion es de
-      // entrada, asi que no necesita los dos estados presentes.
-      open?h('div',{className:'acc-in'},
+      // El panel se monta SIEMPRE: animar una altura exige que el contenido este ahi
+      // para poder medirlo, tanto al abrir como al cerrar. Una deuda cerrada no pide su
+      // ledger igual (el fetch depende de `expDebt`, no del montaje).
+      h('div',{className:'acc','data-acc':'d-'+d.id,'data-open':open?'1':'0'},
 
           // 1 — La aritmetica, visible: Cargado - Abonado = Saldo
           !trivial?h('div',{style:{borderTop:'1px solid var(--border)',padding:'12px 15px'}},
@@ -272,7 +318,7 @@ export function DebtsView(props){
               style:{background:'transparent',border:'1px solid var(--border2)',borderRadius:8,padding:'7px 13px',cursor:'pointer',color:'var(--text2)',fontSize:13,fontWeight:600}},'+ Cargo'),
             activa?h('button',{onClick:function(){onPay(d,'abono');},
               style:{background:'var(--green2)',border:'none',borderRadius:8,padding:'7px 16px',cursor:'pointer',color:'#fff',fontSize:13,fontWeight:700,display:'flex',alignItems:'center',gap:6}},
-              h(Ico,{name:'dollar',size:14,color:'#fff'}),'Abonar'):null)):null);
+              h(Ico,{name:'dollar',size:14,color:'#fff'}),'Abonar'):null)));
   }
 
   // Encabezado de PERFIL (acordeon): clic alterna la expansion in-place (otros siguen visibles).
@@ -301,7 +347,8 @@ export function DebtsView(props){
     if(fin.length){ detalle.push(catLabel('Finalizadas','f-'+g.key)); fin.forEach(function(d){detalle.push(debtCard(d));}); }
     return h('div',{key:g.key},
       profileHeader(g),
-      open?h('div',{className:'acc-in',style:{display:'flex',flexDirection:'column',gap:8,marginTop:8,paddingLeft:12}},detalle):null);
+      h('div',{className:'acc','data-acc':'g-'+g.key,'data-open':open?'1':'0'},
+        h('div',{style:{display:'flex',flexDirection:'column',gap:8,paddingTop:8,paddingLeft:12}},detalle)));
   }
 
   // Nivel 1 dividido en Activos (>=1 deuda Activa) e Inactivos (todas Pagadas). Cada bloque hereda

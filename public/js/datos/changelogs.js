@@ -612,5 +612,9 @@ export const CHANGELOGS = {
     'El encabezado de cada prestamo ya avisa si la cuenta crecio ("cargado $X") sin necesidad de abrirlo.',
     'Los despliegues entran con una animacion suave, tanto el del acreedor como el de cada prestamo.',
     'Se quito el boton de estado de cuenta: sus movimientos ya viven dentro de la tarjeta, asi que abria una ventana con lo mismo que ya estabas viendo.'
+  ],
+  '2.9.3': [
+    'El despliegue de Mis Deudas ahora se ve abrirse y cerrarse: la informacion se despliega con la altura, no solo apareciendo.',
+    'Aplica tanto al acreedor como a cada prestamo, y tambien al cerrarlos.'
   ]
 };

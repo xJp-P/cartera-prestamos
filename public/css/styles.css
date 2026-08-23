@@ -121,17 +121,21 @@
   .gsearch-cat{font-size:9px;font-weight:700;padding:2px 7px;border-radius:99px;white-space:nowrap}
   .quick-pay{padding:5px 10px;border-radius:8px;border:none;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;transition:all .15s;flex-shrink:0}
 
-  /* Despliegue suave del acordeon (v2.9.2).
-     Se probo primero `grid-template-rows: 0fr -> 1fr`, que anima la altura real, y se
-     DESCARTO: el PRIMER despliegue tras cargar la vista queda clavado en 0px. El `1fr`
-     resuelve su destino contra un subarbol que en ese instante aun no esta maquetado,
-     se fija en cero y nada lo vuelve a invalidar; a partir del segundo clic funciona.
-     Reproducido en la app real: el usuario veria su primer clic sin efecto.
-     Una animacion con `from`/`to` explicitos no depende de resolver ninguna altura, asi
-     que no puede atascarse. El contenido entra desplazandose y el desplome es inmediato:
-     asimetria asumida a cambio de que no falle. */
-  @keyframes accIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
-  .acc-in{animation:accIn .22s ease-out}
-  .acc-chev{display:flex;transition:transform .22s ease}
+  /* Despliegue suave del acordeon (v2.9.3).
+     La ALTURA se anima por JS (Web Animations API, ver `animarPanel` en DebtsView).
+     Se eligio WAAPI sobre las vias declarativas por dos razones concretas:
+       - mide el contenido real y anima entre dos alturas conocidas, sin depender de
+         como resuelve el motor un `1fr` ni de `interpolate-size`, que pide Chromium 129
+         cuando la app corre sobre Electron 29 = Chromium 122;
+       - anima las DOS direcciones. La version anterior (un @keyframes de entrada) abria
+         suave y cerraba de golpe.
+     CORRECCION de v2.9.2: alli se afirmo que `grid-template-rows: 0fr -> 1fr` se atasca
+     en el primer despliegue. Era FALSO — un artefacto del arnes: el panel de preview
+     estaba oculto (`document.hidden`), la linea de tiempo de animaciones no avanza y
+     TODA transicion queda en su primer fotograma. La tecnica no tiene ese defecto.
+     El panel nace cerrado desde CSS para que no se vea un parpadeo a altura completa
+     antes de que corra el efecto. */
+  .acc{height:0;overflow:hidden}
+  .acc-chev{display:flex;transition:transform .38s cubic-bezier(.4,0,.2,1)}
   .acc-chev.open{transform:rotate(90deg)}
-  @media (prefers-reduced-motion:reduce){.acc-in{animation:none}.acc-chev{transition:none}}
+  @media (prefers-reduced-motion:reduce){.acc-chev{transition:none}}
