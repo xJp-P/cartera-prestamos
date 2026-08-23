@@ -606,5 +606,11 @@ export const CHANGELOGS = {
     'Cada movimiento muestra el saldo que dejo, para poder seguir la cuenta sin sumar de cabeza.',
     'Nuevo boton "+ Cargo" para registrar que la deuda crecio. Funciona incluso en deudas ya pagadas, que vuelven a quedar activas.',
     'La barra dejo de llamarse "Pagado" y ahora dice cuanto llevas abonado del total cargado: en una deuda que crece, un avance hacia el 100% retrocedia al entrar un cargo nuevo.'
+  ],
+  '2.9.2': [
+    'En Mis Deudas, al abrir un acreedor cada prestamo aparece ahora guardado: le das clic al que quieras y solo ese muestra su detalle. Antes se desplegaban todos a la vez y con varios prestamos la pantalla quedaba ilegible.',
+    'El encabezado de cada prestamo ya avisa si la cuenta crecio ("cargado $X") sin necesidad de abrirlo.',
+    'Los despliegues entran con una animacion suave, tanto el del acreedor como el de cada prestamo.',
+    'Se quito el boton de estado de cuenta: sus movimientos ya viven dentro de la tarjeta, asi que abria una ventana con lo mismo que ya estabas viendo.'
   ]
 };

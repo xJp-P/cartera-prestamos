@@ -19,12 +19,15 @@ export function DebtsView(props){
   var onPay=props.onPay;
   var onEdit=props.onEdit;
   var onDelete=props.onDelete;
-  var onHistory=props.onHistory;
   var sExp=useState({}); var expanded=sExp[0]; var setExpanded=sExp[1];
   // Ledger por deuda: { [id]: {firma, pagos, error} }. GET /api/debts NO trae los
   // movimientos (solo los totales), asi que se piden por deuda al expandir el acreedor.
   var sMovs=useState({}); var movs=sMovs[0]; var setMovs=sMovs[1];
   function toggleExpand(key){ setExpanded(function(prev){ var n=Object.assign({},prev); n[key]=!n[key]; return n; }); }
+  // Segundo nivel: cada deuda nace GUARDADA. Con varios prestamos del mismo acreedor,
+  // abrir el perfil volcaba todos los ledgers a la vez y la pantalla se hacia ilegible.
+  var sExpD=useState({}); var expDebt=sExpD[0]; var setExpDebt=sExpD[1];
+  function toggleDebt(id){ setExpDebt(function(prev){ var n=Object.assign({},prev); n[id]=!n[id]; return n; }); }
 
   // KPIs globales: gran total, visibles en todo momento.
   var stats=useMemo(function(){
@@ -63,6 +66,7 @@ export function DebtsView(props){
   grupos.forEach(function(g){
     if(!expanded[g.key]) return;
     g.deudas.forEach(function(d){
+      if(!expDebt[d.id]) return;   // solo el detalle que el usuario abrio
       var c=movs[d.id];
       if(!c||c.firma!==firmaDeuda(d)) pendientes.push(d);
     });
@@ -158,8 +162,7 @@ export function DebtsView(props){
       h('div',{style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',minWidth:0}},
         h('span',{style:{fontSize:9.5,fontWeight:700,letterSpacing:.5,textTransform:'uppercase',padding:'2px 7px',borderRadius:99,color:t.c,background:t.bg,border:'1px solid '+t.bd,flexShrink:0}},t.txt),
         // `pagos_deudas.fecha_pago` puede venir como 'YYYY-MM-DD HH:MM:SS'; `fmtD` le
-        // concatena 'T12:00:00' y sin recortar sale Invalid Date (mismo recorte que
-        // ya hacia DebtHistoryModal).
+        // concatena 'T12:00:00' y sin recortar sale Invalid Date.
         h('span',{style:{fontSize:12.5,fontWeight:600,color:'var(--text)'}},fmtD(String(m.fecha_pago||'').slice(0,10)))),
       h('div',{className:'mono',style:{gridRow:1,gridColumn:2,fontSize:14,fontWeight:700,color:t.c,textAlign:'right',whiteSpace:'nowrap'}},
         (m.tipo==='abono'?'- ':'+ ')+fmt(m.monto_pagado)),
@@ -177,10 +180,16 @@ export function DebtsView(props){
     return h('span',{style:{fontSize:15,color:'var(--text3)',fontWeight:600,paddingTop:12}},t);
   }
 
-  // Tarjeta de UNA deuda, tratada como CUENTA CORRIENTE: identidad + saldo arriba, la
-  // aritmetica a la vista, y el ledger completo en el cuerpo. `monto_original` ya no
-  // compite con el saldo: baja a ser el movimiento de apertura.
+  // Tarjeta de UNA deuda, tratada como CUENTA CORRIENTE. Es su propio acordeon: la
+  // cabecera (titulo + saldo + estado) siempre se ve, y el detalle —la aritmetica, el
+  // ledger y las acciones— se despliega al hacer clic. Con varios prestamos del mismo
+  // acreedor, abrir el perfil ya no vuelca todo de golpe.
+  //
+  // El detalle NO se monta condicionalmente: se queda en el DOM dentro de `.acc`, que
+  // anima su altura. Renderizarlo solo al abrir cortaria la transicion, porque una
+  // transicion necesita los dos estados presentes.
   function debtCard(d){
+    var open=!!expDebt[d.id];
     var cargosExtra=+d.total_cargos||0;
     var abonado=+d.total_abonos||0;
     // Base dinamica (QA5): lo cargado es el monto original MAS los cargos posteriores.
@@ -193,65 +202,77 @@ export function DebtsView(props){
     // repetiria el mismo numero tres veces.
     var trivial=cargosExtra===0&&abonado===0;
     var activa=d.estado==='Activa';
+    // Pista util sin abrir: si lo cargado supera el monto de apertura, la cuenta crecio.
+    var sub='Abierta el '+fmtD((d.fecha_creacion||'').slice(0,10))+
+            (cargosExtra>0?(' · cargado '+fmt(cargado)):'');
 
     return h('div',{key:d.id,style:{background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:12,overflow:'hidden'}},
 
-      // 1 — Identidad de la CUENTA + saldo protagonista
-      h('div',{style:{padding:'13px 15px',display:'flex',alignItems:'flex-start',gap:12}},
+      // ── CABECERA (siempre visible, alterna el detalle) ──
+      h('div',{onClick:function(){toggleDebt(d.id);},style:{padding:'13px 15px',cursor:'pointer',display:'flex',alignItems:'center',gap:11}},
+        h('span',{className:'acc-chev'+(open?' open':'')},h(Ico,{name:'chevright',size:15,color:'var(--text3)'})),
         h('div',{style:{minWidth:0,flex:1}},
           h('div',{style:{fontWeight:700,fontSize:15,color:'var(--text)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},d.titulo||d.concepto||'Deuda'),
-          h('div',{style:{fontSize:12,color:'var(--text3)',marginTop:2}},'Abierta el '+fmtD((d.fecha_creacion||'').slice(0,10)))),
+          h('div',{style:{fontSize:12,color:'var(--text3)',marginTop:2}},sub)),
         h('div',{style:{textAlign:'right',flexShrink:0}},
           h('div',{style:{fontSize:10,fontWeight:700,letterSpacing:1,textTransform:'uppercase',color:'var(--text3)'}},'Saldo pendiente'),
-          h('div',{className:'mono',style:{fontSize:20,fontWeight:700,marginTop:1,color:activa?'var(--yellow)':'var(--green)'}},fmt(saldo)),
-          h('div',{style:{marginTop:4}},estadoBadge(d.estado)))),
+          h('div',{className:'mono',style:{fontSize:19,fontWeight:700,marginTop:1,color:activa?'var(--yellow)':'var(--green)'}},fmt(saldo))),
+        h('div',{style:{flexShrink:0}},estadoBadge(d.estado))),
 
-      // 2 — La aritmetica, visible: Cargado - Abonado = Saldo
-      !trivial?h('div',{style:{borderTop:'1px solid var(--border)',padding:'12px 15px'}},
-        h('div',{style:{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}},
-          reconItem('Cargado',fmt(cargado),'var(--red)'),
-          reconOp('-'),
-          reconItem('Abonado',fmt(abonado),'var(--green)'),
-          reconOp('='),
-          reconItem('Saldo',fmt(saldo),'var(--text)')),
-        // "Pagado" mentia: en una cuenta que crece, un progreso hacia el 100% RETROCEDE
-        // cuando entra un cargo. El rotulo ahora dice que mide.
-        h('div',{style:{marginTop:11}},
-          h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'baseline',fontSize:11,marginBottom:4}},
-            h('span',{style:{color:'var(--text3)'}},abonado>0?('Abonado '+fmt(abonado)+' de '+fmt(cargado)):'Sin abonos todavia'),
-            h('span',{className:'mono',style:{color:'var(--green)',fontWeight:700}},pct+'%')),
-          h('div',{style:{height:5,background:'var(--bg3)',borderRadius:99,overflow:'hidden'}},
-            h('div',{style:{width:pct+'%',height:'100%',background:'var(--green)',borderRadius:99,transition:'width .3s'}}))))
-      :null,
+      // ── DETALLE (se despliega) ──
+      // Render CONDICIONAL: una deuda cerrada no monta su ledger. La animacion es de
+      // entrada, asi que no necesita los dos estados presentes.
+      open?h('div',{className:'acc-in'},
 
-      // 3 — El ledger, sin modales de por medio
-      h('div',{style:{borderTop:'1px solid var(--border)',padding:'12px 15px'}},
-        h('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:9}},
-          h('span',{style:{fontSize:10,fontWeight:700,letterSpacing:1.1,textTransform:'uppercase',color:'var(--text3)'}},
-            cache?(filas.length+' movimiento'+(filas.length===1?'':'s')):'Movimientos'),
-          h('div',{style:{flex:1,height:1,background:'var(--border)'}})),
-        !cache?
-          h('div',{style:{fontSize:12,color:'var(--text3)',padding:'6px 0'}},'Cargando movimientos...')
-        : cache.error?
-          // El ledger no cargo: se dice, y el boton de estado de cuenta queda como salida.
-          h('div',{style:{fontSize:12,color:'var(--yellow)',padding:'6px 0'}},'No se pudieron cargar los movimientos. Abre el estado de cuenta para verlos.')
-        :
-          h('div',{style:{display:'flex',flexDirection:'column',gap:7}},
-            filas.slice().reverse().map(movRow))),
+          // 1 — La aritmetica, visible: Cargado - Abonado = Saldo
+          !trivial?h('div',{style:{borderTop:'1px solid var(--border)',padding:'12px 15px'}},
+            h('div',{style:{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}},
+              reconItem('Cargado',fmt(cargado),'var(--red)'),
+              reconOp('-'),
+              reconItem('Abonado',fmt(abonado),'var(--green)'),
+              reconOp('='),
+              reconItem('Saldo',fmt(saldo),'var(--text)')),
+            // "Pagado" mentia: en una cuenta que crece, un progreso hacia el 100%
+            // RETROCEDE cuando entra un cargo. El rotulo ahora dice que mide.
+            h('div',{style:{marginTop:11}},
+              h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'baseline',fontSize:11,marginBottom:4}},
+                h('span',{style:{color:'var(--text3)'}},abonado>0?('Abonado '+fmt(abonado)+' de '+fmt(cargado)):'Sin abonos todavia'),
+                h('span',{className:'mono',style:{color:'var(--green)',fontWeight:700}},pct+'%')),
+              h('div',{style:{height:5,background:'var(--bg3)',borderRadius:99,overflow:'hidden'}},
+                h('div',{style:{width:pct+'%',height:'100%',background:'var(--green)',borderRadius:99,transition:'width .3s'}}))))
+          :null,
 
-      // 4 — Acciones
-      h('div',{style:{borderTop:'1px solid var(--border)',padding:'11px 15px',display:'flex',alignItems:'center',gap:6}},
-        iconBtn('clipboard','Ver estado de cuenta',function(){onHistory(d);}),
-        iconBtn('edit','Editar',function(){onEdit(d);}),
-        iconBtn('trash','Eliminar',function(){onDelete(d);},'var(--red)'),
-        h('div',{style:{flex:1}}),
-        // Un cargo tambien REACTIVA una deuda ya pagada, asi que se ofrece siempre;
-        // el abono solo mientras haya saldo que abonar.
-        h('button',{onClick:function(){onPay(d,'cargo');},title:'Registrar un cargo (aumenta la deuda)',
-          style:{background:'transparent',border:'1px solid var(--border2)',borderRadius:8,padding:'7px 13px',cursor:'pointer',color:'var(--text2)',fontSize:13,fontWeight:600}},'+ Cargo'),
-        activa?h('button',{onClick:function(){onPay(d,'abono');},
-          style:{background:'var(--green2)',border:'none',borderRadius:8,padding:'7px 16px',cursor:'pointer',color:'#fff',fontSize:13,fontWeight:700,display:'flex',alignItems:'center',gap:6}},
-          h(Ico,{name:'dollar',size:14,color:'#fff'}),'Abonar'):null));
+          // 2 — El ledger, sin modales de por medio
+          h('div',{style:{borderTop:'1px solid var(--border)',padding:'12px 15px'}},
+            h('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:9}},
+              h('span',{style:{fontSize:10,fontWeight:700,letterSpacing:1.1,textTransform:'uppercase',color:'var(--text3)'}},
+                cache&&!cache.error?(filas.length+' movimiento'+(filas.length===1?'':'s')):'Movimientos'),
+              h('div',{style:{flex:1,height:1,background:'var(--border)'}})),
+            !cache?
+              h('div',{style:{fontSize:12,color:'var(--text3)',padding:'6px 0'}},'Cargando movimientos...')
+            : cache.error?
+              // El ledger es la unica via a los movimientos, asi que un fallo tiene que
+              // ofrecer salida: borrar la entrada del cache lo vuelve a poner en la cola.
+              h('div',{style:{display:'flex',alignItems:'center',gap:10,padding:'6px 0',flexWrap:'wrap'}},
+                h('span',{style:{fontSize:12,color:'var(--yellow)'}},'No se pudieron cargar los movimientos.'),
+                h('button',{onClick:function(){ setMovs(function(prev){ var n=Object.assign({},prev); delete n[d.id]; return n; }); },
+                  style:{background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:8,padding:'5px 12px',cursor:'pointer',color:'var(--text2)',fontSize:12,fontWeight:600}},'Reintentar'))
+            :
+              h('div',{style:{display:'flex',flexDirection:'column',gap:7}},
+                filas.slice().reverse().map(movRow))),
+
+          // 3 — Acciones
+          h('div',{style:{borderTop:'1px solid var(--border)',padding:'11px 15px',display:'flex',alignItems:'center',gap:6}},
+            iconBtn('edit','Editar',function(){onEdit(d);}),
+            iconBtn('trash','Eliminar',function(){onDelete(d);},'var(--red)'),
+            h('div',{style:{flex:1}}),
+            // Un cargo tambien REACTIVA una deuda ya pagada, asi que se ofrece siempre;
+            // el abono solo mientras haya saldo que abonar.
+            h('button',{onClick:function(){onPay(d,'cargo');},title:'Registrar un cargo (aumenta la deuda)',
+              style:{background:'transparent',border:'1px solid var(--border2)',borderRadius:8,padding:'7px 13px',cursor:'pointer',color:'var(--text2)',fontSize:13,fontWeight:600}},'+ Cargo'),
+            activa?h('button',{onClick:function(){onPay(d,'abono');},
+              style:{background:'var(--green2)',border:'none',borderRadius:8,padding:'7px 16px',cursor:'pointer',color:'#fff',fontSize:13,fontWeight:700,display:'flex',alignItems:'center',gap:6}},
+              h(Ico,{name:'dollar',size:14,color:'#fff'}),'Abonar'):null)):null);
   }
 
   // Encabezado de PERFIL (acordeon): clic alterna la expansion in-place (otros siguen visibles).
@@ -267,7 +288,7 @@ export function DebtsView(props){
         h('div',{style:{textAlign:'right'}},
           h('div',{style:{fontSize:11,color:'var(--text3)'}},'Deuda total'),
           h('div',{className:'mono',style:{fontSize:16,fontWeight:700,color:g.totalActiva>0?'var(--yellow)':'var(--green)'}},fmt(g.totalActiva))),
-        h(Ico,{name:open?'chevdown':'chevright',size:18,color:'var(--text3)'})));
+        h('span',{className:'acc-chev'+(open?' open':'')},h(Ico,{name:'chevright',size:18,color:'var(--text3)'}))));
   }
 
   // Bloque de un acreedor: cabecera-acordeon + (al expandir) sus deudas categorizadas.
@@ -280,7 +301,7 @@ export function DebtsView(props){
     if(fin.length){ detalle.push(catLabel('Finalizadas','f-'+g.key)); fin.forEach(function(d){detalle.push(debtCard(d));}); }
     return h('div',{key:g.key},
       profileHeader(g),
-      open?h('div',{style:{display:'flex',flexDirection:'column',gap:8,marginTop:8,paddingLeft:12}},detalle):null);
+      open?h('div',{className:'acc-in',style:{display:'flex',flexDirection:'column',gap:8,marginTop:8,paddingLeft:12}},detalle):null);
   }
 
   // Nivel 1 dividido en Activos (>=1 deuda Activa) e Inactivos (todas Pagadas). Cada bloque hereda

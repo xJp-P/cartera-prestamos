@@ -61,7 +61,6 @@ import { RestructureModal } from './modales/RestructureModal.js';
 import { LoanModal } from './modales/LoanModal.js';
 import { DebtModal } from './modales/DebtModal.js';
 import { DebtPayModal } from './modales/DebtPayModal.js';
-import { DebtHistoryModal } from './modales/DebtHistoryModal.js';
 import { DeleteDebtModal } from './modales/DeleteDebtModal.js';
 import { ConfirmUndoModal } from './modales/ConfirmUndoModal.js';
 import { ConfirmModal } from './modales/ConfirmModal.js';
@@ -120,7 +119,6 @@ function App(){
   var sDebts=useState([]); var debts=sDebts[0]; var setDebts=sDebts[1];
   var sDebtModal=useState(null); var debtModal=sDebtModal[0]; var setDebtModal=sDebtModal[1];
   var sDebtPay=useState(null); var debtPayModal=sDebtPay[0]; var setDebtPayModal=sDebtPay[1];
-  var sDebtHist=useState(null); var debtHistory=sDebtHist[0]; var setDebtHistory=sDebtHist[1];
   var sDebtDel=useState(null); var debtDelete=sDebtDel[0]; var setDebtDelete=sDebtDel[1];
   var sNavOpen=useState(function(){ try{ var v=JSON.parse(localStorage.getItem('navSections')); return (v&&typeof v==='object')?v:{prestamos:true,deudas:true}; }catch(_){ return {prestamos:true,deudas:true}; } });
   var navOpen=sNavOpen[0]; var setNavOpen=sNavOpen[1];
@@ -911,7 +909,7 @@ function App(){
       view==='calculadora'&& h(CalcView,   {onConfirm:confirmarCalc}),
       view==='historial'   && h(HistorialView,{actLog:actLog,undoLog:undoLog,onUndo:function(entry){setUndoDlg(entry);},
         onRefresh:function(){loadHistorial().then(function(){showToast('Historial actualizado');});}}),
-      view==='deudas'      && h(DebtsView,{debts:debts,onReload:loadDebts,onNew:function(){setDebtModal('new');},onPay:function(d,tipo){setDebtPayModal({debt:d,tipo:tipo||'abono'});},onEdit:function(d){setDebtModal(d);},onDelete:function(d){setDebtDelete(d);},onHistory:function(d){setDebtHistory(d);}}),
+      view==='deudas'      && h(DebtsView,{debts:debts,onReload:loadDebts,onNew:function(){setDebtModal('new');},onPay:function(d,tipo){setDebtPayModal({debt:d,tipo:tipo||'abono'});},onEdit:function(d){setDebtModal(d);},onDelete:function(d){setDebtDelete(d);}}),
       view==='desarrollador'&& h(DevView,  {showToast:showToast,isMac:isMac,onNeedsRestart:function(){setNeedsRestart(true);},onSync:recalculate,onConfirm:function(cfg){setConfirmDlg(cfg);},loans:loans,pays:pays,datosPago:cfg.datos_pago,onSaveConfig:saveConfig}))
     ), /* end main-area */
     loanModal&&h(LoanModal,{loan:loanModal==='new'?null:loanModal,trm:cfg.trm,pays:pays,clientes:deudores,onSave:saveLoan,onClose:function(){setLoanModal(null);}}),
@@ -921,7 +919,6 @@ function App(){
     // REUTILIZA la instancia y `useState(tipoInicial)` —que solo siembra en el montaje—
     // se ignora. Medido: abrir "+ Cargo" y luego "Abonar" dejaba el selector en Cargo.
     debtPayModal&&h(DebtPayModal,{key:debtPayModal.debt.id+'|'+debtPayModal.tipo,debt:debtPayModal.debt,tipoInicial:debtPayModal.tipo,onSave:payDebt,onClose:function(){setDebtPayModal(null);}}),
-    debtHistory&&h(DebtHistoryModal,{debt:debtHistory,onClose:function(){setDebtHistory(null);}}),
     debtDelete&&h(DeleteDebtModal,{debt:debtDelete,onConfirm:function(){var id=debtDelete.id;setDebtDelete(null);deleteDebt(id);},onClose:function(){setDebtDelete(null);}}),
     abonoModal&&h(AbonoModal,{loan:abonoModal.loan||abonoModal,pays:pays,onSave:registrarAbono,onClose:function(){if(abonoModal.fromDeudor){setDebtorModal(abonoModal.fromDeudor);} setAbonoModal(null);},
       // v2.0.0 — CTA "Liquidar deuda" del AbonoModal (cuando el abono excede el capital
