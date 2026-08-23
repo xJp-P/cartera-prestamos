@@ -14,7 +14,9 @@ import { _submitGuard, nowStr, properCase } from '../core/ui.js';
 export function DebtPayModal(props){
   var debt=props.debt,onSave=props.onSave,onClose=props.onClose;
   var saldo=Math.round(+debt.saldo_pendiente||0);
-  var s0=useState('abono'); var tipo=s0[0]; var setTipo=s0[1];
+  // `tipoInicial` lo manda quien abre el modal: "Abonar" no lo pasa (default) y
+  // "+ Cargo" lo abre ya en cargo, para no obligar a cambiar el selector a mano.
+  var s0=useState(props.tipoInicial==='cargo'?'cargo':'abono'); var tipo=s0[0]; var setTipo=s0[1];
   var s1=useState(nowStr()); var fecha=s1[0]; var setFecha=s1[1];
   var s2=useState(''); var monto=s2[0]; var setMonto=s2[1];
   var s3=useState(''); var notas=s3[0]; var setNotas=s3[1];

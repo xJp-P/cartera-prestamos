@@ -598,5 +598,13 @@ export const CHANGELOGS = {
     'Queda en el Historial con su propio color y se puede deshacer.',
     'Rendimiento deja de mostrar "Perdida total" en rojo cuando se recupero el 100% del capital y solo se perdonaron intereses: ahora dice "Intereses condonados".',
     'La cabecera del perfil del deudor (saldo, prestamos y cuotas en mora) se actualiza al instante despues de cualquier accion; antes se quedaba con los numeros de antes hasta cerrar y volver a abrir.'
+  ],
+  '2.9.1': [
+    'Mis Deudas: cada deuda se ve ahora como una cuenta corriente. La tarjeta muestra el saldo como cifra principal y, debajo, TODOS los movimientos (cargos y abonos) sin abrir ninguna ventana aparte.',
+    'Antes la tarjeta mostraba el "Monto original" del primer cargo como si fuera la deuda entera, y el resto de cargos solo aparecian dentro del estado de cuenta. Con eso, una deuda de $2.110.000 se anunciaba como de $710.000.',
+    'El monto inicial pasa a ser el primer movimiento de la lista, asi que la cuenta cuadra a la vista: Cargado - Abonado = Saldo. Antes faltaba ese monto y los numeros no sumaban.',
+    'Cada movimiento muestra el saldo que dejo, para poder seguir la cuenta sin sumar de cabeza.',
+    'Nuevo boton "+ Cargo" para registrar que la deuda crecio. Funciona incluso en deudas ya pagadas, que vuelven a quedar activas.',
+    'La barra dejo de llamarse "Pagado" y ahora dice cuanto llevas abonado del total cargado: en una deuda que crece, un avance hacia el 100% retrocedia al entrar un cargo nuevo.'
   ]
 };
