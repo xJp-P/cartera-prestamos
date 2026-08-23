@@ -599,22 +599,17 @@ export const CHANGELOGS = {
     'Rendimiento deja de mostrar "Perdida total" en rojo cuando se recupero el 100% del capital y solo se perdonaron intereses: ahora dice "Intereses condonados".',
     'La cabecera del perfil del deudor (saldo, prestamos y cuotas en mora) se actualiza al instante despues de cualquier accion; antes se quedaba con los numeros de antes hasta cerrar y volver a abrir.'
   ],
-  '2.9.1': [
-    'Mis Deudas: cada deuda se ve ahora como una cuenta corriente. La tarjeta muestra el saldo como cifra principal y, debajo, TODOS los movimientos (cargos y abonos) sin abrir ninguna ventana aparte.',
-    'Antes la tarjeta mostraba el "Monto original" del primer cargo como si fuera la deuda entera, y el resto de cargos solo aparecian dentro del estado de cuenta. Con eso, una deuda de $2.110.000 se anunciaba como de $710.000.',
-    'El monto inicial pasa a ser el primer movimiento de la lista, asi que la cuenta cuadra a la vista: Cargado - Abonado = Saldo. Antes faltaba ese monto y los numeros no sumaban.',
-    'Cada movimiento muestra el saldo que dejo, para poder seguir la cuenta sin sumar de cabeza.',
-    'Nuevo boton "+ Cargo" para registrar que la deuda crecio. Funciona incluso en deudas ya pagadas, que vuelven a quedar activas.',
-    'La barra dejo de llamarse "Pagado" y ahora dice cuanto llevas abonado del total cargado: en una deuda que crece, un avance hacia el 100% retrocedia al entrar un cargo nuevo.'
-  ],
-  '2.9.2': [
-    'En Mis Deudas, al abrir un acreedor cada prestamo aparece ahora guardado: le das clic al que quieras y solo ese muestra su detalle. Antes se desplegaban todos a la vez y con varios prestamos la pantalla quedaba ilegible.',
-    'El encabezado de cada prestamo ya avisa si la cuenta crecio ("cargado $X") sin necesidad de abrirlo.',
-    'Los despliegues entran con una animacion suave, tanto el del acreedor como el de cada prestamo.',
-    'Se quito el boton de estado de cuenta: sus movimientos ya viven dentro de la tarjeta, asi que abria una ventana con lo mismo que ya estabas viendo.'
-  ],
+  // 2.9.1, 2.9.2 y 2.9.3 se desarrollaron seguidas y nunca se publicaron por separado:
+  // el usuario final recibe un solo instalador, asi que sus novedades van juntas aqui.
   '2.9.3': [
-    'El despliegue de Mis Deudas ahora se ve abrirse y cerrarse: la informacion se despliega con la altura, no solo apareciendo.',
-    'Aplica tanto al acreedor como a cada prestamo, y tambien al cerrarlos.'
+    'Mis Deudas cambia por completo: cada deuda se ve ahora como una cuenta corriente, no como un prestamo fijo.',
+    'La tarjeta muestra el saldo como cifra principal y, debajo, TODOS los movimientos (cargos y abonos) sin abrir ninguna ventana aparte. Antes mostraba el "Monto original" del primer cargo como si fuera la deuda entera: una deuda de $2.110.000 se anunciaba como de $710.000.',
+    'El monto inicial pasa a ser el primer movimiento de la lista, asi que la cuenta cuadra a la vista: Cargado - Abonado = Saldo. Antes ese monto no aparecia por ningun lado y los numeros no sumaban.',
+    'Cada movimiento muestra el saldo que dejo, para poder seguir la cuenta sin sumar de cabeza.',
+    'Al abrir un acreedor, cada prestamo aparece guardado: le das clic al que quieras y solo ese muestra su detalle. El encabezado ya avisa si la cuenta crecio ("cargado $X") sin necesidad de abrirlo.',
+    'Los despliegues se abren y se cierran con una animacion suave, tanto el del acreedor como el de cada prestamo.',
+    'Nuevo boton "+ Cargo" para registrar que la deuda crecio. Funciona incluso en deudas ya pagadas, que vuelven a quedar activas.',
+    'La barra dejo de llamarse "Pagado" y ahora dice cuanto llevas abonado del total cargado: en una deuda que crece, un avance hacia el 100% retrocedia al entrar un cargo nuevo.',
+    'Se quito el boton de estado de cuenta: sus movimientos ya viven dentro de la tarjeta, asi que abria una ventana con lo mismo que ya estabas viendo.'
   ]
 };
