@@ -161,6 +161,31 @@ export function DebtsView(props){
       h(Ico,{name:icon,size:15,color:color||'var(--text2)'}));
   }
 
+  // ── PROGRESO DE UNA DEUDA — una sola definicion, dos superficies ───────────
+  // Mide lo ABONADO sobre lo CARGADO (apertura + cargos posteriores), que es la
+  // misma base dinamica de QA5: en una cuenta que crece, medir contra el monto de
+  // apertura haria que el progreso pasara del 100%.
+  //
+  // Blindado contra datos incompletos: cualquier campo ausente, nulo o no numerico
+  // cae a 0 por el `+x||0`, y el guard `cargado>0` cierra la division por cero —
+  // una cuenta abierta en 0 y todavia sin cargos no tiene progreso que medir, asi
+  // que devuelve 0 en vez de `NaN` o `Infinity`, que llegarian al `width` del CSS.
+  function pctAbonado(d){
+    var cargado=(+d.monto_original||0)+(+d.total_cargos||0);
+    var abonado=+d.total_abonos||0;
+    if(!(cargado>0)||!(abonado>0)) return 0;
+    return Math.max(0,Math.min(100,Math.round((abonado/cargado)*100)));
+  }
+  // La barra en si. La consumen el detalle (con su rotulo y su porcentaje) y la
+  // linea fina de la tarjeta colapsada: una sola implementacion, para que no puedan
+  // pintar progresos distintos. `radio` 0 para la variante a sangre, que se recorta
+  // contra las esquinas redondeadas de la tarjeta.
+  function barraProgreso(pct,alto,radio){
+    var r=(radio===undefined?99:radio);
+    return h('div',{style:{height:alto,background:'var(--bg3)',borderRadius:r,overflow:'hidden'}},
+      pct>0?h('div',{style:{width:pct+'%',height:'100%',background:'var(--green)',borderRadius:r,transition:'width .3s'}}):null);
+  }
+
   // Tarjeta de UNA deuda: barra de progreso (% pagado) + montos + acciones.
   // Separador sutil de categoria (Activas / Finalizadas) dentro del acordeon.
   function catLabel(text,key){
@@ -240,7 +265,7 @@ export function DebtsView(props){
     // Base dinamica (QA5): lo cargado es el monto original MAS los cargos posteriores.
     var cargado=(+d.monto_original||0)+cargosExtra;
     var saldo=+d.saldo_pendiente||0;
-    var pct=cargado>0?Math.max(0,Math.min(100,Math.round((abonado/cargado)*100))):0;
+    var pct=pctAbonado(d);
     var cache=movs[d.id];
     var filas=movimientosDe(d);
     // Una deuda con un solo cargo y sin abonos no necesita explicarse: la franja
@@ -264,6 +289,29 @@ export function DebtsView(props){
           h('div',{className:'mono',style:{fontSize:19,fontWeight:700,marginTop:1,color:activa?'var(--yellow)':'var(--green)'}},fmt(saldo))),
         h('div',{style:{flexShrink:0}},estadoBadge(d.estado))),
 
+      // ── PROGRESO EN LA VISTA RESUMEN ──
+      // A simple vista la tarjeta cerrada solo decia el saldo; cuanto se lleva
+      // abonado exigia abrirla. La misma barra del detalle, a sangre y de 4px, en
+      // el borde inferior de la cabecera —que es el borde de la tarjeta mientras
+      // esta cerrada—. Va FUERA del panel `.acc` a proposito: dentro entraria en la
+      // animacion de altura y parpadearia en cada despliegue.
+      //
+      // Tres condiciones, cada una por su motivo:
+      //   `!open`   — es la version RESUMEN. Abierta, el detalle ya trae la barra
+      //               rotulada con su porcentaje; repetir la misma cifra 60px mas
+      //               arriba, y ademas pegada al borde del primer bloque, solo
+      //               ensucia. Al cerrar vuelve, que es cuando hace falta.
+      //   `!trivial`— MISMO gate que el detalle: en una deuda de un solo cargo y
+      //               sin abonos alli no se dibuja progreso ("repetiria el mismo
+      //               numero tres veces"), asi que aqui tampoco; si no, resumen y
+      //               detalle se contradirian.
+      //   `activa`  — una Pagada ya lo dice con su badge verde y su saldo en cero.
+      //
+      // Con `pct` en 0 (hay cargos pero aun no se abono) se dibuja la PISTA vacia:
+      // es informacion —"todavia sin abonar"— y deja la lista comparable de un
+      // vistazo. El relleno verde solo se monta si hay algo que mostrar.
+      (activa&&!trivial&&!open)?barraProgreso(pct,4,0):null,
+
       // ── DETALLE (se despliega) ──
       // El panel se monta SIEMPRE: animar una altura exige que el contenido este ahi
       // para poder medirlo, tanto al abrir como al cerrar. Una deuda cerrada no pide su
@@ -284,8 +332,7 @@ export function DebtsView(props){
               h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'baseline',fontSize:11,marginBottom:4}},
                 h('span',{style:{color:'var(--text3)'}},abonado>0?('Abonado '+fmt(abonado)+' de '+fmt(cargado)):'Sin abonos todavia'),
                 h('span',{className:'mono',style:{color:'var(--green)',fontWeight:700}},pct+'%')),
-              h('div',{style:{height:5,background:'var(--bg3)',borderRadius:99,overflow:'hidden'}},
-                h('div',{style:{width:pct+'%',height:'100%',background:'var(--green)',borderRadius:99,transition:'width .3s'}}))))
+              barraProgreso(pct,5)))
           :null,
 
           // 2 — El ledger, sin modales de por medio
@@ -348,7 +395,7 @@ export function DebtsView(props){
     return h('div',{key:g.key},
       profileHeader(g),
       h('div',{className:'acc','data-acc':'g-'+g.key,'data-open':open?'1':'0'},
-        h('div',{style:{display:'flex',flexDirection:'column',gap:8,paddingTop:8,paddingLeft:12}},detalle)));
+        h('div',{style:{display:'flex',flexDirection:'column',gap:8,paddingTop:8,paddingLeft:12,paddingBottom:16}},detalle)));
   }
 
   // Nivel 1 dividido en Activos (>=1 deuda Activa) e Inactivos (todas Pagadas). Cada bloque hereda
