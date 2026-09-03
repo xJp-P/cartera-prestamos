@@ -24,7 +24,7 @@
     ]
   },
   "valores": {
-    "bytes": 10305,
+    "bytes": 10458,
     "nFilas": 6,
     "nCeldas": 30,
     "celdasPorTr": [
@@ -35,10 +35,10 @@
       5,
       5
     ],
-    "nMontos": 29,
-    "hashMontos": "e6c83caf5e7aae97524df32e904df007026865c7",
+    "nMontos": 30,
+    "hashMontos": "0b56dadbba50976380266cf5debd00dbba0a2f60",
     "hashFname": "992a0b643ef78d92a2f7d5c6b1cc2684f5aae230",
-    "hashTexto": "42a9a9274276dddc7d04b6e058902f7980dba0b0",
+    "hashTexto": "827371e3a41edd79e3b7e333a46842ba29bcb800",
     "clases": [
       "",
       "l",
@@ -49,6 +49,7 @@
       "rc-chip rc-chip-g",
       "rc-chipf",
       "rc-cl",
+      "rc-cnota",
       "rc-date",
       "rc-foot",
       "rc-head",

@@ -437,12 +437,19 @@ const CASOS = [
   // Los pasos se construyen con `planCascada` REAL sobre los datos del fixture: escribirlos
   // a mano fijaria una forma que podria dejar de ser la que el orquestador produce, y este
   // documento existe precisamente para describir esa forma.
+  //
+  // v2.9.6: la PRIMERA tarjeta del bloque 4 es "Total por pagar" — la misma cifra con la
+  // que abre la Propuesta de Abono. Antes cada papel de la misma operacion lideraba con
+  // algo distinto en el mismo lugar visual (total alla, saldo de capital aca) y parecian
+  // contradecirse. Que las dos tarjetas convivan es lo que se fija aqui; que su cifra
+  // COINCIDA con la de la propuesta lo fija la seccion J de `cascada-cobro`.
   { nombre: 'cobro-cascada-usd-oscuro', gen: 'generateReciboCobro', tema: 'dark', celdas: 5,
     entrada: () => ({ loanId: '1782151590658w66y', cascada: true, tema: 'dark', dark: true }),
     ejecutar: () => S.generateReciboCobro(L('1782151590658w66y'), pays,
       cobroDe(L('1782151590658w66y'), pays)),
     contiene: ['Recibo de Cobro', 'Como se aplico tu pago', 'rc-paso', 'Total aplicado',
-               'Caja registrada en pesos', 'USD $', 'RC-', '#0d1117'] },
+               'Caja registrada en pesos', 'USD $', 'RC-', '#0d1117',
+               'Total por pagar', 'capital + intereses'] },
 
   // v2.9.6 — el override `incluirInteresMes`. Lo que este caso fija, y que fallaba:
   //   - el paso se rotula "Interes del mes", NO "Cuota #N vencida";
@@ -475,7 +482,7 @@ const CASOS = [
       cobroConInteresMes(L('1782151590658w66y'), pays)),
     contiene: ['Interes del mes', 'POR ADELANTADO', 'aun no vence',
                'Interes del mes en curso', 'Lo que queda por pagar',
-               'YA ABONADO', 'TOTAL POR PAGAR'],
+               'YA ABONADO', 'TOTAL POR PAGAR', 'Total por pagar', 'capital + intereses'],
     // En este escenario el dinero salda TODA la mora, asi que ningun paso puede quedar
     // debiendo. Si "queda debiendo" reaparece es el paso del interes del mes imprimiendo
     // su `restanteCuota`, que es una cifra PREVIA al abono y por tanto ya falsa cuando el
@@ -487,7 +494,14 @@ const CASOS = [
     ejecutar: () => S.generateReciboCobro(L('1773655076017'), pays,
       cobroDe(L('1773655076017'), pays)),
     contiene: ['Recibo de Cobro', 'Intereses vencidos', 'Como se imputa el pago',
-               'Tu credito despues de este pago'] },
+               'Tu credito despues de este pago',
+               // La tabla SI totaliza lo que lista...
+               'TOTAL POR PAGAR'],
+    // ...pero la TARJETA no se dibuja en modalidad `Intereses`: sus cuotas son de puro
+    // interes y el capital vence al final, fuera del cronograma. El titular diria
+    // "Total por pagar 2.700.000" bajo un "Saldo de capital 3.000.000" — menos deuda de
+    // la que hay. Este es el credito con el que se midio.
+    noContiene: ['Total por pagar', 'capital + intereses'] },
 
   // Un cobro de UN solo paso: sin mora, la cascada degenera en un abono. Aqui la nota que
   // explica el orden de imputacion no debe aparecer (no hay nada que repartir).
@@ -495,7 +509,7 @@ const CASOS = [
     entrada: () => ({ loanId: '17795544041379obc', cascada: true, unPaso: true, tema: 'light', dark: false }),
     ejecutar: () => S.generateReciboCobro(L('17795544041379obc'), pays,
       cobroDe(L('17795544041379obc'), pays)),
-    contiene: ['Abono extraordinario a capital', 'Saldo de capital'] },
+    contiene: ['Abono extraordinario a capital', 'Saldo de capital', 'Total por pagar'] },
 
   // Variante PAZ Y SALVO. Es la unica que se alimenta de un paso sintetico: pdf-render no
   // escribe en la BD, asi que ningun cobro sobre un prestamo activo puede dejarlo en cero
@@ -507,7 +521,10 @@ const CASOS = [
       fecha: '2026-07-20', pre: { saldoCaja: 200000, cuota: 0 },
       pasos: [{ tipo: 'abono', obligacionCOP: 200000, obligacionUSD: 0,
                 interes: 0, capital: 200000, cajaCOP: 200000 }] }),
-    contiene: ['PAZ Y SALVO', 'Paz y Salvo', 'cancelada la totalidad'] },
+    contiene: ['PAZ Y SALVO', 'Paz y Salvo', 'cancelada la totalidad'],
+    // La tarjeta "Total por pagar" vive DENTRO del `if (!esPazYSalvo)`. Sacarla de ahi
+    // dejaria un Paz y Salvo anunciando deuda: el documento se contradiria a si mismo.
+    noContiene: ['Total por pagar', 'Lo que queda por pagar'] },
 
   { nombre: 'abono-paz-y-salvo', gen: 'generateReciboAbono', tema: 'light', celdas: null,
     entrada: () => ({ loanId: '1773652420812', monto: 200000, mode: 'mantener', tema: 'light' }),

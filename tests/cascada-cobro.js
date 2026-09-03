@@ -1340,9 +1340,20 @@ async function ejecutarPlan(loanId, plan, fecha, obs, port) {
         // El PAPEL DE DESPUES.
         const post = cargarJ();
         const loanQ = post.loans.find(x => x.id === loanId);
+        // El "antes" tachado de la tarjeta sale de `_snapshotAbono` (app.js), que lo computa
+        // sumando lo que falta de cada cuota viva. Tiene que ser EXACTAMENTE el `totalAntes`
+        // que `proyeccionCobro` le entrega a la propuesta: si las dos bases divergieran, cada
+        // papel tacharia una cifra distinta para el mismo estado anterior.
+        const totalAntesPre = lpP.filter(p => !esAbono(p) &&
+            (p.estadoPago === 'Pendiente' || p.estadoPago === 'En Mora'))
+          .reduce((s, p) => s + Math.max(0, Math.round(p.cuotaTotal || 0) - Math.round(p.partialPaid || 0)), 0);
+        R.eq('J el "antes" del recibo sale de la misma base que el de la propuesta',
+          totalAntesPre, proyJ.totalAntes);
+
         pdfsCascada.length = 0;
         generateReciboCobro(loanQ, post.pays, { fecha: hoy, pasos: est2.hechos,
-          pre: { saldoCaja: saldoConCaja(loanP, lpP), cuota: pendP.length ? pendP[0].cuotaTotal : 0 } });
+          pre: { saldoCaja: saldoConCaja(loanP, lpP), cuota: pendP.length ? pendP[0].cuotaTotal : 0,
+                 totalPorPagar: totalAntesPre } });
         R.eq('J el recibo emitio un documento', pdfsCascada.length, 1);
         const htmlRec = pdfsCascada.length ? pdfsCascada[0].html : '';
 
@@ -1365,11 +1376,33 @@ async function ejecutarPlan(loanId, plan, fecha, obs, port) {
           const m = /TOTAL POR PAGAR<\/td><td>([\s\S]*?)<\/td>/.exec(htmlRec);
           return m ? numJ(m[1]) : NaN;
         })();
+        // Y en su TARJETA, que es lo que de verdad se compara: las dos encabezan el bloque
+        // de "asi queda el credito", en el mismo lugar visual de cada papel. Mientras el
+        // recibo lideraba con el saldo de CAPITAL y la propuesta con el TOTAL, los dos
+        // documentos de la misma operacion abrian con cifras distintas y parecian
+        // contradecirse aunque ambas fueran correctas.
+        const totalReciboCard = (() => {
+          const m = /<div class="rc-cl">Total por pagar<\/div>(?:<div class="rc-old">([^<]*)<\/div>)?<div class="rc-new">([^<]*)<\/div>/.exec(htmlRec);
+          return m ? { antes: m[1] ? numJ(m[1]) : null, valor: numJ(m[2]) } : null;
+        })();
         R.check('J ANTI-VACIO: los dos documentos declaran su total por pagar',
-          !isNaN(totalPropuesta) && !isNaN(totalRecibo),
-          'propuesta=' + totalPropuesta + ' recibo=' + totalRecibo);
+          !isNaN(totalPropuesta) && !isNaN(totalRecibo) && !!totalReciboCard,
+          'propuesta=' + totalPropuesta + ' recibo=' + totalRecibo +
+          ' tarjeta=' + JSON.stringify(totalReciboCard));
         R.eq('J la propuesta promete el MISMO total que el recibo entrega',
           totalPropuesta, totalRecibo);
+        R.eq('J la tarjeta del recibo y su tabla declaran el MISMO total',
+          totalReciboCard && totalReciboCard.valor, totalRecibo);
+        R.eq('J los dos papeles LIDERAN con la misma cifra',
+          totalReciboCard && totalReciboCard.valor, totalPropuesta);
+        // El antes/despues de la tarjeta. El escenario acorta el plazo, asi que el total
+        // por pagar TIENE que bajar: si el tachado no aparece es que `pre.totalPorPagar`
+        // dejo de enhebrarse desde `_snapshotAbono` — el extractor lo trata como grupo
+        // opcional y se quedaria callado.
+        R.check('J la tarjeta tacha el total anterior, que era mayor',
+          !!totalReciboCard && totalReciboCard.antes !== null &&
+          totalReciboCard.antes > totalReciboCard.valor,
+          JSON.stringify(totalReciboCard));
         // ANTI-TRIVIAL: el escenario tiene un parcial que sobrevive al recalculo, que es
         // lo que hacia divergir las cifras. Sin el, la igualdad seria trivial.
         R.check('J ANTI-TRIVIAL: una cuota proyectada arrastra abono previo',

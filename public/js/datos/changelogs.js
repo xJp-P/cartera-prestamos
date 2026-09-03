@@ -635,6 +635,8 @@ export const CHANGELOGS = {
     'Nuevo boton "Enviar propuesta al cliente" dentro de Registrar cobro. Genera un PDF que muestra como quedaria el prestamo si el cliente abona X, con el cronograma resultante, SIN registrar nada. Para cuando te preguntan "si te abono 400, como quedamos?".',
     'El recibo de cobro ya no llama "vencida" a una cuota que todavia no vence cuando cobras el interes del mes por adelantado, ni la suma a los intereses vencidos.',
     'El recibo de cobro trae ahora "Lo que queda por pagar": la lista de cuotas pendientes con su valor, lo ya abonado en cada una y lo que falta.',
-    'En ese mismo recibo, la tarjeta "Valor de la cuota" aclara cuanto llevas abonado de la proxima, para que no parezca que contradice el total pendiente.'
+    'En ese mismo recibo, la tarjeta "Valor de la cuota" aclara cuanto llevas abonado de la proxima, para que no parezca que contradice el total pendiente.',
+    'El recibo de cobro ahora encabeza con "Total por pagar", la misma cifra con la que abre la propuesta que le mandas al cliente antes de cobrar. Los dos papeles del mismo cobro lideraban con numeros distintos en el mismo lugar (uno el total, otro el saldo de capital) y parecian contradecirse aunque los dos estuvieran bien.',
+    'Esa tarjeta no aparece en los prestamos de solo intereses: ahi las cuotas son de puro interes y el capital vence al final, asi que sumarlas habria anunciado menos deuda de la que hay.'
   ]
 };

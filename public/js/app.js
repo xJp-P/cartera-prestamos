@@ -452,8 +452,15 @@ function App(){
     // `saldo` (MOTOR) se conserva a proposito: la liquidacion envia `monto = L.capitalPendiente`,
     // que esta en esa misma base; parearlo con el saldo con caja imprimiria un Paz y Salvo con
     // "saldo anterior < monto aplicado". `saldoCaja` es el que se MUESTRA como "Saldo anterior".
+    // `totalPorPagar` es lo que el credito debia ANTES del cobro en la base con la que
+    // el Recibo de Cobro y la Propuesta de Abono lideran su bloque de tarjetas: la suma
+    // de lo que falta de cada cuota viva, vencidas incluidas. NO es el saldo de capital
+    // (lleva ademas los intereses de esas cuotas). Es el `totalAntes` de `proyeccionCobro`.
+    var porPagarPre=lp.filter(function(p){return !esAbono(p)&&(p.estadoPago==='Pendiente'||p.estadoPago==='En Mora');})
+                      .reduce(function(s,p){return s+pendCuota(p);},0);
     return {saldo:Math.max(0,orig-capPag),saldoCaja:saldoConCaja(l,lp),cuota:pend.length?pend[0].cuotaTotal:0,cuotas:pend.length,
-            intereses:pend.reduce(function(s,p){return s+p.interesPeriodo;},0),plazo:l.plazoMeses};
+            intereses:pend.reduce(function(s,p){return s+p.interesPeriodo;},0),plazo:l.plazoMeses,
+            totalPorPagar:porPagarPre};
   }
   function _doAbono(loanId,monto,fecha,obs,montoUSD,liquidar,recalcMode,recalcValor,genRecibo,intExtra,copRecibido){
     var fromDeudor=abonoModal&&abonoModal.fromDeudor;

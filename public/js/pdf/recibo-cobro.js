@@ -210,7 +210,54 @@ export function generateReciboCobro(loan, allPays, cobro, opts) {
   // documento tiene que caber en una hoja. El cronograma es otro documento.
   var despuesHTML = '', quedaHTML = '';
   if (!esPazYSalvo) {
-    var cards = card('Saldo de capital',
+    // ── LO QUE QUEDA POR PAGAR ──
+    // Se computa ANTES de las tarjetas porque la primera de ellas lidera con este total.
+    // OJO CON EL ORDEN: `var` es hoisted, asi que leerlo mas arriba no daria error, daria
+    // `undefined` — y la tarjeta desapareceria del PDF que va al cliente en silencio. Es
+    // literalmente el Bug #63, cometido en el modal de al lado.
+    //
+    // Sale de las filas PERSISTIDAS tras el cobro, no del plan: si el abono regenero el
+    // cronograma, esto ya refleja el nuevo. Incluye las vencidas —tambien son dinero por
+    // cobrar— marcadas en rojo mas abajo.
+    var porPagar = lp.filter(function(p){
+      return !esAbono(p) && (p.estadoPago === 'Pendiente' || p.estadoPago === 'En Mora') && pendCuota(p) > 0;
+    }).sort(function(a,b){
+      var d = String(a.fechaPago || '').localeCompare(String(b.fechaPago || ''));
+      return d !== 0 ? d : ((a.cuotaN || 0) - (b.cuotaN || 0));
+    });
+    var totalFalta = porPagar.reduce(function(s,p){ return s + pendCuota(p); }, 0);
+
+    // La PRIMERA tarjeta es "Total por pagar": la MISMA cifra con la que abre la Propuesta
+    // de Abono, el papel que se le manda al cliente ANTES de cobrar. Hasta aqui cada
+    // documento lideraba con algo distinto en el mismo lugar visual —la propuesta con el
+    // total, el recibo con el saldo de capital—. Las dos cifras eran correctas (una lleva
+    // los intereses de las cuotas que faltan y la otra no), pero puestas en el mismo sitio
+    // de dos papeles de la MISMA operacion se leian como una contradiccion. La nota es lo
+    // que las concilia, y por eso las dos tarjetas viajan juntas en vez de sustituirse.
+    //
+    // SOLO donde el cronograma CONTIENE toda la deuda, y esa condicion no es teorica:
+    //  - en modalidad `Intereses` las cuotas son de puro interes y el capital vence al
+    //    final, FUERA de la tabla. Sumarlas da un total MENOR que el capital adeudado, o
+    //    sea lo contrario de lo que el rotulo promete (medido sobre un credito real del
+    //    fixture: "Total por pagar 2.700.000" junto a "Saldo de capital 3.000.000"). Es
+    //    ademas donde la Propuesta lo omite sola, porque su preview del cronograma solo
+    //    existe en `Capital + Intereses` — asi que gatearlo aqui es lo que mantiene a los
+    //    dos papeles diciendo lo mismo, no una excepcion a esa regla.
+    //  - si la cifra COINCIDE con el saldo de capital tampoco se dibuja: en `Prestamo`
+    //    (0% interes) la cuota unica ES el capital, y dos tarjetas con el mismo numero se
+    //    leen como un error del documento. Se comparan los valores YA FORMATEADOS, que es
+    //    la condicion real ("el lector ve dos veces lo mismo"), no los COP subyacentes.
+    //
+    // La TABLA de abajo conserva su fila TOTAL POR PAGAR en todos los casos: alli es el
+    // total de las filas que se estan listando —con "Plazo: Indefinido" a la vista— y no
+    // un titular sobre la deuda entera.
+    var totalTxt = money(totalFalta);
+    var cards = (porPagar.length && !esIndef && totalTxt !== money(saldoDespues))
+      ? card('Total por pagar',
+          (pre.totalPorPagar > totalFalta) ? money(pre.totalPorPagar) : '', totalTxt,
+          'capital + intereses')
+      : '';
+    cards += card('Saldo de capital',
       (saldoAntes > saldoDespues) ? money(saldoAntes) : '', money(saldoDespues));
     if (cuotaDespues > 0) {
       // "Valor de la cuota" es el importe CONTRACTUAL que rige de aqui en adelante, y no
@@ -231,24 +278,12 @@ export function generateReciboCobro(loan, allPays, cobro, opts) {
     if (proxVence) pie.push('Proximo vencimiento: <b>' + fmtD(proxVence) + '</b>');
     if (moraViva > 0) pie.push('<span style="color:' + C.red + '">Aun quedan <b>' + money(moraViva) + '</b> en cuotas vencidas</span>');
 
-    // ── LO QUE QUEDA POR PAGAR ──
-    // Las tarjetas de arriba RESUMEN; esta tabla lo DETALLA, cuota por cuota, con lo ya
-    // abonado en cada una. Hacia falta: sin ella el recibo mostraba "saldo de capital
+    // La tarjeta de arriba RESUME el total; esta tabla lo DETALLA, cuota por cuota, con lo
+    // ya abonado en cada una. Hacia falta: sin ella el recibo mostraba "saldo de capital
     // USD 117.65" junto a "valor de la cuota USD 157.79" y UNA cuota pendiente, sin forma
     // de ver que la diferencia era el interes del mes que el cliente acababa de adelantar
     // sobre esa misma cuota.
-    //
-    // Sale de las filas PERSISTIDAS tras el cobro, no del plan: si el abono regenero el
-    // cronograma, esto ya refleja el nuevo. Incluye las vencidas —tambien son dinero por
-    // cobrar— marcadas en rojo.
-    var porPagar = lp.filter(function(p){
-      return !esAbono(p) && (p.estadoPago === 'Pendiente' || p.estadoPago === 'En Mora') && pendCuota(p) > 0;
-    }).sort(function(a,b){
-      var d = String(a.fechaPago || '').localeCompare(String(b.fechaPago || ''));
-      return d !== 0 ? d : ((a.cuotaN || 0) - (b.cuotaN || 0));
-    });
     if (porPagar.length) {
-      var totalFalta = porPagar.reduce(function(s,p){ return s + pendCuota(p); }, 0);
       var filasQ = porPagar.map(function(p){
         var abonado = Math.max(0, Math.round(p.partialPaid || 0));
         return '<tr class="' + (p.estadoPago === 'En Mora' ? 'v' : '') + '">' +
