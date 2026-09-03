@@ -1101,6 +1101,38 @@ async function ejecutarPlan(loanId, plan, fecha, obs, port) {
           hayTexto(vMal.txts, /nunca se saldaria/i), vMal.txts.filter(t => /cuota/i.test(t)).slice(0, 3).join(' | '));
       }
 
+      // ── 4c. LA PROPUESTA QUE SALE DEL MODAL DE VERDAD ───────────────────────
+      // La seccion J prueba el helper y el generador, pero les pasa los argumentos ella
+      // misma. Eso dejo pasar un defecto real: en el modal, `proy` se calculaba ANTES de
+      // `cronoPreview`, asi que por el hoisting de `var` el helper recibia `undefined`
+      // por filas y devolvia `totalDespues: null` — la tarjeta "Total por pagar"
+      // desaparecia del PDF que va al cliente, sin error de consola ni nada roto a la
+      // vista. Aqui se dispara el boton REAL del componente REAL y se mira el documento.
+      {
+        const vista = correr(cobroUSD.toFixed(2), cajaH);
+        const botones = nodos(vista.arbol, 'button')
+          .filter(b => /Enviar propuesta al cliente/.test(textos(b).join('')));
+        R.eq('H (4c) el modal ofrece el boton de propuesta', botones.length, 1);
+        if (botones.length === 1) {
+          fe.captura.pdfs.length = 0;
+          botones[0].props.onClick();
+          R.eq('H (4c) el boton emite exactamente un documento', fe.captura.pdfs.length, 1);
+          if (fe.captura.pdfs.length === 1) {
+            const htmlP = fe.captura.pdfs[0].html;
+            // Lo que el defecto borraba en silencio.
+            R.check('H (4c) la propuesta declara cuanto quedaria por pagar',
+              htmlP.indexOf('Total por pagar') !== -1,
+              'la tarjeta no aparece: `proyeccionCobro` no recibio las filas del preview');
+            R.check('H (4c) y trae el cronograma que quedaria',
+              htmlP.indexOf('Cronograma que quedaria') !== -1);
+            // Y NUNCA puede presentarse como comprobante de dinero recibido.
+            R.check('H (4c) la propuesta no se presenta como comprobante',
+              htmlP.indexOf('TOTAL RECIBIDO') === -1 && htmlP.indexOf('Total recibido') === -1 &&
+              htmlP.indexOf('certifica el dinero') === -1 && htmlP.indexOf('Si abonas') !== -1);
+          }
+        }
+      }
+
       // ── 5. El modal y el recibo imprimen los mismos numeros ─────────────────
       // Mismos pasos, dos renderizadores distintos: es la unica forma de fijar que
       // no vuelvan a divergir. Se alimenta del plan porque en un cobro con exito

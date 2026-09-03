@@ -144,17 +144,6 @@ export function CobroModal(props){
   // capital no baja y el cronograma no se regenera. Por eso el bloque se dibuja
   // condicionado a `hayAbono`, y el modo cae a 'mantener' cuando no aplica — asi el
   // valor que viaja al backend nunca depende de un radio que el usuario no vio.
-  // ── Proyeccion para la propuesta ───────────────────────────────────────────
-  // La matematica vive en `proyeccionCobro` (core/cascada.js), no aqui: la prueba que
-  // ata este documento con el recibo llama al MISMO helper, asi que no puede quedar
-  // verde sobre una copia. Ver el comentario del helper para por que declara el total
-  // por pagar y no un saldo de capital.
-  var pendOrden=loanPays.filter(function(p){ return !esAbono(p)&&p.estadoPago==='Pendiente'; })
-    .sort(function(a,b){ return (a.cuotaN||0)-(b.cuotaN||0); });
-  var proy=(plan&&plan.ok)
-    ? proyeccionCobro(loan, allPays, plan, (cronoPreview&&cronoPreview.filas)||null, pendOrden)
-    : {totalAntes:0,totalDespues:null,abonadoProxima:0};
-
   // Valor de la cuota HOY: alimenta el antes/despues de la propuesta. Sale de la
   // primera Pendiente persistida, no de un calculo, para que respete cualquier
   // prorroga o cambio de dia de pago que el credito ya tenga encima.
@@ -202,6 +191,22 @@ export function CobroModal(props){
     });
     return {filas:filas,saldado:false,n:n,ultimaResidual:pv.ultimaResidual};
   })();
+
+  // ── Proyeccion para la propuesta ───────────────────────────────────────────
+  // OJO CON EL ORDEN: esto va DESPUES de `cronoPreview`, y estuvo antes. El `var`
+  // hoisted no da error: `cronoPreview` valia `undefined`, el helper recibia `null`
+  // por filas, devolvia `totalDespues: null` y la tarjeta "Total por pagar"
+  // simplemente NO se dibujaba en el PDF que va al cliente. Sin excepcion, sin aviso
+  // en consola, sin nada roto a la vista.
+  //
+  // La matematica vive en `proyeccionCobro` (core/cascada.js), no aqui: la prueba que
+  // ata este documento con el recibo llama al MISMO helper, asi que no puede quedar
+  // verde sobre una copia.
+  var pendOrden=loanPays.filter(function(p){ return !esAbono(p)&&p.estadoPago==='Pendiente'; })
+    .sort(function(a,b){ return (a.cuotaN||0)-(b.cuotaN||0); });
+  var proy=(plan&&plan.ok)
+    ? proyeccionCobro(loan, allPays, plan, (cronoPreview&&cronoPreview.filas)||null, pendOrden)
+    : {totalAntes:0,totalDespues:null,abonadoProxima:0};
 
   function submit(){
     if(!plan||!plan.ok||!plan.pasos.length) return;
