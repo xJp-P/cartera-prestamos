@@ -28,12 +28,26 @@
 // que sale de ella— imprimieran cifras distintas en la linea que el usuario
 // compara. Es la MISMA reconciliacion de `generateReciboCobro`, a proposito:
 // asi los dos coinciden por construccion y no por coincidencia.
+//
+// ── LA PUERTA UNICA (v2.9.6) ─────────────────────────────────────────────────
+// Este modal absorbio lo que hacia "Abono directo a capital", que ya no existe. Lo
+// que antes eran dos ventanas con dos criterios distintos ahora son tres decisiones
+// dentro de una sola:
+//   1. `omitirMora`        — manda todo a capital sin cobrar lo vencido. Es la
+//      imputacion que el art. 1653 permite CONSENTIR al acreedor, y era la unica
+//      capacidad del modal viejo que la cascada no cubria.
+//   2. `incluirInteresMes` — cobra por adelantado el interes del periodo en curso.
+//   3. Las OPCIONES DE RECALCULO (mantener / modificar plazo / fijar cuota), que
+//      solo aplican si sobra dinero para un abono extraordinario; sin abono el
+//      cronograma no cambia y el bloque no se dibuja.
+// Los tres viajan al mismo `planCascada` y al mismo `/abono`, asi que hay una sola
+// matematica y un solo recibo.
 
 import { ABtn, Fld, Modal } from '../componentes/base.js';
 import { Ico } from '../componentes/iconos.js';
 import { cobrableTotal, planCascada } from '../core/cascada.js';
-import { _pmt, _tasaPeriodo, filasPreview } from '../core/calculo.js';
-import { fmt, fmtD, fmtNumInput, fmtUSD, parseDecimalInput, parseNum } from '../core/format.js';
+import { _tasaPeriodo, filasPreview, previewRecalculo } from '../core/calculo.js';
+import { fmt, fmtD, fmtNumInput, fmtUSD, parseDecimalInput, parseIntInput, parseNum } from '../core/format.js';
 import { h, useState } from '../core/react.js';
 import { _submitGuard, nowStr } from '../core/ui.js';
 import { esAbono } from '../core/ids.js';
@@ -54,6 +68,12 @@ export function CobroModal(props){
   var s7=useState(true); var verCron=s7[0]; var setVerCron=s7[1];
   var s8=useState(null); var fallo=s8[0]; var setFallo=s8[1];           // resultado parcial si un paso falla
   var s9=useState(true); var genRecibo=s9[0]; var setGenRecibo=s9[1];    // recibo consolidado (mismo patron que PayModal/AbonoModal)
+  // ── Estado de la FUSION. Va al FINAL a proposito: el orden de `useState` es
+  // contrato con la seccion H de `cascada-cobro`, que siembra por POSICION.
+  var s10=useState(false); var incMes=s10[0]; var setIncMes=s10[1];      // cobrar el interes del periodo en curso
+  var s11=useState(false); var omitMora=s11[0]; var setOmitMora=s11[1];  // mandar todo a capital sin cobrar lo vencido
+  var s12=useState('mantener'); var recalcMode=s12[0]; var setRecalcMode=s12[1];
+  var s13=useState(''); var recalcInput=s13[0]; var setRecalcInput=s13[1];
 
   var loanPays=allPays.filter(function(p){ return String(p.prestamoId)===String(loan.id); });
   var cob=cobrableTotal(loan, allPays);
@@ -70,7 +90,9 @@ export function CobroModal(props){
   var hayEntrada=esUSD?(oblUSD>0):(oblCOP>0);
   var faltanCamposUSD=esUSD&&(oblUSD<=0||cajaCOP<=0);
 
-  var plan=hayEntrada?planCascada(loan, allPays, {obligacionUSD:oblUSD, obligacionCOP:oblCOP, cajaCOP:cajaCOP}):null;
+  var plan=hayEntrada?planCascada(loan, allPays,
+    {obligacionUSD:oblUSD, obligacionCOP:oblCOP, cajaCOP:cajaCOP},
+    {incluirInteresMes:incMes, omitirMora:omitMora}):null;
   var T=plan?plan.totales:null;
 
   // ── Unidad de presentacion: centavos de dolar en USD, pesos en COP ─────────
@@ -91,11 +113,17 @@ export function CobroModal(props){
     if(!plan||!plan.pasos.length) return null;
     var oblPartialsU=plan.pasos.filter(function(p){ return p.tipo==='partial'; })
       .reduce(function(s,p){ return s+uni(p.obligacionCOP); },0);
-    var intU=plan.pasos.reduce(function(s,p){ return s+uni(p.interes); },0);
-    var capMoraU=Math.max(0, oblPartialsU-intU);
+    var intU=plan.pasos.filter(function(p){ return p.tipo==='partial'&&!p.esInteresMes; })
+      .reduce(function(s,p){ return s+uni(p.interes); },0);
+    // El interes del mes se declara APARTE: no estaba vencido, y mezclarlo con la
+    // mora haria que el desglose (y el recibo) afirmaran un atraso que no existio.
+    var mesU=plan.pasos.filter(function(p){ return p.esInteresMes; })
+      .reduce(function(s,p){ return s+uni(p.interes); },0);
+    var capMoraU=Math.max(0, oblPartialsU-intU-mesU);
     var abonoU=plan.pasos.filter(function(p){ return p.tipo==='abono'; })
       .reduce(function(s,p){ return s+uni(p.obligacionCOP); },0);
-    return {intU:intU, capMoraU:capMoraU, abonoU:abonoU, aplicadoU:intU+capMoraU+abonoU};
+    return {intU:intU, mesU:mesU, capMoraU:capMoraU, abonoU:abonoU,
+            aplicadoU:intU+mesU+capMoraU+abonoU};
   })();
 
   // Efecto cambiario del cobro completo (solo informativo, no decide nada).
@@ -110,6 +138,20 @@ export function CobroModal(props){
   var trmImplicita=(esUSD&&oblUSD>0&&cajaCOP>0)?Math.round(cajaCOP/oblUSD):0;
   var efectoTRM=(esUSD&&plan&&plan.ok&&plan.pasos.length>0&&cajaCOP>0)?(T.caja-T.aplicado):0;
 
+  // ── Opciones de recalculo (heredadas del abono directo) ────────────────────
+  // Solo tienen sentido si queda dinero para un abono extraordinario: sin abono el
+  // capital no baja y el cronograma no se regenera. Por eso el bloque se dibuja
+  // condicionado a `hayAbono`, y el modo cae a 'mantener' cuando no aplica — asi el
+  // valor que viaja al backend nunca depende de un radio que el usuario no vio.
+  var hayAbono=!!(plan&&plan.ok&&plan.totales&&plan.totales.abonoCapital>0);
+  var aplicaRecalc=esCapInt&&hayAbono;
+  var recalcModoEfectivo=aplicaRecalc?recalcMode:'mantener';
+  // En `fijarCuota` el usuario teclea en la moneda visible; el backend siempre
+  // espera COP (misma conversion que hacia AbonoModal).
+  var recalcValorCOP=recalcModoEfectivo==='fijarCuota'
+    ? (esUSD?Math.round((+recalcInput||0)*trm):(parseNum(recalcInput)||0))
+    : (recalcModoEfectivo==='modificarPlazo'?(parseInt(recalcInput,10)||0):null);
+
   // ── Preview del cronograma resultante ──────────────────────────────────────
   // Solo tiene sentido donde hay amortizacion. `filasPreview` es el espejo del
   // motor; las FECHAS se toman de las cuotas Pendientes que ya existen (conservan
@@ -118,11 +160,18 @@ export function CobroModal(props){
   var cronoPreview=(function(){
     if(!plan||!plan.ok||!esCapInt) return null;
     var saldo=plan.saldoTrasCascada;
-    var n=Math.max(0,(+loan.plazoMeses||0)-ctx.regularConsumed);
-    if(n<=0) return {filas:[],saldado:saldo<=0,n:0};
+    var nActual=Math.max(0,(+loan.plazoMeses||0)-ctx.regularConsumed);
+    if(nActual<=0) return {filas:[],saldado:saldo<=0,n:0};
     if(saldo<=0) return {filas:[],saldado:true,n:0};
     var r=_tasaPeriodo((+loan.tasaMensual||0)/100, loan.frecuencia||'Mensual');
-    var nominal=Math.round(_pmt(r,n,saldo));
+    // El preview obedece a la opcion de recalculo elegida. `previewRecalculo` es el
+    // MISMO helper que usaba el modal de abono, asi que las dos superficies no pueden
+    // prometer cronogramas distintos para el mismo abono.
+    var pv=previewRecalculo(saldo, r, nActual, recalcModoEfectivo, recalcValorCOP);
+    if(!pv) return {filas:[],saldado:false,n:0};
+    if(pv.error) return {filas:[],saldado:false,n:0,error:pv.error};
+    var n=pv.nCuotas;
+    var nominal=pv.cuota;
     var filas=filasPreview(saldo,r,n,false,nominal);
     var pend=loanPays.filter(function(p){ return !esAbono(p)&&p.estadoPago==='Pendiente'; })
       .sort(function(a,b){ return (a.cuotaN||0)-(b.cuotaN||0); });
@@ -131,14 +180,21 @@ export function CobroModal(props){
       f.fecha=pend[i]?pend[i].fechaPago:null;
       f.antes=pend[i]?Math.round(pend[i].cuotaTotal):0;
     });
-    return {filas:filas,saldado:false,n:n};
+    return {filas:filas,saldado:false,n:n,ultimaResidual:pv.ultimaResidual};
   })();
 
   function submit(){
     if(!plan||!plan.ok||!plan.pasos.length) return;
     setFallo(null);
     return _submitGuard(sending,setSending,function(){
-      return onConfirm(loan.id, plan, fecha, obs, genRecibo).then(function(res){
+      // `entrada` y `opts` viajan para que el orquestador pueda RE-PLANIFICAR si el
+      // pre-flight marca cuotas en mora: eso mueve el techo del abono, y ejecutar el
+      // plan viejo rebotaria con un 400 a mitad de la cadena.
+      return onConfirm(loan.id, plan, fecha, obs, genRecibo, {
+        modo:recalcModoEfectivo, valor:recalcValorCOP,
+        entrada:{obligacionUSD:oblUSD, obligacionCOP:oblCOP, cajaCOP:cajaCOP},
+        opts:{incluirInteresMes:incMes, omitirMora:omitMora},
+      }).then(function(res){
         // El orquestador devuelve {ok, hechos, error, pasoFallido} — si algo fallo a
         // mitad, el modal SE QUEDA ABIERTO mostrando exactamente que si se aplico.
         // Cerrar en silencio dejaria al usuario sin saber en que estado quedo.
@@ -168,11 +224,15 @@ export function CobroModal(props){
         h('div',{style:{display:'flex',alignItems:'center',gap:7,marginBottom:5}},
           h('span',{style:{width:18,height:18,borderRadius:99,background:esMora?'var(--red-bg)':'var(--green-bg)',color:esMora?'var(--red)':'var(--green)',fontSize:10,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}},String(i+1)),
           h('span',{style:{fontSize:12,fontWeight:700,color:'var(--text)'}},
-            esMora?('Cuota #'+p.cuotaN+' vencida'):'Abono extraordinario a capital'),
-          esMora&&(p.salda?chip('SE SALDA','var(--green)','var(--green-bg)'):chip('PARCIAL','var(--yellow)','var(--yellow-bg)')),
+            p.esInteresMes?('Interes del mes · cuota #'+p.cuotaN)
+              :esMora?('Cuota #'+p.cuotaN+' vencida'):'Abono extraordinario a capital'),
+          p.esInteresMes?chip('POR ADELANTADO','var(--blue)','var(--blue-bg)')
+            :esMora&&(p.salda?chip('SE SALDA','var(--green)','var(--green-bg)'):chip('PARCIAL','var(--yellow)','var(--yellow-bg)')),
           h('span',{style:{flex:1}}),
           h('span',{className:'mono',style:{fontSize:12,fontWeight:800,color:'var(--text)'}},fmtUni(totU))),
-        esMora&&h('div',{style:{fontSize:11,color:'var(--text3)',paddingLeft:25,lineHeight:1.6}},
+        p.esInteresMes&&h('div',{style:{fontSize:11,color:'var(--text3)',paddingLeft:25,lineHeight:1.6}},
+          'aun no vence (',fmtD(p.fechaPago),') · se cobra por adelantado, antes del abono a capital'),
+        esMora&&!p.esInteresMes&&h('div',{style:{fontSize:11,color:'var(--text3)',paddingLeft:25,lineHeight:1.6}},
           'venció el ',fmtD(p.fechaPago),
           pIntU>0&&h('span',null,'  •  intereses ',h('b',{style:{color:'var(--red)'}},fmtUni(pIntU))),
           pCapU>0&&h('span',null,'  •  capital ',h('b',{style:{color:'var(--text2)'}},fmtUni(pCapU))),
@@ -189,6 +249,7 @@ export function CobroModal(props){
     // ── Estado actual del credito ──
     h('div',{style:{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:10,padding:'10px 12px',marginTop:4}},
       linea('Cuotas vencidas por cobrar', cob.mora>0?fmtUni(cobMoraU):'—', cob.mora>0?'var(--red)':'var(--text3)'),
+      cob.interesMes>0&&linea('Interes del mes en curso', fmtUni(uni(cob.interesMes)), 'var(--text3)'),
       linea('Capital amortizable', fmtUni(cobAbonableU), 'var(--text2)'),
       h('div',{style:{height:1,background:'var(--border)',margin:'5px 0'}}),
       linea('Total que se puede cobrar hoy', fmtUni(cobMoraU+cobAbonableU), 'var(--text)', true)),
@@ -218,6 +279,33 @@ export function CobroModal(props){
         h('b',{className:'mono',style:{color:efectoTRM<0?'var(--red)':'var(--green)'}},
           (efectoTRM>0?'+':'')+fmt(efectoTRM)))),
 
+    // ── LOS DOS OVERRIDES ──
+    // Van juntos y antes del desglose: los dos cambian el reparto, asi que el usuario
+    // tiene que verlos ANTES de leer el resultado. Ambos nacen desmarcados — la
+    // cascada del art. 1653 es el camino por defecto y estas son las excepciones.
+    (cob.interesMes>0||cob.mora>0)&&h('div',{style:{display:'flex',flexDirection:'column',gap:7,marginTop:2}},
+      cob.interesMes>0&&h('label',{style:{display:'flex',alignItems:'flex-start',gap:9,cursor:'pointer',
+        background:'var(--blue-bg)',border:'1px solid var(--blue-bd)',borderRadius:10,padding:'9px 11px'}},
+        h('input',{type:'checkbox',checked:incMes,onChange:function(){setIncMes(!incMes);},
+          style:{marginTop:2,width:15,height:15,accentColor:'var(--blue)',cursor:'pointer'}}),
+        h('span',null,
+          h('span',{style:{fontSize:12,fontWeight:700,color:'var(--blue)'}},'Incluir intereses del mes actual'),
+          h('span',{style:{display:'block',fontSize:11,color:'var(--text3)',marginTop:2,lineHeight:1.5}},
+            'Cobra por adelantado el interes del periodo en curso (',fmtUni(uni(cob.interesMes)),
+            ') antes de abonar a capital.'))),
+      cob.mora>0&&h('label',{style:{display:'flex',alignItems:'flex-start',gap:9,cursor:'pointer',
+        background:omitMora?'var(--yellow-bg)':'transparent',
+        border:'1px solid '+(omitMora?'var(--yellow-bd)':'var(--border)'),borderRadius:10,padding:'9px 11px'}},
+        h('input',{type:'checkbox',checked:omitMora,onChange:function(){setOmitMora(!omitMora);},
+          style:{marginTop:2,width:15,height:15,accentColor:'var(--yellow)',cursor:'pointer'}}),
+        h('span',null,
+          h('span',{style:{fontSize:12,fontWeight:700,color:omitMora?'var(--yellow)':'var(--text2)'}},
+            'No cobrar las cuotas vencidas — destinar todo a capital'),
+          h('span',{style:{display:'block',fontSize:11,color:'var(--text3)',marginTop:2,lineHeight:1.5}},
+            omitMora
+              ? 'Las cuotas vencidas siguen debiendose con sus intereses. Es una imputacion que decides vos como acreedor (art. 1653).'
+              : 'Por defecto el dinero cubre primero los intereses vencidos. Marca esto solo si pactaste imputar todo a capital.')))),
+
     h('div',{style:{display:'flex',gap:10}},
       h('div',{style:{flex:1}},h(Fld,{label:'Fecha del cobro'},
         h('input',{type:'date',value:fecha,onChange:function(e){ setFecha(e.target.value); },className:'inp'}))),
@@ -232,6 +320,7 @@ export function CobroModal(props){
       pasosUI,
       h('div',{style:{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:10,padding:'9px 12px',marginTop:9}},
         vis.intU>0&&linea('Intereses vencidos', fmtUni(vis.intU),'var(--red)'),
+        vis.mesU>0&&linea('Interes del mes en curso', fmtUni(vis.mesU),'var(--blue)'),
         vis.capMoraU>0&&linea('Capital de cuotas vencidas', fmtUni(vis.capMoraU),'var(--text2)'),
         vis.abonoU>0&&linea('Abono extraordinario a capital', fmtUni(vis.abonoU),'var(--green)'),
         h('div',{style:{height:1,background:'var(--border)',margin:'5px 0'}}),
@@ -245,6 +334,38 @@ export function CobroModal(props){
         h('button',{onClick:function(){ onRequestLiquidar(loan); },
           style:{background:'transparent',border:'1px solid var(--yellow-bd)',color:'var(--yellow)',borderRadius:8,padding:'6px 11px',fontSize:11,fontWeight:700,cursor:'pointer'}},
           'Ir a Liquidar deuda'))),
+
+    // ── OPCIONES DE RECALCULO (absorbidas del abono directo) ──
+    // Se dibujan SOLO si el cobro deja un abono extraordinario: sin abono el capital
+    // no baja, el cronograma no se regenera y estos radios no decidirian nada.
+    aplicaRecalc&&h('div',{style:{background:'var(--blue-bg)',border:'1px solid var(--blue-bd)',borderRadius:10,padding:'11px 12px'}},
+      h('div',{style:{fontSize:11,fontWeight:800,color:'var(--blue)',letterSpacing:.5,marginBottom:3}},
+        'QUE HACER CON EL CRONOGRAMA'),
+      h('div',{style:{fontSize:11,color:'var(--text3)',marginBottom:6,lineHeight:1.5}},
+        'El abono baja el capital. Elige como se reparte lo que queda.'),
+      [['mantener','Mantener plazo','Conserva las cuotas restantes. La cuota mensual baja.'],
+       ['modificarPlazo','Modificar plazo','Tu eliges el nuevo numero de cuotas restantes.'],
+       ['fijarCuota','Fijar valor de cuota','Tu eliges cuanto pagar de cuota; el plazo se ajusta.']]
+      .map(function(op){
+        return h('label',{key:op[0],style:{display:'flex',alignItems:'flex-start',gap:8,padding:'5px 0',cursor:'pointer'}},
+          h('input',{type:'radio',name:'cobroRecalc',checked:recalcMode===op[0],
+            onChange:function(){ setRecalcMode(op[0]); setRecalcInput(''); },
+            style:{marginTop:3,accentColor:'var(--blue)',cursor:'pointer'}}),
+          h('span',null,
+            h('span',{style:{fontSize:12,color:'var(--text)',fontWeight:600}},op[1]),
+            h('span',{style:{display:'block',fontSize:10.5,color:'var(--text3)',marginTop:1}},op[2])));
+      }),
+      recalcMode==='modificarPlazo'&&h('input',{type:'text',inputMode:'numeric',value:recalcInput,
+        onChange:function(e){ setRecalcInput(parseIntInput(e.target.value)); },
+        placeholder:'Nuevo numero de cuotas (ej: 3)',className:'inp mono',style:{marginTop:5}}),
+      recalcMode==='fijarCuota'&&h('div',null,
+        h('input',{type:'text',inputMode:'decimal',value:recalcInput,
+          onChange:function(e){ setRecalcInput(esUSD?parseDecimalInput(e.target.value):parseNum(e.target.value)); },
+          placeholder:esUSD?'Cuota fija en USD (ej: 250.00)':'Cuota fija en COP',className:'inp mono',style:{marginTop:5}}),
+        esUSD&&(+recalcInput)>0&&h('div',{style:{fontSize:10.5,color:'var(--text3)',marginTop:3}},
+          'Equivale a ',fmt(recalcValorCOP),' (TRM ',fmt(trm),')')),
+      cronoPreview&&cronoPreview.error&&h('div',{style:{marginTop:7,background:'var(--red-bg)',border:'1px solid var(--red-bd)',
+        borderRadius:8,padding:'8px 10px',fontSize:11,color:'var(--red)',lineHeight:1.5}},cronoPreview.error)),
 
     // ── PREVIEW DEL CRONOGRAMA ──
     cronoPreview&&h('div',{style:{marginTop:4}},
@@ -312,6 +433,7 @@ export function CobroModal(props){
       h('button',{onClick:onClose,style:{flex:1,background:'var(--bg3)',color:'var(--text2)',border:'1px solid var(--border)',borderRadius:12,padding:'12px 8px',fontSize:13,fontWeight:700,cursor:'pointer'}},'Cancelar'),
       h(ABtn,{color:'var(--green)',icon:'check',
         label:sending?'Registrando…':(plan&&plan.pasos.length>1?('Registrar cobro ('+plan.pasos.length+' pasos)'):'Registrar cobro'),
-        disabled:!plan||!plan.ok||!plan.pasos.length||faltanCamposUSD||sending,
+        disabled:!plan||!plan.ok||!plan.pasos.length||faltanCamposUSD||sending||
+          !!(cronoPreview&&cronoPreview.error),
         onClick:submit})));
 }

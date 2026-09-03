@@ -67,3 +67,44 @@ export function filasPreview(montoCOP, r, nFilas, soloIntereses, cuotaNominal){
   }
   return rows;
 }
+
+// ── PREVIEW DEL RECALCULO TRAS UN ABONO ──────────────────────────────────────
+// Que le pasa al cronograma cuando entra un abono a capital, segun la opcion que
+// elija el usuario. Extraido VERBATIM de `AbonoModal` en la fusion del modal de
+// cobro (v2.9.6): las dos superficies lo consumen, de modo que no pueden anunciar
+// cuotas distintas para el mismo abono.
+//
+//   saldo   — capital que queda DESPUES del abono
+//   r       — tasa del periodo (ya convertida por frecuencia)
+//   nActual — cuotas restantes hoy, para el modo 'mantener'
+//   modo    — 'mantener' | 'modificarPlazo' | 'fijarCuota'
+//   valor   — nuevas cuotas (modificarPlazo) o cuota fija en COP (fijarCuota)
+//
+// Devuelve `error` en vez de lanzar: el llamador lo pinta y apaga el boton. Una
+// cuota que no cubre ni el interes del primer periodo NUNCA salda la deuda, y ese
+// es el unico caso en que el modelo no tiene solucion.
+export function previewRecalculo(saldo, r, nActual, modo, valor){
+  if(!(saldo>0)) return null;
+  var interesP=Math.round(saldo*r);
+  if(modo==='modificarPlazo'){
+    var nN=parseInt(valor,10);
+    if(!nN||nN<1) return {modo:modo,cuota:0,nCuotas:0,interesP:interesP,ultimaResidual:0,
+      error:'Ingresa un numero de cuotas valido (>= 1).'};
+    return {modo:modo,cuota:Math.round(_pmt(r,nN,saldo)),nCuotas:nN,interesP:interesP,ultimaResidual:0,error:null};
+  }
+  if(modo==='fijarCuota'){
+    var pmtFijo=Math.round(+valor||0);
+    if(pmtFijo<=0) return {modo:modo,cuota:0,nCuotas:0,interesP:interesP,ultimaResidual:0,
+      error:'Ingresa una cuota valida (> 0).'};
+    if(pmtFijo<=interesP) return {modo:modo,cuota:pmtFijo,nCuotas:0,interesP:interesP,ultimaResidual:0,
+      error:'La cuota debe superar los intereses del primer periodo. Con esta cuota la deuda nunca se saldaria.'};
+    var nEnt=Math.ceil(_nper(r,pmtFijo,saldo));
+    // Saldo tras (nEnt-1) cuotas iguales: lo que queda es la ultima, residual.
+    var sR=saldo, resid=0;
+    for(var i=0;i<nEnt-1;i++){ sR=sR-(pmtFijo-sR*r); }
+    if(sR>0) resid=Math.round((sR+sR*r)*100)/100;
+    return {modo:modo,cuota:pmtFijo,nCuotas:nEnt,interesP:interesP,ultimaResidual:resid,error:null};
+  }
+  var n=Math.max(1, nActual||1);
+  return {modo:'mantener',cuota:Math.round(_pmt(r,n,saldo)),nCuotas:n,interesP:interesP,ultimaResidual:0,error:null};
+}

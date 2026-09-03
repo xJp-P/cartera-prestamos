@@ -71,10 +71,29 @@ export function contextoCascada(loan, allPays){
   var regularConsumed=lp.filter(function(p){
     return !esAbono(p)&&(p.estadoPago==='Pagado'||p.estadoPago==='En Mora');
   }).length;
+  // La cuota del PERIODO EN CURSO: la regular Pendiente mas proxima. Es la unica
+  // contra la que tiene sentido cobrar "el interes del mes" — ese interes es suyo,
+  // no una obligacion nueva, asi que se cobra como un parcial sobre ella y no como
+  // un cargo inventado. Si estuviera En Mora ya la recoge el paso A.
+  var proximaCuota=lp.filter(function(p){ return !esAbono(p)&&p.estadoPago==='Pendiente'; })
+    .sort(function(a,b){
+      var d=String(a.fechaPago||'').localeCompare(String(b.fechaPago||''));
+      return d!==0?d:((a.cuotaN||0)-(b.cuotaN||0));
+    })[0]||null;
+  // Lo que queda por cobrar de INTERES en esa cuota. Se descuenta lo ya abonado con
+  // la misma cascada que usa `imputarCobros` (interes primero), para no cobrar dos
+  // veces un interes que un parcial anterior ya cubrio.
+  var interesMesPend=0;
+  if(proximaCuota){
+    var intTot=r0(proximaCuota.interesPeriodo);
+    var yaPag=r0(proximaCuota.partialPaid||0);
+    interesMesPend=Math.max(0, intTot-Math.min(yaPag, intTot));
+  }
   return {
     lp:lp, esUSD:esUSD, trm:trm, originalCOP:originalCOP, esSingleCuota:esSingleCuota,
     capPagadas:capPagadas, moraCap:moraCap, saldoAbonable:saldoAbonable,
     moraCuotas:moraCuotas, regularConsumed:regularConsumed,
+    proximaCuota:proximaCuota, interesMesPend:interesMesPend,
     capitalPendiente:Math.max(0, originalCOP-capPagadas),
   };
 }
@@ -92,9 +111,24 @@ export function contextoCascada(loan, allPays){
 // backend sobre el mismo input. Hacerlo al reves (cascada en COP y luego dividir)
 // deja al backend recalculando una obligacion distinta de la planeada, que en el
 // borde de "saldar la cuota exacta" se pasa por unos pesos y produce un 400.
-export function planCascada(loan, allPays, entrada){
+// `opts` — los DOS overrides que la fusion del modal trajo del abono directo:
+//   omitirMora        : salta el paso A y manda todo a capital. Es la imputacion que
+//                       el art. 1653 permite CONSENTIR al acreedor, y la unica cosa
+//                       que el boton "Abono directo a capital" hacia y la cascada no.
+//                       Queda como decision explicita y auditable, no como un camino
+//                       paralelo escondido en otro modal.
+//   incluirInteresMes : cobra por adelantado el interes del periodo EN CURSO, que aun
+//                       no vence. Va en direccion CONTRARIA al override anterior: no
+//                       exceptua el 1653, lo refuerza cobrando mas interes antes del
+//                       capital.
+// Los dos son opcionales y por defecto `false`: sin ellos el plan es identico al de
+// v2.7.0, que es lo que mantiene verdes las secciones A-G de `cascada-cobro`.
+export function planCascada(loan, allPays, entrada, opts){
   var ctx=contextoCascada(loan, allPays);
   var esUSD=ctx.esUSD, trm=ctx.trm;
+  var o=opts||{};
+  var omitirMora=!!o.omitirMora;
+  var incluirInteresMes=!!o.incluirInteresMes;
   var pasos=[];
   var err=null;
 
@@ -114,7 +148,7 @@ export function planCascada(loan, allPays, entrada){
   // backend: se calcula aqui SOLO para mostrarlo, y `imputarCobros` lo reproduce
   // con la misma regla cuando la fila ya este persistida.
   var moraPagadaCap=0;   // capital de cuotas que quedaran SALDADAS (cambia de bucket)
-  for(var i=0;i<ctx.moraCuotas.length&&restante>EPS;i++){
+  for(var i=0;omitirMora?false:(i<ctx.moraCuotas.length&&restante>EPS);i++){
     var p=ctx.moraCuotas[i];
     var pendCOP=Math.max(0, r0(p.cuotaTotal)-r0(p.partialPaid||0));
     if(pendCOP<=0) continue;
@@ -155,6 +189,36 @@ export function planCascada(loan, allPays, entrada){
     });
     restante=r2(restante-aplica);
     if(salda) moraPagadaCap+=r0(p.abonoCapital);
+  }
+
+  // ── PASO A2 — interes del periodo EN CURSO (opcional) ──────────────────────
+  // Se cobra como un PARCIAL sobre la proxima cuota, no como una obligacion nueva:
+  // ese interes YA existe dentro de esa cuota, asi que pagarlo por adelantado es
+  // literalmente abonar a ella. Modelarlo de otra forma —por ejemplo colgandolo de
+  // la fila del abono, como hace la liquidacion con `intExtra`— lo COBRARIA DOS
+  // VECES: la cuota regenerada seguiria pidiendo su interes completo.
+  //
+  // Va DESPUES de la mora y ANTES del abono: el orden que pidio el negocio, y el
+  // unico coherente con el art. 1653 (todo el interes exigible antes que el capital).
+  if(incluirInteresMes&&ctx.proximaCuota&&ctx.interesMesPend>0&&restante>EPS){
+    var intMesCOP=ctx.interesMesPend;
+    var intMesU=esUSD?aUSD(intMesCOP):intMesCOP;
+    var apMes=Math.min(restante, intMesU);
+    var cubreMes=(intMesU-apMes)<=EPS;
+    if(cubreMes) apMes=intMesU;
+    // Solo se ancla al peso exacto cuando el dinero cubre TODO el interes del mes;
+    // por debajo se convierte normal, igual que un parcial cualquiera.
+    var apMesCOP=cubreMes?intMesCOP:(esUSD?aCOP(apMes):apMes);
+    var pendProxCOP=Math.max(0, r0(ctx.proximaCuota.cuotaTotal)-r0(ctx.proximaCuota.partialPaid||0));
+    pasos.push({
+      tipo:'partial', esInteresMes:true,
+      payId:ctx.proximaCuota.id, cuotaN:ctx.proximaCuota.cuotaN, fechaPago:ctx.proximaCuota.fechaPago,
+      obligacionCOP:apMesCOP, obligacionUSD:esUSD?apMes:0,
+      interes:apMesCOP, capital:0,
+      // Cobrar el interes NO salda la cuota: su capital sigue debiendose.
+      salda:false, restanteCuota:Math.max(0, pendProxCOP-apMesCOP),
+    });
+    restante=r2(restante-apMes);
   }
 
   // ── Techo del abono DESPUES del paso A ─────────────────────────────────────
@@ -209,14 +273,21 @@ export function planCascada(loan, allPays, entrada){
     pasos.forEach(function(x){ x.cajaCOP=x.obligacionCOP; });
   }
 
-  var totInt=pasos.reduce(function(s,x){ return s+x.interes; },0);
+  // El interes del mes se totaliza APARTE del vencido: en el desglose y en el recibo
+  // son rubros distintos (uno estaba exigible, el otro no) y confundirlos haria que
+  // el papel afirmara que se cobro mora que no existia.
+  var totIntMora=pasos.filter(function(x){ return x.tipo==='partial'&&!x.esInteresMes; })
+    .reduce(function(s,x){ return s+x.interes; },0);
+  var totIntMes=pasos.filter(function(x){ return x.esInteresMes; })
+    .reduce(function(s,x){ return s+x.interes; },0);
+  var totInt=totIntMora+totIntMes;
   var totCapMora=pasos.filter(function(x){ return x.tipo==='partial'; }).reduce(function(s,x){ return s+x.capital; },0);
   var totAbono=pasos.filter(function(x){ return x.tipo==='abono'; }).reduce(function(s,x){ return s+x.obligacionCOP; },0);
 
   return {
     ok:!err, error:err, pasos:pasos, ctx:ctx,
     totales:{
-      interesMora:totInt, capitalMora:totCapMora, abonoCapital:totAbono,
+      interesMora:totIntMora, interesMes:totIntMes, capitalMora:totCapMora, abonoCapital:totAbono,
       aplicado:aplicadoCOP, sobrante:sobranteCOP,
       caja:esUSD?r0(entrada.cajaCOP):aplicadoCOP,
     },
@@ -233,7 +304,7 @@ export function planCascada(loan, allPays, entrada){
 
 function vacio(ctx, msg){
   return { ok:false, error:msg, pasos:[], ctx:ctx,
-    totales:{interesMora:0,capitalMora:0,abonoCapital:0,aplicado:0,sobrante:0,caja:0},
+    totales:{interesMora:0,interesMes:0,capitalMora:0,abonoCapital:0,aplicado:0,sobrante:0,caja:0},
     saldoAbonableDespues:ctx.saldoAbonable, saldoTrasCascada:ctx.saldoAbonable,
     moraRestante:ctx.moraCuotas.reduce(function(s,p){ return s+Math.max(0,(p.cuotaTotal||0)-(p.partialPaid||0)); },0) };
 }
@@ -253,5 +324,8 @@ export function cobrableTotal(loan, allPays){
   // baja, porque alli la mora no se restaba.
   var capPagDespues=ctx.capPagadas+ctx.moraCuotas.reduce(function(s,p){ return s+Math.round(p.abonoCapital); },0);
   var techo=Math.max(0, ctx.originalCOP-capPagDespues);
-  return { mora:mora, abonable:techo, total:mora+techo, ctx:ctx };
+  // `interesMes` NO entra en `total`: es OPCIONAL (depende de un checkbox), asi que
+  // sumarlo al techo por defecto anunciaria como cobrable algo que el usuario todavia
+  // no decidio cobrar. El modal lo suma cuando el check esta activo.
+  return { mora:mora, abonable:techo, total:mora+techo, interesMes:ctx.interesMesPend, ctx:ctx };
 }

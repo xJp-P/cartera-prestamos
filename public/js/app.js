@@ -52,6 +52,7 @@ import { DevView } from './vistas/DevView.js';
 import { DebtorModal } from './modales/DebtorModal.js';
 import { PayModal } from './modales/PayModal.js';
 import { PreflightMoraModal } from './modales/PreflightMoraModal.js';
+import { planCascada } from './core/cascada.js';
 import { AbonoModal } from './modales/AbonoModal.js';
 import { CobroModal } from './modales/CobroModal.js';
 import { CondonarModal } from './modales/CondonarModal.js';
@@ -500,7 +501,46 @@ function App(){
   //
   // Cada paso es su propia entrada en el journal: si algo queda a medias, se
   // deshace pieza por pieza desde el Historial.
-  function _doCobroCascada(loanId,plan,fecha,obs,genRecibo){
+  // Puerta del cobro en cascada. Hace DOS cosas antes de ejecutar:
+  //   1. si el cobro trae recalculo de plazo/cuota y hay cuotas Pendientes a punto de
+  //      vencer, pasa por el PreflightMoraModal — la misma proteccion que el abono
+  //      directo tenia y que la cascada no heredaba: regenerar el cronograma ABSORBE
+  //      esas cuotas en vez de dejarlas como deuda independiente;
+  //   2. si el usuario elige marcarlas En Mora, RE-PLANIFICA con datos frescos. Es
+  //      obligatorio, no un lujo: al pasar una cuota a En Mora su capital cambia de
+  //      bucket y el techo del abono BAJA, asi que ejecutar el plan viejo lo haria
+  //      rebotar con un 400 a mitad de la cadena. El dinero recibido no cambia; lo
+  //      que cambia es contra que se aplica, y ahora incluye esas cuotas.
+  function _doCobroCascada(loanId,plan,fecha,obs,genRecibo,extra){
+    var ex=extra||{};
+    var rc={modo:(ex.modo||'mantener'),valor:(ex.valor===undefined?null:ex.valor)};
+    var necesitaPre=(rc.modo==='modificarPlazo'||rc.modo==='fijarCuota')&&
+      plan.pasos.some(function(p){ return p.tipo==='abono'; });
+    var enRiesgo=necesitaPre?_cuotasEnRiesgo(pays,loanId):[];
+    if(enRiesgo.length===0) return _ejecutarCascada(loanId,plan,fecha,obs,genRecibo,rc);
+    var loanObj=loans.find(function(l){ return l.id===loanId; });
+    setPreflightDlg({
+      cuotas:enRiesgo, loan:loanObj,
+      onMarkMora:function(){
+        return _marcarMoraBatch(enRiesgo).then(function(){
+          setPreflightDlg(null);
+          return reload().then(function(fresh){
+            var lFresh=(fresh&&fresh[0]||[]).find(function(l){ return l.id===loanId; })||loanObj;
+            var pFresh=(fresh&&fresh[1])||[];
+            // Mismo dinero, mismos overrides: solo se recalcula el reparto.
+            var nuevo=ex.entrada?planCascada(lFresh,pFresh,ex.entrada,ex.opts||{}):plan;
+            if(!nuevo||!nuevo.ok||!nuevo.pasos.length){
+              return {ok:false,hechos:[],error:'Se marcaron las cuotas en mora, pero el reparto ya no cabe. Revisa el credito y vuelve a registrar el cobro.',pasoFallido:null};
+            }
+            return _ejecutarCascada(loanId,nuevo,fecha,obs,genRecibo,rc);
+          });
+        });
+      },
+      onContinue:function(){ setPreflightDlg(null); return _ejecutarCascada(loanId,plan,fecha,obs,genRecibo,rc); },
+      onCancel:function(){ setPreflightDlg(null); }
+    });
+  }
+  function _ejecutarCascada(loanId,plan,fecha,obs,genRecibo,rc){
     var fromDeudor=cobroModal&&cobroModal.fromDeudor;
     // Estado PREVIO, capturado antes de la primera escritura: es lo que el recibo
     // imprime como "antes" del saldo y de la cuota. Despues de la cadena ya no existe.
@@ -516,10 +556,13 @@ function App(){
           // /abono: `monto` es el CAPITAL (a TRM pactada) y `montoCOPRecibido` la CAJA.
           // recalcMode 'mantener' = conserva el plazo y baja la cuota, que es lo que el
           // preview del modal dibuja con `filasPreview`.
+          // `recalcMode` ya no esta clavado en 'mantener': lo decide el usuario en el
+          // mismo modal (opciones absorbidas del abono directo). El preview que aprobo
+          // se dibujo con `previewRecalculo`, el mismo helper, con este mismo modo.
           : API.post('/api/loans/'+loanId+'/abono',{
               monto:paso.obligacionCOP,fecha:fecha,observaciones:obs,
               montoUSD:paso.obligacionUSD||0,montoCOPRecibido:paso.cajaCOP,
-              liquidar:false,recalcMode:'mantener',recalcValor:null,intExtra:0});
+              liquidar:false,recalcMode:rc.modo,recalcValor:rc.valor,intExtra:0});
         return pet.then(function(r){
           if(!r||r.error){
             estado.ok=false;

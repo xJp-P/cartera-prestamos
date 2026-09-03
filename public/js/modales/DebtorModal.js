@@ -540,23 +540,11 @@ export function DebtorModal(props){
                   // por defecto, que era como se dejaba sin cobrar el interes ya causado.
                   h('button',{onClick:function(e){e.stopPropagation();if(esDiario(l)&&onCorte){onCorte(l);}else if(onCobro){onCobro(l);}else{onAbono(l);}},style:btnPrimary},
                     h(Ico,{name:esDiario(l)?'receipt':'dollar',size:15,color:'#fff',sw:2.2}),esDiario(l)?'Registrar corte':'Registrar cobro'),
-                  // ...pero solo cuando de verdad puede hacer algo distinto. Sin mora y sin
-                  // cronograma amortizable, la cascada degenera EXACTAMENTE en un abono
-                  // simple (un solo paso de tipo `abono`, verificado en la seccion C de
-                  // `cascada-cobro`), asi que el secundario seria un duplicado visual.
-                  //
-                  // Se muestra en dos escenarios, cada uno por una capacidad concreta que la
-                  // cascada NO tiene:
-                  //   - con MORA viva: la cascada siempre cobra primero el interes vencido.
-                  //     Mandar el 100% a capital es una decision valida del acreedor (art.
-                  //     1653 permite consentir esa imputacion) y solo se puede por aqui.
-                  //   - en CAPITAL + INTERESES: `AbonoModal` deja elegir que pasa con el
-                  //     cronograma despues del abono (mantener plazo / modificar plazo /
-                  //     fijar cuota), mientras `_doCobroCascada` manda `recalcMode:'mantener'`
-                  //     fijo en el codigo.
-                  !esDiario(l)&&onCobro&&(enMora.length>0||l.modalidad==='Capital + Intereses')&&
-                  h('button',{onClick:function(e){e.stopPropagation();onAbono(l);},style:Object.assign({},btnNeutral,{marginTop:6})},
-                    h(Ico,{name:'trending',size:15,color:'var(--text2)',sw:2.2}),'Abono directo a capital'),
+                  // v2.9.6 — el secundario "Abono directo a capital" se ELIMINO. Sus tres
+                  // capacidades viven ahora dentro de "Registrar cobro": las opciones de
+                  // recalculo, el pre-flight de mora y el override `omitirMora`, que es el
+                  // que manda el 100% a capital sin cobrar lo vencido (art. 1653). Tener dos
+                  // puertas para el mismo dinero era justo lo que causaba el Bug #52.
                   h('button',{onClick:function(e){e.stopPropagation();onRequestLiquidar(l);},style:Object.assign({},btnSecondary,{marginTop:6})},
                     h(Ico,{name:'check',size:15,color:'var(--green)',sw:2.4}),'Liquidar deuda'),
                   // Cobro del interes devengado. Solo en credito abierto: en las otras 4

@@ -620,9 +620,17 @@ export const CHANGELOGS = {
     'Mis Deudas: cada deuda muestra ahora su avance de pago sin abrirla. Una linea fina en el borde inferior de la tarjeta indica cuanto llevas abonado; antes habia que desplegar el detalle para verlo.',
     'Mis Deudas: al desplegar un acreedor, sus deudas ya no quedan pegadas a la tarjeta del acreedor siguiente. Ahora hay una separacion clara que deja ver donde termina uno y empieza el otro.'
   ],
-  '2.9.5': [
-    'En el detalle de un prestamo, "Abonos a capital recibidos" mostraba el monto en pesos pintado de azul. El azul esta reservado a la linea en dolares, asi que en un prestamo en pesos no significaba nada. Ahora el peso va en el color normal y el azul queda solo para el dolar. Se corrigio tambien en el resumen de los prestamos cerrados.',
-    'La "Proyeccion de ganancias" y el bloque "Recaudado a la fecha" ya muestran siempre la misma cifra de intereses cobrados. Si habia un pago parcial en curso, la proyeccion no lo contaba y los dos bloques del mismo prestamo se contradecian.',
-    'El boton "Abono directo a capital" ahora solo aparece cuando de verdad hace algo distinto: en prestamos con cuotas vencidas, o de tipo Capital + Intereses. En los demas casos "Registrar cobro" hace exactamente lo mismo, asi que el boton sobraba y solo generaba dudas.'
+  // 2.9.5 y 2.9.6 se desarrollaron seguidas y NUNCA se publicaron por separado: lo
+  // ultimo que recibio el usuario final es 2.9.4, asi que sus novedades van juntas
+  // aqui para que una sola actualizacion las anuncie todas.
+  '2.9.6': [
+    'Registrar cobro es ahora la unica puerta para el dinero que entra. Absorbio todo lo que hacia "Abono directo a capital", que desaparece: ya no hay que elegir entre dos ventanas que repartian el dinero con criterios distintos.',
+    'Desde la misma ventana puedes decidir que pasa con el cronograma despues de abonar a capital: mantener el plazo y bajar la cuota, cambiar el numero de cuotas, o fijar cuanto quieres que valga la cuota. Antes esto solo existia en la ventana vieja.',
+    'Esas opciones aparecen solo cuando el dinero alcanza para abonar a capital. Si el cobro apenas cubre intereses o cuotas vencidas, el cronograma no cambia y el bloque no se muestra.',
+    'Nuevo: "Incluir intereses del mes actual". Cobra por adelantado el interes del periodo en curso antes de destinar el resto a capital. Aparece como un movimiento aparte, marcado "por adelantado", para que el recibo no lo confunda con una cuota vencida.',
+    'Nuevo: "No cobrar las cuotas vencidas — destinar todo a capital". Para cuando pactas con el cliente que ese dinero va integro a capital. Las cuotas vencidas siguen debiendose con sus intereses.',
+    'Si el cobro cambia el plazo o la cuota y hay cuotas a punto de vencer, la app vuelve a avisarte antes de regenerar el cronograma, como hacia el abono directo. Si eliges marcarlas vencidas, el reparto del dinero se recalcula solo.',
+    'En el detalle de un prestamo, "Abonos a capital recibidos" mostraba el monto en pesos pintado de azul. El azul esta reservado a la linea en dolares, asi que en un prestamo en pesos no significaba nada. Ahora el peso va en el color normal. Se corrigio tambien en el resumen de los prestamos cerrados.',
+    'La "Proyeccion de ganancias" y el bloque "Recaudado a la fecha" ya muestran siempre la misma cifra de intereses cobrados. Si habia un pago parcial en curso, la proyeccion no lo contaba y los dos bloques del mismo prestamo se contradecian.'
   ]
 };

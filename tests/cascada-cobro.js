@@ -994,6 +994,86 @@ async function ejecutarPlan(loanId, plan, fecha, obs, port) {
         efReal !== efNominal, 'anclada=' + efReal + ' nominal=' + efNominal);
       R.eq('H el efecto TRM se mide contra la obligacion extinguida (anclada)', efImpreso, efReal);
 
+      // ── 4b. LA PUERTA UNICA (v2.9.6) ────────────────────────────────────────
+      // El modal absorbio lo que hacia "Abono directo a capital", que ya no existe.
+      // Se comprueba que las tres capacidades absorbidas SIGUEN existiendo, porque el
+      // riesgo de una fusion es borrar el boton y con el la funcion:
+      //   a. `omitirMora`        -> un solo paso de abono (el abono directo de antes);
+      //   b. `incluirInteresMes` -> aparece el paso del periodo en curso, y NO se
+      //      mezcla con la mora en el desglose;
+      //   c. las OPCIONES DE RECALCULO solo se dibujan si hay abono extraordinario.
+      {
+        // Estado del modal por POSICION: los 9 primeros son los de v2.7.0 y los 4
+        // ultimos los de la fusion (incMes, omitMora, recalcMode, recalcInput).
+        const correrFusion = (tecleado, cajaCOP, incMes, omitMora, modo, valor) => {
+          sembrar(['', parseDecimalH(tecleado), String(cajaCOP), '2026-08-23', '',
+                   false, true, null, true, !!incMes, !!omitMora, modo || 'mantener', valor || '']);
+          const arbol = pintar(CobroModalReal({
+            loan: loanH, pays: paysH, onConfirm: () => Promise.resolve({ ok: true }), onClose: () => {},
+          }));
+          return { arbol, txts: textos(arbol) };
+        };
+        const hayTexto = (txts, re) => txts.some(t => re.test(t));
+
+        // Monto que cubre la mora y deja remanente: es el unico que ejercita los tres.
+        const grande = Math.min(techo, r2H(cobH.mora / trmH) + 150).toFixed(2);
+
+        // (a) omitirMora: el dinero va integro a capital, sin tocar lo vencido.
+        const vOmit = correrFusion(grande, 1500000, false, true);
+        R.check('H (fusion) con `omitirMora` no se cobra ninguna cuota vencida',
+          !hayTexto(vOmit.txts, /vencida$/), vOmit.txts.filter(t => /vencida/.test(t)).join(' | '));
+        R.check('H (fusion) con `omitirMora` el plan es un abono a capital',
+          hayTexto(vOmit.txts, /^Abono extraordinario a capital$/));
+
+        // (b) incluirInteresMes: paso propio y rubro propio.
+        const vMes = correrFusion(grande, 1500000, true, false);
+        const tieneMes = hayTexto(vMes.txts, /^Interes del mes · cuota #\d+$/);
+        R.check('H (fusion) con `incluirInteresMes` aparece el paso del periodo en curso',
+          tieneMes, vMes.txts.filter(t => /Interes del mes/.test(t)).join(' | '));
+        if (tieneMes) {
+          const rMes = trasEtiqueta(vMes.txts, /^Interes del mes en curso$/);
+          const rIntV = trasEtiqueta(vMes.txts, /^Intereses vencidos$/);
+          const rTotV = trasEtiqueta(vMes.txts, /^Total aplicado$/);
+          const rCapV = trasEtiqueta(vMes.txts, /^Capital de cuotas vencidas$/);
+          const rAboV = trasEtiqueta(vMes.txts, /^Abono extraordinario a capital$/);
+          R.check('H (fusion) el interes del mes se declara APARTE del vencido',
+            !isNaN(rMes) && rMes > 0 && rMes !== rIntV, 'mes=' + rMes + ' vencido=' + rIntV);
+          // La identidad tiene que seguir cerrando con el rubro nuevo dentro.
+          const suma = r2H(rIntV + rMes + (isNaN(rCapV) ? 0 : rCapV) + (isNaN(rAboV) ? 0 : rAboV));
+          R.eq('H (fusion) los cuatro rubros siguen sumando el total aplicado', suma, rTotV);
+        }
+        // ANTI-TRIVIAL: sin el check, ese paso NO puede aparecer.
+        R.check('H ANTI-TRIVIAL: sin el check no hay paso de interes del mes',
+          !hayTexto(correrFusion(grande, 1500000, false, false).txts, /^Interes del mes · cuota #\d+$/));
+
+        // (c) las opciones de recalculo dependen de que HAYA abono.
+        const soloMora = r2H(cobH.mora / trmH).toFixed(2);
+        const vSinAbono = correrFusion(soloMora, 1300000, false, false);
+        const vConAbono = correrFusion(grande, 1500000, false, false);
+        const tieneRecalc = txts => hayTexto(txts, /^QUE HACER CON EL CRONOGRAMA$/);
+        R.check('H (fusion) sin abono extraordinario NO se ofrecen opciones de recalculo',
+          !tieneRecalc(vSinAbono.txts));
+        R.check('H (fusion) con abono extraordinario SI se ofrecen',
+          tieneRecalc(vConAbono.txts));
+
+        // El preview obedece al modo: acortar el plazo a 1 deja UNA fila.
+        const vPlazo = correrFusion(grande, 1500000, false, false, 'modificarPlazo', '1');
+        const filasPlazo = nodos(vPlazo.arbol, 'tr')
+          .map(tr => nodos(tr, 'td').map(td => numH(textos(td).join(''))))
+          .filter(c => c.length === 6 && c.slice(2).every(v => !isNaN(v)));
+        R.eq('H (fusion) con `modificarPlazo`=1 el preview dibuja una sola cuota', filasPlazo.length, 1);
+        if (filasPlazo.length === 1) {
+          R.eq('H (fusion) y esa cuota salda el credito (saldo final 0)', filasPlazo[0][5], 0);
+          R.eq('H (fusion) la identidad se mantiene en el preview del modo elegido',
+            r2H(filasPlazo[0][2] + filasPlazo[0][3]), filasPlazo[0][4]);
+        }
+        // Una cuota fija que no cubre ni el interes del primer periodo no salda nunca:
+        // el modal tiene que decirlo y NO dejar confirmar.
+        const vMal = correrFusion(grande, 1500000, false, false, 'fijarCuota', '1');
+        R.check('H (fusion) una cuota fija imposible se rechaza con un aviso',
+          hayTexto(vMal.txts, /nunca se saldaria/i), vMal.txts.filter(t => /cuota/i.test(t)).slice(0, 3).join(' | '));
+      }
+
       // ── 5. El modal y el recibo imprimen los mismos numeros ─────────────────
       // Mismos pasos, dos renderizadores distintos: es la unica forma de fijar que
       // no vuelvan a divergir. Se alimenta del plan porque en un cobro con exito
