@@ -619,5 +619,10 @@ export const CHANGELOGS = {
     'El "efecto TRM" que se muestra al cobrar en dolares se calcula contra la deuda que realmente se extingue, no contra una cifra aproximada: antes se desviaba por unos pesos y, cuando la TRM del dia coincidia con la pactada, llegaba a mostrar cero habiendo diferencia.',
     'Mis Deudas: cada deuda muestra ahora su avance de pago sin abrirla. Una linea fina en el borde inferior de la tarjeta indica cuanto llevas abonado; antes habia que desplegar el detalle para verlo.',
     'Mis Deudas: al desplegar un acreedor, sus deudas ya no quedan pegadas a la tarjeta del acreedor siguiente. Ahora hay una separacion clara que deja ver donde termina uno y empieza el otro.'
+  ],
+  '2.9.5': [
+    'En el detalle de un prestamo, "Abonos a capital recibidos" mostraba el monto en pesos pintado de azul. El azul esta reservado a la linea en dolares, asi que en un prestamo en pesos no significaba nada. Ahora el peso va en el color normal y el azul queda solo para el dolar. Se corrigio tambien en el resumen de los prestamos cerrados.',
+    'La "Proyeccion de ganancias" y el bloque "Recaudado a la fecha" ya muestran siempre la misma cifra de intereses cobrados. Si habia un pago parcial en curso, la proyeccion no lo contaba y los dos bloques del mismo prestamo se contradecian.',
+    'El boton "Abono directo a capital" ahora solo aparece cuando de verdad hace algo distinto: en prestamos con cuotas vencidas, o de tipo Capital + Intereses. En los demas casos "Registrar cobro" hace exactamente lo mismo, asi que el boton sobraba y solo generaba dudas.'
   ]
 };

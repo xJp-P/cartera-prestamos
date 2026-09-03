@@ -256,7 +256,12 @@ export function DebtorModal(props){
         var origCOP=l.moneda==='USD'?Math.round(l.montoOrigen*l.trmAcordada):Math.round(l.montoOrigen);
         var todoCapPag=lp.filter(function(p){return p.estadoPago==='Pagado';}).reduce(function(s,p){return s+p.abonoCapital;},0);
         var saldo=Math.max(0,origCOP-todoCapPag);
-        var intCobrados=regulares.filter(function(p){return p.estadoPago==='Pagado';}).reduce(function(s,p){return s+p.interesPeriodo;},0);
+        // NOTA: aqui vivia `intCobrados` — el interes de las cuotas marcadas Pagado, a
+        // valor de cronograma. Era "lo cobrado" segun la definicion vieja, la que NO ve
+        // los pagos parciales en curso. Al migrar la PROYECCION a la imputacion real se
+        // quedo sin un solo consumidor, y dejarla ahi era una trampa: es exactamente la
+        // cifra que reintroduce el defecto si alguien la reusa creyendola buena.
+        // Quien necesite "cuanto interes entro de verdad" usa `recIntHoy`.
         var partialPend=regulares.filter(function(p){return p.estadoPago!=='Pagado';}).reduce(function(s,p){return s+(p.partialPaid||0);},0);
         // Fase 2: imputacion agregada del prestamo (cascada interes -> capital, ver imputarCobros).
         // Es la base de TODA cifra de "lo cobrado" que se muestra abajo, de modo que el bloque
@@ -279,7 +284,6 @@ export function DebtorModal(props){
         var gananciaTRMReg=esUSD?regulares.filter(function(p){return p.estadoPago==='Pagado'&&p.montoCOPRecibido&&p.montoCOPRecibido>0;}).reduce(function(s,p){return s+(p.montoCOPRecibido-p.cuotaTotal);},0):0;
         var gananciaTRMAb=esUSD?lp.filter(function(p){return esAbono(p)&&p.estadoPago==='Pagado'&&p.montoUSDRecibido&&p.montoUSDRecibido>0;}).reduce(function(s,p){return s+(p.montoCOPRecibido-(p.montoUSDRecibido*l.trmAcordada));},0):0;
         var gananciaTRM=Math.round(gananciaTRMReg+gananciaTRMAb);
-        var gananciaTotal=intCobrados+gananciaTRM;
         var isExp=expLoan===l.id;
         // Próxima cuota
         var proxCuota=pendientes.sort(function(a,b){return a.fechaPago.localeCompare(b.fechaPago);})[0];
@@ -453,8 +457,8 @@ export function DebtorModal(props){
                     return [
                       row('Cobrado hasta hoy',
                         h('div',null,
-                          h('div',{className:'mono',style:{fontSize:13,color:'var(--green)',fontWeight:500}},'+'+fmt(intCobrados)),
-                          esUSD&&intCobrados>0&&h('div',{className:'mono',style:{fontSize:10,color:'var(--blue)'}},copToUsd(intCobrados,l.trmAcordada))),
+                          h('div',{className:'mono',style:{fontSize:13,color:'var(--green)',fontWeight:500}},'+'+fmt(recIntHoy)),
+                          esUSD&&recIntHoy>0&&h('div',{className:'mono',style:{fontSize:10,color:'var(--blue)'}},copToUsd(recIntHoy,l.trmAcordada))),
                         'Ganancia acumulada por intereses',{first:true,key:'proy-cob'}),
                       row('Renta mensual',
                         h('div',null,
@@ -464,12 +468,22 @@ export function DebtorModal(props){
                     ];
                   }
                   var gananciaEsperada=l.modalidad==='Pago Unico'?(+l.gananciaFija||0):regulares.reduce(function(s,p){return s+p.interesPeriodo;},0);
-                  var pctProy=gananciaEsperada>0?Math.min(100,Math.round(intCobrados/gananciaEsperada*100)):0;
+                  // COBRADO = imputacion real (`recIntHoy`), la MISMA cifra que muestra
+                  // RECAUDADO A LA FECHA. Antes este bloque usaba `intCobrados`, que solo
+                  // cuenta cuotas ya marcadas Pagado: con un pago parcial en curso los dos
+                  // bloques del mismo modal se contradecian (medido: $147.739 sobre un
+                  // credito real). Es el mismo defecto que la v2.3.0 erradico de RECAUDADO
+                  // (Bug #45) y que aqui habia quedado sin migrar.
+                  //
+                  // La ESPERADA sigue siendo contractual —el interes del cronograma— porque
+                  // es la meta contra la que se compara; lo que tenia que cambiar es el
+                  // numerador, no el denominador.
+                  var pctProy=gananciaEsperada>0?Math.min(100,Math.round(recIntHoy/gananciaEsperada*100)):0;
                   return [
                     h('div',{key:'proy-bar',style:{padding:'8px 0 4px'}},
                       h('div',{style:{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}},
                         h('span',{style:{color:'var(--green)',fontWeight:600}},pctProy+'% cobrado'),
-                        h('span',{className:'mono',style:{color:'var(--text3)',fontWeight:400}},fmt(intCobrados)+' / '+fmt(gananciaEsperada))),
+                        h('span',{className:'mono',style:{color:'var(--text3)',fontWeight:400}},fmt(recIntHoy)+' / '+fmt(gananciaEsperada))),
                       h('div',{style:{height:6,borderRadius:3,background:'var(--bg4)',overflow:'hidden'}},
                         h('div',{style:{height:'100%',borderRadius:3,background:'var(--green2)',width:pctProy+'%',transition:'width .3s'}}))),
                     row('Ganancia esperada',
@@ -479,13 +493,13 @@ export function DebtorModal(props){
                       'Total de intereses del cronograma',{key:'proy-esp'}),
                     row('Cobrado',
                       h('div',null,
-                        h('div',{className:'mono',style:{fontSize:13,color:'var(--green)',fontWeight:500}},'+'+fmt(intCobrados)),
-                        esUSD&&intCobrados>0&&h('div',{className:'mono',style:{fontSize:10,color:'var(--blue)'}},copToUsd(intCobrados,l.trmAcordada))),
+                        h('div',{className:'mono',style:{fontSize:13,color:'var(--green)',fontWeight:500}},'+'+fmt(recIntHoy)),
+                        esUSD&&recIntHoy>0&&h('div',{className:'mono',style:{fontSize:10,color:'var(--blue)'}},copToUsd(recIntHoy,l.trmAcordada))),
                       null,{key:'proy-cob'}),
-                    gananciaEsperada>intCobrados&&row('Pendiente por cobrar',
+                    gananciaEsperada>recIntHoy&&row('Pendiente por cobrar',
                       h('div',null,
-                        h('div',{className:'mono',style:{fontSize:13,color:'var(--yellow)',fontWeight:500}},fmt(gananciaEsperada-intCobrados)),
-                        esUSD&&h('div',{className:'mono',style:{fontSize:10,color:'var(--blue)'}},copToUsd(gananciaEsperada-intCobrados,l.trmAcordada))),
+                        h('div',{className:'mono',style:{fontSize:13,color:'var(--yellow)',fontWeight:500}},fmt(gananciaEsperada-recIntHoy)),
+                        esUSD&&h('div',{className:'mono',style:{fontSize:10,color:'var(--blue)'}},copToUsd(gananciaEsperada-recIntHoy,l.trmAcordada))),
                       null,{key:'proy-pend'})
                   ];
                 })()),
@@ -526,7 +540,22 @@ export function DebtorModal(props){
                   // por defecto, que era como se dejaba sin cobrar el interes ya causado.
                   h('button',{onClick:function(e){e.stopPropagation();if(esDiario(l)&&onCorte){onCorte(l);}else if(onCobro){onCobro(l);}else{onAbono(l);}},style:btnPrimary},
                     h(Ico,{name:esDiario(l)?'receipt':'dollar',size:15,color:'#fff',sw:2.2}),esDiario(l)?'Registrar corte':'Registrar cobro'),
-                  !esDiario(l)&&onCobro&&h('button',{onClick:function(e){e.stopPropagation();onAbono(l);},style:Object.assign({},btnNeutral,{marginTop:6})},
+                  // ...pero solo cuando de verdad puede hacer algo distinto. Sin mora y sin
+                  // cronograma amortizable, la cascada degenera EXACTAMENTE en un abono
+                  // simple (un solo paso de tipo `abono`, verificado en la seccion C de
+                  // `cascada-cobro`), asi que el secundario seria un duplicado visual.
+                  //
+                  // Se muestra en dos escenarios, cada uno por una capacidad concreta que la
+                  // cascada NO tiene:
+                  //   - con MORA viva: la cascada siempre cobra primero el interes vencido.
+                  //     Mandar el 100% a capital es una decision valida del acreedor (art.
+                  //     1653 permite consentir esa imputacion) y solo se puede por aqui.
+                  //   - en CAPITAL + INTERESES: `AbonoModal` deja elegir que pasa con el
+                  //     cronograma despues del abono (mantener plazo / modificar plazo /
+                  //     fijar cuota), mientras `_doCobroCascada` manda `recalcMode:'mantener'`
+                  //     fijo en el codigo.
+                  !esDiario(l)&&onCobro&&(enMora.length>0||l.modalidad==='Capital + Intereses')&&
+                  h('button',{onClick:function(e){e.stopPropagation();onAbono(l);},style:Object.assign({},btnNeutral,{marginTop:6})},
                     h(Ico,{name:'trending',size:15,color:'var(--text2)',sw:2.2}),'Abono directo a capital'),
                   h('button',{onClick:function(e){e.stopPropagation();onRequestLiquidar(l);},style:Object.assign({},btnSecondary,{marginTop:6})},
                     h(Ico,{name:'check',size:15,color:'var(--green)',sw:2.4}),'Liquidar deuda'),

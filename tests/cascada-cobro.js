@@ -28,6 +28,33 @@ const { REPO, FIXTURE_DB }  = require('./lib/paths');
 
 const R = new Reporter('cascada-cobro');
 
+// ── RELOJ: calendario CONGELADO, reloj de ids INTACTO ────────────────────────
+// La auto-mora del arranque (`hoyStr()` en backend/db/housekeeping.js) marca En Mora
+// toda cuota Pendiente ya vencida, de modo que el estado con el que arrancan estas
+// pruebas DEPENDE del dia en que se corran. El 2026-09-02 eso dejo sin caso a las
+// secciones C y F —que necesitan un C+I SIN mora, porque prueban que la cascada
+// degenera en un abono simple— y sus ANTI-VACIO se pusieron en rojo sin que nada del
+// producto hubiera cambiado. Es la misma caducidad que la v2.6.2 corrigio en `e2e-api`.
+//
+// Se congela en el MISMO instante que ya usa `pdf-render`: 31-jul-2026. No es un numero
+// a dedo — a esa fecha NINGUNA cuota Pendiente del fixture esta vencida, asi que la
+// auto-mora reproduce exactamente los `estadoPago` guardados. Es la fecha de referencia
+// del propio fixture, y con ella los casos que cada seccion necesita existen siempre:
+// mora guardada para A/B/D/G y creditos limpios para C/F.
+//
+// OJO — `Date.now()` se deja REAL A PROPOSITO, y no es cosmetica. El id de un abono es
+// `${loanId}-ab-${Date.now()}` (backend/routes/loans.js) y las cuotas se insertan con
+// INSERT OR REPLACE: con el reloj congelado, dos abonos al mismo credito generarian el
+// MISMO id y el segundo borraria al primero en silencio. En el backend `Date.now()` solo
+// construye ids (3 sitios) y `new Date()` solo hace calendario (2), asi que la linea
+// entre lo que se congela y lo que no es limpia.
+const RelojReal = Date;
+const INSTANTE_FIJO = new RelojReal(2026, 6, 31, 12, 0, 0);   // 31-jul-2026 12:00 local
+global.Date = class extends RelojReal {
+  constructor(...args) { if (args.length === 0) super(INSTANTE_FIJO.getTime()); else super(...args); }
+  static now() { return RelojReal.now(); }   // ids unicos: NO se congela
+};
+
 // ── Carga del modulo real de cascada (aplanado, como en load-frontend) ────────
 const RE_IMPORT = /^[ \t]*import\s+(?:[\s\S]*?\s+from\s+)?['"]([^'"]+)['"]\s*;?[ \t]*$/gm;
 function aplanar(entrada, vistos, orden) {
