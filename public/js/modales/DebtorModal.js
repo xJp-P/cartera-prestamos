@@ -389,7 +389,13 @@ export function DebtorModal(props){
                   null,{strong:true}),
                 capAbonos>0&&row('Abonos a capital recibidos',
                   h('div',null,
-                    h('div',{className:'mono',style:{fontSize:13,color:'var(--blue)',fontWeight:500}},fmt(capAbonos)),
+                    // El azul esta RESERVADO al dolar en todo el bloque: es lo que
+                    // permite leer de un vistazo que la linea de abajo es la misma
+                    // cifra en otra moneda. Esta fila lo usaba tambien para los pesos
+                    // —la unica del grupo que lo hacia— y en un prestamo COP, donde no
+                    // hay sub-linea, el azul no significaba nada. Va en `var(--text)`,
+                    // igual que 'Capital recuperado'.
+                    h('div',{className:'mono',style:{fontSize:13,color:'var(--text)',fontWeight:500}},fmt(capAbonos)),
                     esUSD&&h('div',{className:'mono',style:{fontSize:10,color:'var(--blue)'}},copToUsd(capAbonos,l.trmAcordada)))),
                 // v2.2.0 — mismo panel que en los creditos cerrados: lo cobrado hasta HOY,
                 // movimiento por movimiento, en la fecha real en que entro cada peso.

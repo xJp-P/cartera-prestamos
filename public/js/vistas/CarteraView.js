@@ -307,7 +307,9 @@ export function CarteraView(props){
                   // Subtotal de utilidad (solo USD; en COP la ganancia = intereses, seria redundante)
                   esUSD&&rowItem(loan.modalidad==='Prestamo'?'RESULTADO TOTAL':'GANANCIA TOTAL',(gananciaTotalCOP<0?'-':'+')+fmt(Math.abs(gananciaTotalCOP)),gananciaTotalCOP<0?'var(--red)':gananciaTotalCOP>0?'var(--green)':'var(--text2)',(gananciaTotalUSD<0?'-':'+')+fmtUSD(Math.abs(gananciaTotalUSD)),{accentTop:true,strong:true}),
                   rowItem('CUOTAS PAGADAS',cuotasPagCnt+(loan.modalidad==='Intereses'?'':'/'+denomCuotas)),
-                  capAbonosCOP>0&&rowItem('TOTAL ABONOS A CAPITAL',fmt(capAbonosCOP),'var(--blue)',esUSD?copToUsd(capAbonosCOP,trm):null),
+                  // Misma correccion que en el perfil del deudor: el azul es del dolar
+                  // (lo pinta `subUSD` por su cuenta), no del peso.
+                  capAbonosCOP>0&&rowItem('TOTAL ABONOS A CAPITAL',fmt(capAbonosCOP),'var(--text)',esUSD?copToUsd(capAbonosCOP,trm):null),
                   esCanc&&rowItem('CAPITAL DEBIENDO',fmt(capPerd),capPerd>0?'var(--red)':'var(--text2)',esUSD&&capPerd>0?copToUsd(capPerd,trm):null),
                   esCanc&&rowItem('INTERESES DEBIENDO',fmt(intPerd),intPerd>0?'var(--red)':'var(--text2)',esUSD&&intPerd>0?copToUsd(intPerd,trm):null),
                   esCanc&&h('div',{style:{marginTop:12,padding:'10px 12px',background:'var(--bg3)',borderRadius:8,borderLeft:'3px solid var(--red)',display:'flex',justifyContent:'space-between',alignItems:'center'}},
