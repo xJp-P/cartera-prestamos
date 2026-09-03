@@ -631,6 +631,10 @@ export const CHANGELOGS = {
     'Nuevo: "No cobrar las cuotas vencidas — destinar todo a capital". Para cuando pactas con el cliente que ese dinero va integro a capital. Las cuotas vencidas siguen debiendose con sus intereses.',
     'Si el cobro cambia el plazo o la cuota y hay cuotas a punto de vencer, la app vuelve a avisarte antes de regenerar el cronograma, como hacia el abono directo. Si eliges marcarlas vencidas, el reparto del dinero se recalcula solo.',
     'En el detalle de un prestamo, "Abonos a capital recibidos" mostraba el monto en pesos pintado de azul. El azul esta reservado a la linea en dolares, asi que en un prestamo en pesos no significaba nada. Ahora el peso va en el color normal. Se corrigio tambien en el resumen de los prestamos cerrados.',
-    'La "Proyeccion de ganancias" y el bloque "Recaudado a la fecha" ya muestran siempre la misma cifra de intereses cobrados. Si habia un pago parcial en curso, la proyeccion no lo contaba y los dos bloques del mismo prestamo se contradecian.'
+    'La "Proyeccion de ganancias" y el bloque "Recaudado a la fecha" ya muestran siempre la misma cifra de intereses cobrados. Si habia un pago parcial en curso, la proyeccion no lo contaba y los dos bloques del mismo prestamo se contradecian.',
+    'Nuevo boton "Enviar propuesta al cliente" dentro de Registrar cobro. Genera un PDF que muestra como quedaria el prestamo si el cliente abona X, con el cronograma resultante, SIN registrar nada. Para cuando te preguntan "si te abono 400, como quedamos?".',
+    'El recibo de cobro ya no llama "vencida" a una cuota que todavia no vence cuando cobras el interes del mes por adelantado, ni la suma a los intereses vencidos.',
+    'El recibo de cobro trae ahora "Lo que queda por pagar": la lista de cuotas pendientes con su valor, lo ya abonado en cada una y lo que falta.',
+    'En ese mismo recibo, la tarjeta "Valor de la cuota" aclara cuanto llevas abonado de la proxima, para que no parezca que contradice el total pendiente.'
   ]
 };

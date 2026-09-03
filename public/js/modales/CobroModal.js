@@ -46,6 +46,7 @@
 import { ABtn, Fld, Modal } from '../componentes/base.js';
 import { Ico } from '../componentes/iconos.js';
 import { cobrableTotal, planCascada } from '../core/cascada.js';
+import { generatePropuestaAbono } from '../pdf/propuesta-abono.js';
 import { _tasaPeriodo, filasPreview, previewRecalculo } from '../core/calculo.js';
 import { fmt, fmtD, fmtNumInput, fmtUSD, parseDecimalInput, parseIntInput, parseNum } from '../core/format.js';
 import { h, useState } from '../core/react.js';
@@ -143,6 +144,14 @@ export function CobroModal(props){
   // capital no baja y el cronograma no se regenera. Por eso el bloque se dibuja
   // condicionado a `hayAbono`, y el modo cae a 'mantener' cuando no aplica — asi el
   // valor que viaja al backend nunca depende de un radio que el usuario no vio.
+  // Valor de la cuota HOY: alimenta el antes/despues de la propuesta. Sale de la
+  // primera Pendiente persistida, no de un calculo, para que respete cualquier
+  // prorroga o cambio de dia de pago que el credito ya tenga encima.
+  var cuotaActual=(function(){
+    var p=loanPays.filter(function(x){ return !esAbono(x)&&x.estadoPago==='Pendiente'; })
+      .sort(function(a,b){ return (a.cuotaN||0)-(b.cuotaN||0); })[0];
+    return p?Math.round(p.cuotaTotal):0;
+  })();
   var hayAbono=!!(plan&&plan.ok&&plan.totales&&plan.totales.abonoCapital>0);
   var aplicaRecalc=esCapInt&&hayAbono;
   var recalcModoEfectivo=aplicaRecalc?recalcMode:'mantener';
@@ -418,6 +427,35 @@ export function CobroModal(props){
           }))),
       h('div',{style:{marginTop:7,color:'var(--text2)'}},
         'Lo demás NO se aplicó. Revisa el crédito antes de reintentar: si repites el cobro completo, lo ya registrado se duplicará.')),
+
+    // ── PROPUESTA PARA EL CLIENTE ──
+    // El caso real: el cliente pregunta "si te abono 400, como quedamos?". Este boton
+    // le manda el papel SIN registrar nada. Va antes del check del recibo porque
+    // ocurre antes en el tiempo: primero se propone, despues (si acepta) se cobra.
+    //
+    // Mismo patron que el boton secundario de `LiquidarModal`, que genera el Estado de
+    // Liquidacion antes de confirmar. No lleva `_submitGuard`: no escribe nada, asi que
+    // pulsarlo dos veces solo produce dos PDF identicos.
+    plan&&plan.ok&&plan.pasos.length>0&&h('button',{
+      onClick:function(){
+        try{
+          generatePropuestaAbono(loan, allPays, {
+            fecha:fecha, plan:plan, cajaCOP:cajaCOP,
+            proyeccion:{
+              filas:(cronoPreview&&cronoPreview.filas)||[],
+              n:(cronoPreview&&cronoPreview.n)||0,
+              saldado:!!(cronoPreview&&cronoPreview.saldado),
+              saldoDespues:plan.saldoTrasCascada,
+              cuotaAntes:cuotaActual,
+            },
+          });
+        }catch(e){ /* un fallo del PDF no puede romper el modal */ }
+      },
+      style:{width:'100%',padding:'10px 12px',borderRadius:10,fontSize:12.5,fontWeight:700,cursor:'pointer',
+        display:'flex',alignItems:'center',justifyContent:'center',gap:7,fontFamily:'inherit',
+        background:'transparent',border:'1px solid var(--blue-bd)',color:'var(--blue)'}},
+      h(Ico,{name:'receipt',size:14,color:'var(--blue)',sw:2.2}),
+      'Enviar propuesta al cliente (no cobra)'),
 
     // ── Recibo consolidado ──
     // Un cobro en cascada son N movimientos, pero para el cliente fue UNA entrega:
