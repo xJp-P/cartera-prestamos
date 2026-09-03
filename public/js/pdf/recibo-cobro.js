@@ -149,10 +149,11 @@ export function generateReciboCobro(loan, allPays, cobro, opts) {
   function rowTot(l, v){
     return '<div class="rc-row rc-row-tot"><span class="rc-lab">' + l + '</span><span class="rc-val">' + v + '</span></div>';
   }
-  function card(label, oldTxt, newTxt){
+  function card(label, oldTxt, newTxt, nota){
     return '<div class="rc-card"><div class="rc-cl">' + label + '</div>' +
       (oldTxt ? '<div class="rc-old">' + oldTxt + '</div>' : '') +
-      '<div class="rc-new">' + newTxt + '</div></div>';
+      '<div class="rc-new">' + newTxt + '</div>' +
+      (nota ? '<div class="rc-cnota">' + nota + '</div>' : '') + '</div>';
   }
 
   // ── BLOQUE 3 — "Como se aplico tu pago" ────────────────────────────────────
@@ -212,8 +213,16 @@ export function generateReciboCobro(loan, allPays, cobro, opts) {
     var cards = card('Saldo de capital',
       (saldoAntes > saldoDespues) ? money(saldoAntes) : '', money(saldoDespues));
     if (cuotaDespues > 0) {
+      // "Valor de la cuota" es el importe CONTRACTUAL que rige de aqui en adelante, y no
+      // tiene por que coincidir con lo que falta de la PROXIMA: si el cliente adelanto el
+      // interes del mes, esa cuota ya trae abono encima. Sin decirlo, el documento
+      // mostraba 157.79 arriba y 117.65 en la tabla de abajo, de la misma cuota, sin nada
+      // que los uniera — parecian contradecirse. La nota es el puente, y solo aparece
+      // cuando de verdad hay diferencia que explicar.
+      var abonadoProx = pend.length ? Math.round(pend[0].partialPaid || 0) : 0;
       cards += card('Valor de la cuota',
-        (pre.cuota && Math.round(pre.cuota) !== cuotaDespues) ? money(pre.cuota) : '', money(cuotaDespues));
+        (pre.cuota && Math.round(pre.cuota) !== cuotaDespues) ? money(pre.cuota) : '', money(cuotaDespues),
+        abonadoProx > 0 ? ('de la proxima ya abonaste ' + money(abonadoProx)) : '');
     }
     if (esCapInt && pend.length) cards += card('Cuotas pendientes', '', String(pend.length));
     else if (esIndef)            cards += card('Plazo', '', 'Indefinido');
@@ -346,6 +355,7 @@ export function generateReciboCobro(loan, allPays, cobro, opts) {
     '.rc-cl{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:' + C.muted + '}',
     '.rc-old{font-size:11px;color:' + C.muted + ';text-decoration:line-through;margin-top:3px}',
     '.rc-new{font-size:15px;font-weight:700;color:' + C.green + ';margin-top:1px}',
+    '.rc-cnota{font-size:9px;color:' + C.muted + ';margin-top:3px;line-height:1.35}',
     '.rc-pie{font-size:11px;color:' + C.muted + ';margin-top:6px;text-align:center;line-height:1.45}',
     '.rc-paz{margin:12px 0 4px;padding:14px;text-align:center;background:' + C.greenBg + ';border:2px solid ' + C.greenBd + ';border-radius:14px}',
     '.rc-paz-t{font-size:20px;font-weight:700;letter-spacing:2px;color:' + C.green + '}',
