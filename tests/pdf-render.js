@@ -118,7 +118,8 @@ const CAP = FE.captura;
 
 const GENERADORES = ['generateCronogramaPDF', 'generateReportePrestamosPDF',
                      'generateRecibo', 'generateFacturaCobro', 'generateReciboAbono',
-                     'generateEstadoLiquidacion', 'generateReciboCobro'];
+                     'generateEstadoLiquidacion', 'generateReciboCobro',
+                     'generatePropuestaAbono'];
 const faltantes = GENERADORES.filter(n => typeof S[n] !== 'function');
 if (faltantes.length) {
   abortar('El frontend no expone estos generadores como funciones top-level: ' + faltantes.join(', ') +
@@ -233,6 +234,41 @@ function cobroConInteresMes(loan, arrPays) {
   return {
     fecha: '2026-07-20', pasos: plan.pasos, observaciones: 'Cobro con interes del mes',
     pre: { saldoCaja: S.saldoConCaja(loan, lp), cuota: pend.length ? pend[0].cuotaTotal : 0 },
+  };
+}
+
+// La Propuesta de Abono necesita, ademas del plan, la PROYECCION que el modal dibuja:
+// el preview del cronograma y el total por pagar. Se arma con los mismos helpers
+// (`previewRecalculo`, `filasPreview`, `proyeccionCobro`), que es lo que el modal usa.
+function propuestaDe(loan, arrPays) {
+  const cob = S.cobrableTotal(loan, arrPays);
+  const esUSD = loan.moneda === 'USD';
+  const objetivo = Math.round(cob.mora + Math.max(100000, cob.abonable * 0.3));
+  const plan = S.planCascada(loan, arrPays, esUSD
+    ? { obligacionUSD: Math.round(objetivo / loan.trmAcordada * 100) / 100,
+        cajaCOP: Math.round(objetivo * 0.97), obligacionCOP: 0 }
+    : { obligacionCOP: objetivo, cajaCOP: objetivo, obligacionUSD: 0 }, {});
+  if (!plan.ok || !plan.pasos.some(p => p.tipo === 'abono')) {
+    abortar('propuestaDe(' + loan.id + '): el plan no produjo abono (' + (plan.error || 'sin error') +
+            '). Sin abono no hay cronograma proyectado y el caso no probaria nada.');
+  }
+  const lp = arrPays.filter(p => p.prestamoId === loan.id);
+  const pend = lp.filter(p => p.id.indexOf('-ab-') === -1 && p.estadoPago === 'Pendiente')
+                 .sort((a, b) => a.cuotaN - b.cuotaN);
+  const nAct = Math.max(0, (+loan.plazoMeses || 0) - plan.ctx.regularConsumed);
+  const r = S._tasaPeriodo((+loan.tasaMensual || 0) / 100, loan.frecuencia || 'Mensual');
+  const pv = S.previewRecalculo(plan.saldoTrasCascada, r, nAct, 'mantener', null);
+  const filas = S.filasPreview(plan.saldoTrasCascada, r, pv.nCuotas, false, pv.cuota);
+  filas.forEach((f, i) => { f.cuotaN = plan.ctx.regularConsumed + 1 + i;
+                            f.fecha = pend[i] ? pend[i].fechaPago : null; });
+  const proy = S.proyeccionCobro(loan, arrPays, plan, filas, pend);
+  return {
+    fecha: '2026-07-20', plan,
+    cajaCOP: esUSD ? Math.round(objetivo * 0.97) : objetivo,
+    proyeccion: { filas, n: pv.nCuotas, saldado: false,
+                  totalAntes: proy.totalAntes, totalDespues: proy.totalDespues,
+                  abonadoProxima: proy.abonadoProxima,
+                  cuotaAntes: pend.length ? Math.round(pend[0].cuotaTotal) : 0 },
   };
 }
 
@@ -413,6 +449,26 @@ const CASOS = [
   //   - dice "aun no vence", no "vencia el";
   //   - el rubro es "Interes del mes en curso", separado de "Intereses vencidos";
   //   - y el bloque "Lo que queda por pagar" detalla la cuota con lo ya abonado.
+  // ── generatePropuestaAbono — el papel que se manda ANTES de cobrar ────────────────────
+  // Lo que este caso fija: que el documento NO se presente como comprobante. Un papel con
+  // el membrete de la app y cifras exactas que dijera "recibido" seria un registro falso
+  // de dinero que nunca entro.
+  { nombre: 'propuesta-usd-oscuro', gen: 'generatePropuestaAbono', tema: 'dark', celdas: 6,
+    entrada: () => ({ loanId: '1782151590658w66y', propuesta: true, tema: 'dark', dark: true }),
+    ejecutar: () => S.generatePropuestaAbono(L('1782151590658w66y'), pays,
+      propuestaDe(L('1782151590658w66y'), pays)),
+    contiene: ['Propuesta de Abono', 'Si abonas', 'Asi se aplicaria tu pago',
+               'Asi quedaria tu credito', 'Total por pagar', 'Cronograma que quedaria',
+               'no un comprobante', 'PA-', '#0d1117'],
+    noContiene: ['TOTAL RECIBIDO', 'Total recibido', 'certifica el dinero', 'Recibido el'] },
+
+  { nombre: 'propuesta-cop-claro', gen: 'generatePropuestaAbono', tema: 'light', celdas: 6,
+    entrada: () => ({ loanId: '1773655076017', propuesta: true, tema: 'light', dark: false }),
+    ejecutar: () => S.generatePropuestaAbono(L('1773655076017'), pays,
+      propuestaDe(L('1773655076017'), pays)),
+    contiene: ['Propuesta de Abono', 'Si abonas', 'Total por pagar', 'no un comprobante'],
+    noContiene: ['TOTAL RECIBIDO', 'certifica el dinero'] },
+
   { nombre: 'cobro-con-interes-del-mes', gen: 'generateReciboCobro', tema: 'dark', celdas: 5,
     entrada: () => ({ loanId: '1782151590658w66y', cascada: 'interesMes', tema: 'dark', dark: true }),
     ejecutar: () => S.generateReciboCobro(L('1782151590658w66y'), pays,

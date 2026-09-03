@@ -87,6 +87,7 @@ function cargarCascada() {
   aplanar(path.join(REPO, 'public', 'js', 'core', 'cascada.js'), vistos, orden);
   aplanar(path.join(REPO, 'public', 'js', 'core', 'calculo.js'), vistos, orden);
   aplanar(path.join(REPO, 'public', 'js', 'pdf', 'recibo-cobro.js'), vistos, orden);
+  aplanar(path.join(REPO, 'public', 'js', 'pdf', 'propuesta-abono.js'), vistos, orden);
   const pdfs = [];
   const sb = {
     console,
@@ -97,7 +98,8 @@ function cargarCascada() {
   const ctx = vm.createContext(sb);
   vm.runInContext(orden.join('\n'), ctx);
   const api = vm.runInContext(
-    '({planCascada,cobrableTotal,contextoCascada,filasPreview,_pmt,_tasaPeriodo,generateReciboCobro,saldoConCaja})', ctx);
+    '({planCascada,cobrableTotal,contextoCascada,proyeccionCobro,filasPreview,previewRecalculo,' +
+    '_pmt,_tasaPeriodo,generateReciboCobro,generatePropuestaAbono,saldoConCaja,pendCuota})', ctx);
   api.pdfs = pdfs;
   return api;
 }
@@ -131,6 +133,28 @@ function pedir(method, ruta, body, port) {
 // Se replica en vez de importarse porque vive dentro del componente App y sacarlo
 // de ahi solo para el test cambiaria el codigo de produccion por conveniencia del
 // arnes. Lo que se verifica aqui es el CONTRATO: orden, corte y campos enviados.
+// Igual que `ejecutarPlan` pero mandando el recalculo que el usuario eligio, que es
+// lo que hace `_doCobroCascada` desde v2.9.6.
+async function ejecutarPlanRecalc(loanId, plan, fecha, obs, port, modo, valor) {
+  const estado = { ok: true, hechos: [], error: null, pasoFallido: null };
+  for (const paso of plan.pasos) {
+    const r = paso.tipo === 'partial'
+      ? await pedir('POST', '/api/payments/' + paso.payId + '/partial',
+          { monto: paso.cajaCOP, fecha, observaciones: obs, montoUSD: paso.obligacionUSD || 0 }, port)
+      : await pedir('POST', '/api/loans/' + loanId + '/abono',
+          { monto: paso.obligacionCOP, fecha, observaciones: obs, montoUSD: paso.obligacionUSD || 0,
+            montoCOPRecibido: paso.cajaCOP, liquidar: false, recalcMode: modo, recalcValor: valor, intExtra: 0 }, port);
+    if (r.status >= 400 || !r.json || r.json.error) {
+      estado.ok = false;
+      estado.error = (r.json && r.json.error) || ('HTTP ' + r.status);
+      estado.pasoFallido = paso;
+      break;
+    }
+    estado.hechos.push(paso);
+  }
+  return estado;
+}
+
 async function ejecutarPlan(loanId, plan, fecha, obs, port) {
   const estado = { ok: true, hechos: [], error: null, pasoFallido: null };
   for (const paso of plan.pasos) {
@@ -152,8 +176,11 @@ async function ejecutarPlan(loanId, plan, fecha, obs, port) {
 }
 
 (async function main() {
-  const { planCascada, cobrableTotal, filasPreview, _pmt, _tasaPeriodo,
-          generateReciboCobro, saldoConCaja, pdfs } = cargarCascada();
+  const { planCascada, cobrableTotal, proyeccionCobro, filasPreview, previewRecalculo, _pmt, _tasaPeriodo,
+          generateReciboCobro, generatePropuestaAbono, saldoConCaja, pdfs } = cargarCascada();
+  // La seccion J necesita el mismo buzon de PDFs con otro nombre, porque comparte
+  // scope con la G y alli `pdfs` ya esta en uso.
+  const pdfsCascada = pdfs;
   R.check('el modulo real de cascada se cargo', typeof planCascada === 'function' && typeof cobrableTotal === 'function');
   R.check('el modulo real de calculo se cargo (preview del cronograma)',
     typeof filasPreview === 'function' && typeof _pmt === 'function' && typeof _tasaPeriodo === 'function');
@@ -1176,6 +1203,182 @@ async function ejecutarPlan(loanId, plan, fecha, obs, port) {
       }
     }
     srvI.close();
+  }
+
+  // ── J — LA PROPUESTA Y EL RECIBO DICEN LO MISMO ────────────────────────────
+  // La Propuesta de Abono se manda ANTES ("si abonas X, asi quedarias") y el Recibo
+  // DESPUES. Son el mismo cobro visto desde los dos lados del mostrador, asi que su
+  // "saldo de capital" tiene que coincidir. No coincidia: la propuesta mostraba
+  // `plan.saldoTrasCascada` —el saldo del MOTOR— y el recibo `saldoConCaja`. Medido
+  // sobre un cobro real de USD 400: la propuesta prometia USD 106.06 y el recibo
+  // entregaba USD 74.33.
+  //
+  // La diferencia solo aparece cuando una cuota Pendiente ya trae un parcial encima y
+  // el recalculo le baja el interes: el mismo parcial pasa a cubrir mas capital. Por
+  // eso el escenario se CONSTRUYE en dos cobros — el primero deja el parcial (cobrando
+  // el interes del mes), el segundo es el que se compara.
+  {
+    R.seccion('J — la propuesta promete el mismo saldo que el recibo entrega');
+    const DB_J = copiaDeProduccion('cascada-propuesta');
+    const appJ = require(path.join(REPO, 'backend', 'server.js'))(DB_J);
+    const srvJ = http.createServer(appJ);
+    const PORT_J = 3976;
+    await new Promise(ok => srvJ.listen(PORT_J, '127.0.0.1', ok));
+    const conDbJ = fn => { const d = new Database(DB_J, { readonly: true }); try { return fn(d); } finally { d.close(); } };
+    const cargarJ = () => ({
+      loans: conDbJ(d => d.prepare('SELECT * FROM loans').all()),
+      pays:  conDbJ(d => d.prepare('SELECT * FROM payments').all()),
+    });
+    await pedir('GET', '/api/payments', null, PORT_J);
+
+    const inicial = cargarJ();
+    const objetivo = inicial.loans
+      .filter(l => l.estado === 'Activo' && l.modalidad === 'Capital + Intereses' && +l.trmAcordada > 0)
+      .map(l => ({ l, cob: cobrableTotal(l, inicial.pays) }))
+      .filter(o => o.cob.interesMes > 0 && o.cob.abonable > 0 && o.l.moneda === 'USD')[0];
+    R.check('J ANTI-VACIO: hay un C+I en USD con interes del mes y capital amortizable',
+      !!objetivo, objetivo ? objetivo.l.id : 'ninguno');
+
+    if (objetivo) {
+      const loanId = objetivo.l.id;
+      const trmJ = +objetivo.l.trmAcordada;
+
+      // Cobro 1 — deja un parcial sobre la proxima cuota (el interes del mes).
+      const c1 = cobrableTotal(objetivo.l, inicial.pays);
+      const p1 = planCascada(objetivo.l, inicial.pays,
+        { obligacionUSD: Math.round((c1.mora + c1.interesMes) / trmJ * 100) / 100,
+          cajaCOP: Math.round(c1.mora + c1.interesMes), obligacionCOP: 0 },
+        { incluirInteresMes: true });
+      const e1 = await ejecutarPlan(loanId, p1, hoy, 'preparar parcial', PORT_J);
+      R.check('J el cobro previo dejo el parcial sobre la cuota pendiente', e1.ok, e1.error || '');
+
+      const prev = cargarJ();
+      const loanP = prev.loans.find(x => x.id === loanId);
+      const lpP   = prev.pays.filter(x => x.prestamoId === loanId);
+      const pendP = lpP.filter(x => !esAbono(x) && x.estadoPago === 'Pendiente')
+                       .sort((a, b) => a.cuotaN - b.cuotaN);
+      R.check('J ANTI-TRIVIAL: la proxima cuota quedo con abono encima (si no, el defecto no se ve)',
+        pendP.length > 0 && Math.round(pendP[0].partialPaid || 0) > 0,
+        pendP.length ? ('partial=' + Math.round(pendP[0].partialPaid || 0)) : 'sin pendientes');
+
+      // Cobro 2 — el que se documenta. Con recalculo, que es lo que encoge el interes
+      // de la cuota y por tanto mueve la imputacion del parcial que ya estaba.
+      const c2 = cobrableTotal(loanP, prev.pays);
+      const usd2 = Math.round(Math.min(c2.abonable, c2.abonable * 0.7) / trmJ * 100) / 100;
+      const plan2 = planCascada(loanP, prev.pays,
+        { obligacionUSD: usd2, cajaCOP: Math.round(usd2 * trmJ * 0.95), obligacionCOP: 0 }, {});
+      R.check('J ANTI-VACIO: el segundo cobro produce un abono', plan2.ok && plan2.pasos.some(p => p.tipo === 'abono'),
+        plan2.error || JSON.stringify(plan2.pasos.map(p => p.tipo)));
+
+      if (plan2.ok && plan2.pasos.length) {
+        // El preview y la proyeccion CON CAJA, exactamente como los arma el modal.
+        const ctx2 = plan2.ctx;
+        const nAct = Math.max(0, (+loanP.plazoMeses || 0) - ctx2.regularConsumed);
+        const rP = _tasaPeriodo((+loanP.tasaMensual || 0) / 100, loanP.frecuencia || 'Mensual');
+        const MODO = 'modificarPlazo', VALOR = Math.max(1, nAct - 1);
+        const pv = previewRecalculo(plan2.saldoTrasCascada, rP, nAct, MODO, VALOR);
+        const filas = filasPreview(plan2.saldoTrasCascada, rP, pv.nCuotas, false, pv.cuota);
+        filas.forEach((f, i) => { f.cuotaN = ctx2.regularConsumed + 1 + i;
+                                  f.fecha = pendP[i] ? pendP[i].fechaPago : null; });
+        // La proyeccion sale del helper REAL: si el modal se equivocara al calcularla,
+        // esta seccion se pondria en rojo. Replicarla aqui la dejaria verde sobre una copia.
+        const proyJ = proyeccionCobro(loanP, prev.pays, plan2, filas, pendP);
+        const partialProy = p => Math.round(p.partialPaid || 0) +
+          (plan2.pasos.filter(x => x.payId === p.id)[0] ? Math.round(plan2.pasos.filter(x => x.payId === p.id)[0].obligacionCOP) : 0);
+
+        // El PAPEL DE ANTES.
+        pdfsCascada.length = 0;
+        generatePropuestaAbono(loanP, prev.pays, {
+          fecha: hoy, plan: plan2, cajaCOP: Math.round(usd2 * trmJ * 0.95),
+          proyeccion: { filas, n: pv.nCuotas, saldado: false,
+                        totalAntes: proyJ.totalAntes, totalDespues: proyJ.totalDespues,
+                        abonadoProxima: proyJ.abonadoProxima,
+                        cuotaAntes: pendP.length ? Math.round(pendP[0].cuotaTotal) : 0 },
+        });
+        R.eq('J la propuesta emitio un documento', pdfsCascada.length, 1);
+        const htmlProp = pdfsCascada.length ? pdfsCascada[0].html : '';
+        R.check('J la propuesta NO se presenta como comprobante',
+          htmlProp.indexOf('TOTAL RECIBIDO') === -1 && htmlProp.indexOf('certifica el dinero') === -1 &&
+          htmlProp.indexOf('Si abonas') !== -1);
+
+        // Se ejecuta el cobro CON el mismo recalculo que se proyecto.
+        const est2 = await ejecutarPlanRecalc(loanId, plan2, hoy, 'cobro documentado', PORT_J, MODO, VALOR);
+        R.check('J el cobro se aplico', est2.ok, est2.error || '');
+
+        // El PAPEL DE DESPUES.
+        const post = cargarJ();
+        const loanQ = post.loans.find(x => x.id === loanId);
+        pdfsCascada.length = 0;
+        generateReciboCobro(loanQ, post.pays, { fecha: hoy, pasos: est2.hechos,
+          pre: { saldoCaja: saldoConCaja(loanP, lpP), cuota: pendP.length ? pendP[0].cuotaTotal : 0 } });
+        R.eq('J el recibo emitio un documento', pdfsCascada.length, 1);
+        const htmlRec = pdfsCascada.length ? pdfsCascada[0].html : '';
+
+        // Lector de dinero: USD usa coma de miles y punto decimal; COP al reves.
+        const numJ = t => {
+          const x = String(t == null ? '' : t).replace(/<[^>]*>/g, '');
+          const m = /(USD\s*)?\$\s*([\d.,]+)/.exec(x);
+          if (!m) return NaN;
+          return m[1] ? parseFloat(m[2].replace(/,/g, '')) : parseInt(m[2].replace(/[^0-9]/g, ''), 10);
+        };
+        // La propuesta lo declara en su tarjeta "Total por pagar"; el recibo lo totaliza
+        // al pie de "Lo que queda por pagar". Es la MISMA cifra vista antes y despues.
+        const totalPropuesta = (() => {
+          const m = /<div class="pa-cl">Total por pagar<\/div>([\s\S]*?)<\/div>\s*<\/div>/.exec(htmlProp);
+          if (!m) return NaN;
+          const vals = m[1].match(/(?:USD\s*)?\$\s*[\d.,]+/g) || [];
+          return numJ(vals[vals.length - 1] || '');
+        })();
+        const totalRecibo = (() => {
+          const m = /TOTAL POR PAGAR<\/td><td>([\s\S]*?)<\/td>/.exec(htmlRec);
+          return m ? numJ(m[1]) : NaN;
+        })();
+        R.check('J ANTI-VACIO: los dos documentos declaran su total por pagar',
+          !isNaN(totalPropuesta) && !isNaN(totalRecibo),
+          'propuesta=' + totalPropuesta + ' recibo=' + totalRecibo);
+        R.eq('J la propuesta promete el MISMO total que el recibo entrega',
+          totalPropuesta, totalRecibo);
+        // ANTI-TRIVIAL: el escenario tiene un parcial que sobrevive al recalculo, que es
+        // lo que hacia divergir las cifras. Sin el, la igualdad seria trivial.
+        R.check('J ANTI-TRIVIAL: una cuota proyectada arrastra abono previo',
+          pendP.length > 0 && partialProy(pendP[0]) > 0,
+          'partial proyectado=' + (pendP.length ? partialProy(pendP[0]) : 0));
+
+        // ── Las dos ramas del helper que el escenario de arriba NO alcanza ──────
+        // Ese cobro no deja mora viva ni lleva paso de interes del mes, asi que sin
+        // esto los dos terminos quedarian sin probar y una regresion pasaria en verde
+        // (comprobado inyectandolas). Se ejercitan sobre el helper directamente, que
+        // es puro: se le arma la entrada en vez de buscar un escenario que la produzca.
+        {
+          const sumFilas = filas.reduce((acc, f, i) => acc +
+            Math.max(0, Math.round(f.cuota) - (pendP[i] ? partialProy(pendP[i]) : 0)), 0);
+          R.eq('J sin mora viva, el total proyectado es solo la suma de las filas',
+            proyJ.totalDespues, sumFilas);
+
+          // (c) mora que SOBREVIVE: un plan que no la toca tiene que sumarla al total.
+          const moraFalsa = { id: 'mora-x', prestamoId: loanId, cuotaN: 99, estadoPago: 'En Mora',
+                              fechaPago: '2026-01-15', cuotaTotal: 500000, partialPaid: 120000,
+                              interesPeriodo: 100000, abonoCapital: 400000 };
+          const planConMora = { ok: true, pasos: plan2.pasos,
+                                ctx: Object.assign({}, ctx2, { moraCuotas: [moraFalsa] }) };
+          const proyMora = proyeccionCobro(loanP, prev.pays, planConMora, filas, pendP);
+          R.eq('J el total incluye la mora que el cobro NO salda',
+            proyMora.totalDespues - sumFilas, 380000);   // 500.000 - 120.000 ya abonado
+
+          // (b) el paso del interes del mes se suma al abono que llevara la proxima.
+          if (pendP.length) {
+            const pasoMes = { tipo: 'partial', esInteresMes: true, payId: pendP[0].id,
+                              cuotaN: pendP[0].cuotaN, obligacionCOP: 77000, interes: 77000, capital: 0 };
+            const planConMes = { ok: true, pasos: [pasoMes],
+                                 ctx: Object.assign({}, ctx2, { moraCuotas: [] }) };
+            const proyMes = proyeccionCobro(loanP, prev.pays, planConMes, filas, pendP);
+            R.eq('J el abono proyectado de la proxima suma el interes del mes de ESTE cobro',
+              proyMes.abonadoProxima, Math.round(pendP[0].partialPaid || 0) + 77000);
+          }
+        }
+      }
+    }
+    srvJ.close();
   }
 
   srv.close();

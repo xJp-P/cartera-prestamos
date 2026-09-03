@@ -45,7 +45,7 @@
 
 import { ABtn, Fld, Modal } from '../componentes/base.js';
 import { Ico } from '../componentes/iconos.js';
-import { cobrableTotal, planCascada } from '../core/cascada.js';
+import { cobrableTotal, planCascada, proyeccionCobro } from '../core/cascada.js';
 import { generatePropuestaAbono } from '../pdf/propuesta-abono.js';
 import { _tasaPeriodo, filasPreview, previewRecalculo } from '../core/calculo.js';
 import { fmt, fmtD, fmtNumInput, fmtUSD, parseDecimalInput, parseIntInput, parseNum } from '../core/format.js';
@@ -144,6 +144,17 @@ export function CobroModal(props){
   // capital no baja y el cronograma no se regenera. Por eso el bloque se dibuja
   // condicionado a `hayAbono`, y el modo cae a 'mantener' cuando no aplica — asi el
   // valor que viaja al backend nunca depende de un radio que el usuario no vio.
+  // ── Proyeccion para la propuesta ───────────────────────────────────────────
+  // La matematica vive en `proyeccionCobro` (core/cascada.js), no aqui: la prueba que
+  // ata este documento con el recibo llama al MISMO helper, asi que no puede quedar
+  // verde sobre una copia. Ver el comentario del helper para por que declara el total
+  // por pagar y no un saldo de capital.
+  var pendOrden=loanPays.filter(function(p){ return !esAbono(p)&&p.estadoPago==='Pendiente'; })
+    .sort(function(a,b){ return (a.cuotaN||0)-(b.cuotaN||0); });
+  var proy=(plan&&plan.ok)
+    ? proyeccionCobro(loan, allPays, plan, (cronoPreview&&cronoPreview.filas)||null, pendOrden)
+    : {totalAntes:0,totalDespues:null,abonadoProxima:0};
+
   // Valor de la cuota HOY: alimenta el antes/despues de la propuesta. Sale de la
   // primera Pendiente persistida, no de un calculo, para que respete cualquier
   // prorroga o cambio de dia de pago que el credito ya tenga encima.
@@ -445,7 +456,9 @@ export function CobroModal(props){
               filas:(cronoPreview&&cronoPreview.filas)||[],
               n:(cronoPreview&&cronoPreview.n)||0,
               saldado:!!(cronoPreview&&cronoPreview.saldado),
-              saldoDespues:plan.saldoTrasCascada,
+              totalAntes:proy.totalAntes,
+              totalDespues:proy.totalDespues,
+              abonadoProxima:proy.abonadoProxima,
               cuotaAntes:cuotaActual,
             },
           });

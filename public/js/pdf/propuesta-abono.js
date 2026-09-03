@@ -22,14 +22,24 @@
 
 import { fmt, fmtUSD, fmtD } from '../core/format.js';
 import { nowStr, properCase } from '../core/ui.js';
-import { saldoConCaja, esDiario } from '../core/dominio.js';
+import { esDiario } from '../core/dominio.js';
 
 // `propuesta` = { fecha, plan, cajaCOP, proyeccion }
 //   - plan       : resultado de `planCascada` (pasos + totales). NO aplicado.
 //   - cajaCOP    : los pesos que el cliente entregaria (solo informativo en USD).
-//   - proyeccion : { filas, n, saldado, saldoDespues, cuotaAntes } del modal.
-//                  `filas` puede venir vacia (modalidades sin cronograma amortizable):
-//                  el documento se emite igual, solo sin la tabla proyectada.
+//   - proyeccion : { filas, n, saldado, totalAntes, totalDespues, abonadoProxima,
+//                  cuotaAntes }. `filas` puede venir vacia (modalidades sin cronograma
+//                  amortizable): el documento se emite igual, sin tabla ni total.
+//
+// La cifra grande de "asi quedaria" es el TOTAL POR PAGAR, no un saldo de capital. No
+// es cosmetica: el saldo de capital sale de `saldoConCaja`, que depende de
+// `imputarCobros`, y proyectar esa imputacion sobre un cronograma que aun no existe
+// obliga a una segunda implementacion que se desincroniza — paso, y los dos papeles
+// de la misma operacion terminaron en cifras distintas. El total por pagar sale
+// DIRECTO de la proyeccion (suma de cuota menos lo ya abonado en ella) y es
+// exactamente lo que el recibo totaliza en "Lo que queda por pagar".
+// `allPays` se conserva en la firma por simetria con los otros generadores, aunque
+// este documento no lo necesita: todo lo que muestra sale del plan y de la proyeccion.
 export function generatePropuestaAbono(loan, allPays, propuesta, opts) {
   opts = opts || {};
   // Un credito de interes diario no pasa por la cascada: su puerta es el CORTE.
@@ -71,9 +81,9 @@ export function generatePropuestaAbono(loan, allPays, propuesta, opts) {
   var oblUSD   = esUSD ? pasos.reduce(function(s,p){ return s + (+p.obligacionUSD || 0); }, 0) : 0;
   var cajaCOP  = Math.round((propuesta && propuesta.cajaCOP) || 0);
 
-  var lp = (allPays || []).filter(function(p){ return String(p.prestamoId) === String(loan.id); });
-  var saldoAntes   = saldoConCaja(loan, lp);
-  var saldoDespues = Math.max(0, Math.round(proy.saldoDespues || 0));
+  var totalAntes   = Math.max(0, Math.round(proy.totalAntes || 0));
+  var totalDespues = (proy.totalDespues === null || proy.totalDespues === undefined)
+                     ? null : Math.max(0, Math.round(proy.totalDespues));
   var filas = proy.filas || [];
   var cuotaAntes   = Math.round(proy.cuotaAntes || 0);
   var cuotaDespues = filas.length ? Math.round(filas[0].cuota) : 0;
@@ -102,10 +112,11 @@ export function generatePropuestaAbono(loan, allPays, propuesta, opts) {
     return '<div class="pa-row"><span class="pa-lab">' + l + '</span>' +
            '<span class="pa-val"' + (color ? ' style="color:' + color + '"' : '') + '>' + v + '</span></div>';
   }
-  function card(label, oldTxt, newTxt){
+  function card(label, oldTxt, newTxt, nota){
     return '<div class="pa-card"><div class="pa-cl">' + label + '</div>' +
       (oldTxt ? '<div class="pa-old">' + oldTxt + '</div>' : '') +
-      '<div class="pa-new">' + newTxt + '</div></div>';
+      '<div class="pa-new">' + newTxt + '</div>' +
+      (nota ? '<div class="pa-cnota">' + nota + '</div>' : '') + '</div>';
   }
 
   // ── Los pasos, en CONDICIONAL: nada de esto ha ocurrido ────────────────────
@@ -146,15 +157,20 @@ export function generatePropuestaAbono(loan, allPays, propuesta, opts) {
     '</div>';
 
   // ── Como quedaria ──────────────────────────────────────────────────────────
-  var cards = card('Saldo de capital',
-    (saldoAntes > saldoDespues) ? money(saldoAntes) : '', money(saldoDespues));
+  var cards = (totalDespues !== null)
+    ? card('Total por pagar', (totalAntes > totalDespues) ? money(totalAntes) : '', money(totalDespues))
+    : '';
   if (cuotaDespues > 0) {
+    // Mismo puente que el recibo: el valor de la cuota es CONTRACTUAL y no tiene por
+    // que coincidir con lo que faltaria de la proxima si esa cuota ya trae abono.
+    var abonadoProx = Math.max(0, Math.round(proy.abonadoProxima || 0));
     cards += card('Valor de la cuota',
-      (cuotaAntes && cuotaAntes !== cuotaDespues) ? money(cuotaAntes) : '', money(cuotaDespues));
+      (cuotaAntes && cuotaAntes !== cuotaDespues) ? money(cuotaAntes) : '', money(cuotaDespues),
+      abonadoProx > 0 ? ('de la proxima ya abonaste ' + money(abonadoProx)) : '');
   }
   if (filas.length) cards += card('Cuotas restantes', '', String(filas.length));
 
-  var saldadoHTML = (proy.saldado || saldoDespues <= 0)
+  var saldadoHTML = (proy.saldado || totalDespues === 0)
     ? '<div class="pa-saldado">Con ese abono el credito quedaria <b>totalmente cancelado</b>.</div>' : '';
 
   // Cronograma PROYECTADO. Mismas columnas universales que el resto de la app
@@ -222,6 +238,7 @@ export function generatePropuestaAbono(loan, allPays, propuesta, opts) {
     '.pa-cl{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:' + C.muted + '}',
     '.pa-old{font-size:11px;color:' + C.muted + ';text-decoration:line-through;margin-top:3px}',
     '.pa-new{font-size:15px;font-weight:700;color:' + C.blue + ';margin-top:1px}',
+    '.pa-cnota{font-size:9px;color:' + C.muted + ';margin-top:3px;line-height:1.35}',
     '.pa-tb{width:100%;border-collapse:collapse;margin-top:5px;font-size:10.5px}',
     '.pa-tb th{text-align:right;font-size:8.5px;letter-spacing:.4px;color:' + C.muted + ';font-weight:700;padding:3px 5px;border-bottom:1px solid ' + C.bd + ';white-space:nowrap}',
     '.pa-tb th.l,.pa-tb td.l{text-align:left}',

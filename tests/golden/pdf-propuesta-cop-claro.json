@@ -1,0 +1,70 @@
+{
+  "version": 2,
+  "caso": "propuesta-cop-claro",
+  "generador": "generatePropuestaAbono",
+  "tema": "light",
+  "entradaHash": "14ac40c234108c5808c4669905038ce5acc79a44",
+  "estructura": {
+    "docTitle": "Propuesta de Abono",
+    "h1": [],
+    "cabeceras": [
+      "#",
+      "VENCE",
+      "INTERES",
+      "ABONO A CAPITAL",
+      "VALOR CUOTA",
+      "SALDO"
+    ],
+    "etiquetas": []
+  },
+  "valores": {
+    "bytes": 9196,
+    "nFilas": 2,
+    "nCeldas": 12,
+    "celdasPorTr": [
+      6,
+      6
+    ],
+    "nMontos": 24,
+    "hashMontos": "25d6780980556f21d9f55877a2bcdc6aa5368d3c",
+    "hashFname": "880e6c81a7f4594b5368b650d9dc6c6634d87f4c",
+    "hashTexto": "b53061dbf13763b066654e2b555587c37a498007",
+    "clases": [
+      "l",
+      "pa-aviso",
+      "pa-brand",
+      "pa-card",
+      "pa-cc",
+      "pa-chip pa-chip-g",
+      "pa-cl",
+      "pa-date",
+      "pa-foot",
+      "pa-head",
+      "pa-imp",
+      "pa-lab",
+      "pa-meta",
+      "pa-n",
+      "pa-name",
+      "pa-new",
+      "pa-num",
+      "pa-old",
+      "pa-panel",
+      "pa-paso",
+      "pa-paso-d",
+      "pa-paso-h",
+      "pa-paso-t",
+      "pa-paso-v",
+      "pa-row",
+      "pa-row pa-row-tot",
+      "pa-st",
+      "pa-sub",
+      "pa-ta",
+      "pa-tb",
+      "pa-tl",
+      "pa-total",
+      "pa-type",
+      "pa-val",
+      "pa-wm"
+    ]
+  }
+}

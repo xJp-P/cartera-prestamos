@@ -334,3 +334,58 @@ export function cobrableTotal(loan, allPays){
   // no decidio cobrar. El modal lo suma cuando el check esta activo.
   return { mora:mora, abonable:techo, total:mora+techo, interesMes:ctx.interesMesPend, ctx:ctx };
 }
+
+// ── PROYECCION DE LO QUE QUEDARIA POR PAGAR ──────────────────────────────────
+// Alimenta la Propuesta de Abono: "si abonas X, cuanto te queda debiendo".
+//
+// Declara el TOTAL POR PAGAR y NO un saldo de capital, y la diferencia importa. El
+// saldo de capital sale de `saldoConCaja`, que depende de `imputarCobros`; proyectar
+// esa imputacion sobre un cronograma que todavia no existe obliga a una segunda
+// implementacion, y esa copia se desincronizo: la propuesta prometia un saldo y el
+// recibo entregaba otro sobre el MISMO cobro. El borde que lo destapo es real — un
+// parcial que sobrevive al recalculo puede quedar siendo MAYOR que la cuota nueva, y
+// ahi ninguna resta ingenua describe la imputacion.
+//
+// El total por pagar, en cambio, es suma de (cuota - lo ya abonado en ella) sobre las
+// filas que quedarian, mas la mora que sobreviva: sale DIRECTO de la proyeccion y es
+// exactamente lo que el recibo totaliza despues en "Lo que queda por pagar". Las dos
+// cifras coinciden por construccion.
+//
+//   `filas`     — las del preview (`filasPreview`), ya con su `cuota`.
+//   `pendOrden` — las cuotas Pendientes de HOY, en el mismo orden que `filas`: son las
+//                 que arrastran su abono a la fila proyectada correspondiente.
+export function proyeccionCobro(loan, allPays, plan, filas, pendOrden){
+  var lp=(allPays||[]).filter(function(p){ return String(p.prestamoId)===String(loan.id); });
+  var reg=lp.filter(function(p){ return !esAbono(p)&&
+    (p.estadoPago==='Pendiente'||p.estadoPago==='En Mora'); });
+  var totalAntes=reg.reduce(function(s,p){
+    return s+Math.max(0, r0(p.cuotaTotal)-r0(p.partialPaid||0)); },0);
+
+  // Lo que cada cuota Pendiente llevara encima DESPUES del cobro: lo que ya tenia mas
+  // lo que este cobro le suma (el paso del interes del mes apunta a una de ellas).
+  function partialProy(p){
+    var base=r0(p.partialPaid||0);
+    var paso=(plan&&plan.pasos||[]).filter(function(x){ return x.payId===p.id; })[0];
+    return base+(paso?r0(paso.obligacionCOP):0);
+  }
+  // Mora que SOBREVIVE al cobro: tambien es dinero por cobrar.
+  var moraTras=(plan&&plan.ctx?plan.ctx.moraCuotas:[]).reduce(function(s,p){
+    var paso=(plan.pasos||[]).filter(function(x){ return x.payId===p.id; })[0];
+    var pend=Math.max(0, r0(p.cuotaTotal)-r0(p.partialPaid||0));
+    return s+(paso?Math.max(0,paso.restanteCuota):pend);
+  },0);
+
+  var pend=pendOrden||[];
+  var totalDespues=null;
+  if(filas&&filas.length){
+    totalDespues=moraTras;
+    for(var i=0;i<filas.length;i++){
+      var p=pend[i];
+      totalDespues+=Math.max(0, r0(filas[i].cuota)-(p?partialProy(p):0));
+    }
+  }
+  return {
+    totalAntes:totalAntes, totalDespues:totalDespues,
+    abonadoProxima:pend.length?partialProy(pend[0]):0,
+  };
+}
