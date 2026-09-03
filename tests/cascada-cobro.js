@@ -1100,6 +1100,84 @@ async function ejecutarPlan(loanId, plan, fecha, obs, port) {
     }
   }
 
+  // ── I — EL INTERES DEL MES: LO PROMETIDO == LO EXTINGUIDO ──────────────────
+  // El paso del periodo en curso se cobra con `/partial` sobre una cuota Pendiente. El
+  // backend valua la obligacion como `round(montoUSD * trmAcordada)`, asi que el plan
+  // tiene que declarar EXACTAMENTE esa formula sobre el mismo input.
+  //
+  // Con un anclaje al peso del interes (que si es correcto en los pasos que SALDAN una
+  // cuota, porque alli el backend fuerza `partialPaid = cuotaTotal`) el plan prometia
+  // 147.739 y el backend extinguia 147.755: 16 pesos de deriva entre el recibo que se le
+  // entrega al cliente y lo que queda en la base. Copia y servidor propios para no
+  // depender de lo que dejaron las secciones anteriores.
+  {
+    R.seccion('I — interes del mes: el plan declara lo que el backend extingue');
+    const DB_I = copiaDeProduccion('cascada-mes');
+    const appI = require(path.join(REPO, 'backend', 'server.js'))(DB_I);
+    const srvI = http.createServer(appI);
+    const PORT_I = 3975;
+    await new Promise(ok => srvI.listen(PORT_I, '127.0.0.1', ok));
+    const conDbI = fn => { const d = new Database(DB_I, { readonly: true }); try { return fn(d); } finally { d.close(); } };
+    await pedir('GET', '/api/payments', null, PORT_I);   // auto-mora, como en la app real
+
+    const loansI = conDbI(d => d.prepare('SELECT * FROM loans').all());
+    const paysI  = conDbI(d => d.prepare('SELECT * FROM payments').all());
+    // Un credito con interes del mes por cobrar y capital amortizable: hacen falta los
+    // dos, porque el defecto solo se ve cuando el paso del mes convive con un abono.
+    const objetivo = loansI.filter(l => l.estado === 'Activo' && l.modalidad === 'Capital + Intereses')
+      .map(l => ({ l: l, cob: cobrableTotal(l, paysI) }))
+      .filter(o => o.cob.interesMes > 0 && o.cob.abonable > 0)
+      .sort((a, b) => (b.l.moneda === 'USD' ? 1 : 0) - (a.l.moneda === 'USD' ? 1 : 0))[0];
+    R.check('I ANTI-VACIO: hay un C+I con interes del mes y capital amortizable',
+      !!objetivo, objetivo ? objetivo.l.id : 'ninguno');
+
+    if (objetivo) {
+      const loan = objetivo.l, cob = objetivo.cob, esUSD = loan.moneda === 'USD';
+      const totalCOP = cob.mora + cob.interesMes + Math.round(cob.abonable * 0.3);
+      const entrada = esUSD
+        ? { obligacionUSD: Math.round(totalCOP / loan.trmAcordada * 100) / 100,
+            cajaCOP: Math.round(totalCOP * 0.95), obligacionCOP: 0 }
+        : { obligacionCOP: totalCOP, cajaCOP: totalCOP, obligacionUSD: 0 };
+      const plan = planCascada(loan, paysI, entrada, { incluirInteresMes: true });
+      const pasoMes = plan.pasos.filter(p => p.esInteresMes)[0];
+      R.check('I ANTI-VACIO: el plan produjo el paso del interes del mes y un abono',
+        plan.ok && !!pasoMes && plan.pasos.some(p => p.tipo === 'abono'),
+        JSON.stringify(plan.pasos.map(p => p.esInteresMes ? 'mes' : p.tipo)) + ' ' + (plan.error || ''));
+
+      if (pasoMes) {
+        // ANTI-TRIVIAL en USD: si el plan y el backend usaran formulas distintas se
+        // notaria; con caja == obligacion (COP) la comprobacion es trivialmente cierta.
+        if (esUSD) {
+          R.check('I ANTI-TRIVIAL: el credito es USD, donde la valuacion puede divergir',
+            true, 'trm=' + loan.trmAcordada);
+        }
+        const antes = conDbI(d => d.prepare('SELECT partialPaid FROM payments WHERE id=?').get(pasoMes.payId));
+        const est = await ejecutarPlan(loan.id, plan, hoy, 'test interes del mes', PORT_I);
+        R.check('I la cadena se aplico completa', est.ok, est.error || '');
+        const despues = conDbI(d => d.prepare('SELECT partialPaid, interesPeriodo, cuotaTotal FROM payments WHERE id=?').get(pasoMes.payId));
+        const extinguido = Math.round(despues.partialPaid) - Math.round(antes.partialPaid || 0);
+        R.eq('I el backend extinguio EXACTAMENTE la obligacion que el plan declaro',
+          extinguido, Math.round(pasoMes.obligacionCOP));
+        // El invariante NO es "obligacionCOP == interes en COP": en USD el plan declara
+        // `round(usd * trm)` a proposito, que es la formula del backend. Exigir el COP
+        // exacto seria pedir el anclaje que causaba la deriva.
+        if (esUSD) {
+          R.eq('I en USD la obligacion es round(usd * TRM), la formula del backend',
+            Math.round(pasoMes.obligacionCOP),
+            Math.round(pasoMes.obligacionUSD * loan.trmAcordada));
+          // Y no se aleja del interes real mas de lo que un centavo de dolar permite.
+          R.check('I y no se aparta del interes pendiente mas de un centavo de dolar',
+            Math.abs(Math.round(pasoMes.obligacionCOP) - Math.round(cob.interesMes)) <= Math.ceil(loan.trmAcordada / 100) + 1,
+            'plan=' + Math.round(pasoMes.obligacionCOP) + ' interes=' + Math.round(cob.interesMes));
+        } else {
+          R.eq('I en COP la obligacion es exactamente el interes pendiente',
+            Math.round(pasoMes.obligacionCOP), Math.round(cob.interesMes));
+        }
+      }
+    }
+    srvI.close();
+  }
+
   srv.close();
   process.exit(R.finalizar());
 })().catch(e => {

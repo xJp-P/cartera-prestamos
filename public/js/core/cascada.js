@@ -206,9 +206,14 @@ export function planCascada(loan, allPays, entrada, opts){
     var apMes=Math.min(restante, intMesU);
     var cubreMes=(intMesU-apMes)<=EPS;
     if(cubreMes) apMes=intMesU;
-    // Solo se ancla al peso exacto cuando el dinero cubre TODO el interes del mes;
-    // por debajo se convierte normal, igual que un parcial cualquiera.
-    var apMesCOP=cubreMes?intMesCOP:(esUSD?aCOP(apMes):apMes);
+    // NO se ancla al peso del interes. El anclaje solo es legitimo donde el backend
+    // va a forzar `partialPaid = cuotaTotal` (rama `completaUSD` de /partial), y este
+    // paso NUNCA completa la cuota: solo cubre su interes. El backend valua la
+    // obligacion como `round(montoUSD * trm)`, asi que el plan declara EXACTAMENTE
+    // esa formula sobre el mismo input. Medido en una prueba real con anclaje: el
+    // plan prometia 147.739 y el backend extinguia 147.755 — 16 pesos de deriva
+    // entre lo que el recibo afirmaba y lo que quedaba en la base.
+    var apMesCOP=esUSD?aCOP(apMes):apMes;
     var pendProxCOP=Math.max(0, r0(ctx.proximaCuota.cuotaTotal)-r0(ctx.proximaCuota.partialPaid||0));
     pasos.push({
       tipo:'partial', esInteresMes:true,

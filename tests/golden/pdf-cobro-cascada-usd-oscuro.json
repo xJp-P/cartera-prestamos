@@ -7,7 +7,13 @@
   "estructura": {
     "docTitle": "Recibo de Cobro",
     "h1": [],
-    "cabeceras": [],
+    "cabeceras": [
+      "CUOTA",
+      "VENCE",
+      "VALOR CUOTA",
+      "YA ABONADO",
+      "FALTA"
+    ],
     "etiquetas": [
       "Intereses vencidos",
       "Capital de cuotas vencidas",
@@ -17,15 +23,24 @@
     ]
   },
   "valores": {
-    "bytes": 8268,
-    "nFilas": 0,
-    "nCeldas": 0,
-    "celdasPorTr": [],
-    "nMontos": 17,
-    "hashMontos": "d6ae61196142f28c8a774df6b7440df2e3723103",
+    "bytes": 9643,
+    "nFilas": 6,
+    "nCeldas": 30,
+    "celdasPorTr": [
+      5,
+      5,
+      5,
+      5,
+      5,
+      5
+    ],
+    "nMontos": 26,
+    "hashMontos": "23c11f855d438226e1eebb49c01fed4e164faa6d",
     "hashFname": "8df031a48dd0c5a6ac15bd29e83aa14c7bc4cca6",
-    "hashTexto": "6eb2556711ef2077b466ec3f8bc8d40c35de3d3e",
+    "hashTexto": "8fd13815d6e2963db3d3928686b581a87eecf326",
     "clases": [
+      "",
+      "l",
       "rc-brand",
       "rc-card",
       "rc-cc",
@@ -51,6 +66,7 @@
       "rc-paso-t",
       "rc-paso-v",
       "rc-pie",
+      "rc-qt",
       "rc-row",
       "rc-row rc-row-tot",
       "rc-st",
@@ -61,7 +77,8 @@
       "rc-ts",
       "rc-type",
       "rc-val",
-      "rc-wm"
+      "rc-wm",
+      "v"
     ]
   }
 }

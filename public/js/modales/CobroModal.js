@@ -252,7 +252,10 @@ export function CobroModal(props){
       cob.interesMes>0&&linea('Interes del mes en curso', fmtUni(uni(cob.interesMes)), 'var(--text3)'),
       linea('Capital amortizable', fmtUni(cobAbonableU), 'var(--text2)'),
       h('div',{style:{height:1,background:'var(--border)',margin:'5px 0'}}),
-      linea('Total que se puede cobrar hoy', fmtUni(cobMoraU+cobAbonableU), 'var(--text)', true)),
+      // El interes del mes suma al techo SOLO si el usuario lo activo: es opcional, y
+      // anunciarlo siempre inflaria lo cobrable con algo que todavia no decidio cobrar.
+      linea('Total que se puede cobrar hoy',
+        fmtUni(cobMoraU+cobAbonableU+(incMes?uni(cob.interesMes):0)), 'var(--text)', true)),
 
     // ── Entrada ──
     esUSD

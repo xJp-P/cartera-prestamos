@@ -1,9 +1,9 @@
 {
   "version": 2,
-  "caso": "cobro-cascada-cop-intereses",
+  "caso": "cobro-con-interes-del-mes",
   "generador": "generateReciboCobro",
-  "tema": "light",
-  "entradaHash": "a4ea49cae33efc66a3c59e6c55682784dcabdef9",
+  "tema": "dark",
+  "entradaHash": "1af18516e6d0122f1ae38bfdc0235d9cbf0f0c45",
   "estructura": {
     "docTitle": "Recibo de Cobro",
     "h1": [],
@@ -16,20 +16,18 @@
     ],
     "etiquetas": [
       "Intereses vencidos",
+      "Interes del mes en curso",
+      "Capital de cuotas vencidas",
       "Abono extraordinario a capital",
-      "Total aplicado"
+      "Total aplicado",
+      "Caja registrada en pesos"
     ]
   },
   "valores": {
-    "bytes": 11285,
-    "nFilas": 11,
-    "nCeldas": 55,
+    "bytes": 10234,
+    "nFilas": 6,
+    "nCeldas": 30,
     "celdasPorTr": [
-      5,
-      5,
-      5,
-      5,
-      5,
       5,
       5,
       5,
@@ -37,16 +35,17 @@
       5,
       5
     ],
-    "nMontos": 38,
-    "hashMontos": "0d7844a399c840824d542b68204f0973db945d8f",
-    "hashFname": "c1a54917584fef33a547c629cac5d312337d5ece",
-    "hashTexto": "9c9478dad4cd28ae6b49b2526fff62f38e70a24f",
+    "nMontos": 29,
+    "hashMontos": "e6c83caf5e7aae97524df32e904df007026865c7",
+    "hashFname": "992a0b643ef78d92a2f7d5c6b1cc2684f5aae230",
+    "hashTexto": "42a9a9274276dddc7d04b6e058902f7980dba0b0",
     "clases": [
       "",
       "l",
       "rc-brand",
       "rc-card",
       "rc-cc",
+      "rc-chip rc-chip-b",
       "rc-chip rc-chip-g",
       "rc-chipf",
       "rc-cl",
@@ -77,6 +76,7 @@
       "rc-ta",
       "rc-tl",
       "rc-total",
+      "rc-ts",
       "rc-type",
       "rc-val",
       "rc-wm",

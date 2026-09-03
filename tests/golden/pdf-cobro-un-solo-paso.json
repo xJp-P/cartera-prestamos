@@ -7,22 +7,41 @@
   "estructura": {
     "docTitle": "Recibo de Cobro",
     "h1": [],
-    "cabeceras": [],
+    "cabeceras": [
+      "CUOTA",
+      "VENCE",
+      "VALOR CUOTA",
+      "YA ABONADO",
+      "FALTA"
+    ],
     "etiquetas": [
       "Abono extraordinario a capital",
       "Total aplicado"
     ]
   },
   "valores": {
-    "bytes": 6935,
-    "nFilas": 0,
-    "nCeldas": 0,
-    "celdasPorTr": [],
-    "nMontos": 7,
-    "hashMontos": "0e47c2fb291e129b81c982335a79b34166059804",
+    "bytes": 8807,
+    "nFilas": 10,
+    "nCeldas": 50,
+    "celdasPorTr": [
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5
+    ],
+    "nMontos": 24,
+    "hashMontos": "d215379c36b2827a88563a1d15292ef9c87eb478",
     "hashFname": "43d0da45abcc78c038251914663bcde6744f0d53",
-    "hashTexto": "588d7bd3b373314d1722e8559e4b4e191087d5bd",
+    "hashTexto": "c9f0d4421a3e6fcd8ccf03bc41d3f8b0ec415199",
     "clases": [
+      "",
+      "l",
       "rc-brand",
       "rc-card",
       "rc-cc",
@@ -46,6 +65,7 @@
       "rc-paso-t",
       "rc-paso-v",
       "rc-pie",
+      "rc-qt",
       "rc-row",
       "rc-row rc-row-tot",
       "rc-st",

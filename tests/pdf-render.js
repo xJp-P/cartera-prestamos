@@ -206,6 +206,36 @@ function snapshotPrevio(loan, arrPays, monto) {
 // la mora mas una parte del capital amortizable, que es el caso que obliga al documento a
 // explicar los dos tipos de movimiento. En USD la caja se aparta a proposito de la
 // obligacion (TRM del dia por debajo de la pactada) para que el recibo declare ambas.
+// Variante del anterior con el override `incluirInteresMes` activo. Existe porque el
+// documento cambia de forma: aparece un paso "por adelantado" y un rubro propio, y el
+// recibo NO debe llamar "vencida" a una cuota que aun no vence. En la prueba real que
+// destapo el defecto, un cobro del 3 de sept declaraba atrasada una cuota del 19.
+function cobroConInteresMes(loan, arrPays) {
+  const esUSD = loan.moneda === 'USD';
+  const cob = S.cobrableTotal(loan, arrPays);
+  if (!(cob.interesMes > 0)) {
+    abortar('cobroConInteresMes(' + loan.id + '): el credito no tiene interes del mes por cobrar. ' +
+            'Sin eso este caso no ejercita nada: elegi otro prestamo.');
+  }
+  const objetivo = Math.round(cob.mora + cob.interesMes + Math.max(100000, cob.abonable * 0.2));
+  const plan = S.planCascada(loan, arrPays, esUSD
+    ? { obligacionUSD: Math.round(objetivo / loan.trmAcordada * 100) / 100,
+        cajaCOP: Math.round(objetivo * 0.96), obligacionCOP: 0 }
+    : { obligacionCOP: objetivo, cajaCOP: objetivo, obligacionUSD: 0 },
+    { incluirInteresMes: true });
+  if (!plan.ok || !plan.pasos.some(p => p.esInteresMes)) {
+    abortar('cobroConInteresMes(' + loan.id + '): el plan no incluyo el paso del interes del mes (' +
+            (plan.error || 'sin error') + ').');
+  }
+  const lp = arrPays.filter(p => p.prestamoId === loan.id);
+  const pend = lp.filter(p => p.id.indexOf('-ab-') === -1 && p.estadoPago === 'Pendiente')
+                 .sort((a, b) => a.cuotaN - b.cuotaN);
+  return {
+    fecha: '2026-07-20', pasos: plan.pasos, observaciones: 'Cobro con interes del mes',
+    pre: { saldoCaja: S.saldoConCaja(loan, lp), cuota: pend.length ? pend[0].cuotaTotal : 0 },
+  };
+}
+
 function cobroDe(loan, arrPays) {
   const esUSD = loan.moneda === 'USD';
   const cob = S.cobrableTotal(loan, arrPays);
@@ -361,17 +391,42 @@ const CASOS = [
     contiene: ['Resumen', 'Nuevo saldo pendiente'] },
 
   // ── generateReciboCobro — comprobante consolidado del cobro en cascada ────────────────
+  // v2.9.6: estos casos declaraban `celdas: null` porque el bloque 4 era un RESUMEN sin
+  // tabla. Ya no: el documento incluye "Lo que queda por pagar", cuota por cuota, con lo
+  // ya abonado en cada una. El resumen solo no alcanzaba — en una prueba real convivian
+  // "saldo de capital USD 117.65" y "valor de la cuota USD 157.79" con UNA cuota
+  // pendiente, sin forma de ver que la diferencia era el interes que el cliente acababa
+  // de adelantar sobre esa misma cuota. El Paz y Salvo sigue en `null`: alli no hay
+  // bloque 4 porque no queda credito.
   // Los pasos se construyen con `planCascada` REAL sobre los datos del fixture: escribirlos
   // a mano fijaria una forma que podria dejar de ser la que el orquestador produce, y este
   // documento existe precisamente para describir esa forma.
-  { nombre: 'cobro-cascada-usd-oscuro', gen: 'generateReciboCobro', tema: 'dark', celdas: null,
+  { nombre: 'cobro-cascada-usd-oscuro', gen: 'generateReciboCobro', tema: 'dark', celdas: 5,
     entrada: () => ({ loanId: '1782151590658w66y', cascada: true, tema: 'dark', dark: true }),
     ejecutar: () => S.generateReciboCobro(L('1782151590658w66y'), pays,
       cobroDe(L('1782151590658w66y'), pays)),
     contiene: ['Recibo de Cobro', 'Como se aplico tu pago', 'rc-paso', 'Total aplicado',
                'Caja registrada en pesos', 'USD $', 'RC-', '#0d1117'] },
 
-  { nombre: 'cobro-cascada-cop-intereses', gen: 'generateReciboCobro', tema: 'light', celdas: null,
+  // v2.9.6 — el override `incluirInteresMes`. Lo que este caso fija, y que fallaba:
+  //   - el paso se rotula "Interes del mes", NO "Cuota #N vencida";
+  //   - dice "aun no vence", no "vencia el";
+  //   - el rubro es "Interes del mes en curso", separado de "Intereses vencidos";
+  //   - y el bloque "Lo que queda por pagar" detalla la cuota con lo ya abonado.
+  { nombre: 'cobro-con-interes-del-mes', gen: 'generateReciboCobro', tema: 'dark', celdas: 5,
+    entrada: () => ({ loanId: '1782151590658w66y', cascada: 'interesMes', tema: 'dark', dark: true }),
+    ejecutar: () => S.generateReciboCobro(L('1782151590658w66y'), pays,
+      cobroConInteresMes(L('1782151590658w66y'), pays)),
+    contiene: ['Interes del mes', 'POR ADELANTADO', 'aun no vence',
+               'Interes del mes en curso', 'Lo que queda por pagar',
+               'YA ABONADO', 'TOTAL POR PAGAR'],
+    // En este escenario el dinero salda TODA la mora, asi que ningun paso puede quedar
+    // debiendo. Si "queda debiendo" reaparece es el paso del interes del mes imprimiendo
+    // su `restanteCuota`, que es una cifra PREVIA al abono y por tanto ya falsa cuando el
+    // abono regenera el cronograma (medido: decia USD 243.38 debiendo USD 117.65).
+    noContiene: ['queda debiendo'] },
+
+  { nombre: 'cobro-cascada-cop-intereses', gen: 'generateReciboCobro', tema: 'light', celdas: 5,
     entrada: () => ({ loanId: '1773655076017', cascada: true, tema: 'light', dark: false }),
     ejecutar: () => S.generateReciboCobro(L('1773655076017'), pays,
       cobroDe(L('1773655076017'), pays)),
@@ -380,7 +435,7 @@ const CASOS = [
 
   // Un cobro de UN solo paso: sin mora, la cascada degenera en un abono. Aqui la nota que
   // explica el orden de imputacion no debe aparecer (no hay nada que repartir).
-  { nombre: 'cobro-un-solo-paso', gen: 'generateReciboCobro', tema: 'light', celdas: null,
+  { nombre: 'cobro-un-solo-paso', gen: 'generateReciboCobro', tema: 'light', celdas: 5,
     entrada: () => ({ loanId: '17795544041379obc', cascada: true, unPaso: true, tema: 'light', dark: false }),
     ejecutar: () => S.generateReciboCobro(L('17795544041379obc'), pays,
       cobroDe(L('17795544041379obc'), pays)),
@@ -662,6 +717,15 @@ for (const caso of CASOS) {
   const ausentes = (caso.contiene || []).filter(t => html.indexOf(t) === -1);
   R.check('contiene los marcadores de su escenario', ausentes.length === 0,
           ausentes.length ? ('faltan: ' + JSON.stringify(ausentes)) : undefined);
+
+  // 5b — marcadores que NO deben aparecer. El golden fija la forma, pero no dice nada
+  // sobre un texto que seria INCORRECTO emitir: un recibo que llame "vencida" a una
+  // cuota que aun no vence tiene la misma estructura que uno correcto.
+  if (caso.noContiene && caso.noContiene.length) {
+    const presentes = caso.noContiene.filter(t => html.indexOf(t) !== -1);
+    R.check('no dice lo que no debe decir', presentes.length === 0,
+            presentes.length ? ('aparecen y no deberian: ' + JSON.stringify(presentes)) : undefined);
+  }
 
   // 6 — determinismo: dos corridas seguidas, misma huella
   const h1 = huellaDe(salida1.html, salida1.fname);
