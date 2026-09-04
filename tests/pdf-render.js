@@ -300,6 +300,35 @@ function cobroDe(loan, arrPays) {
 // `contiene`: literales que DEBEN aparecer. Son la prueba de que el caso ejercito de verdad
 //           la rama que dice ejercitar (un caso "USD" que no imprime dolares no cubre nada).
 
+// Estado para el caso HERO: UNA sola cuota viva con un parcial encima que ya cubrio su
+// interes. Se construye sobre una copia profunda (la BD y los demas casos no se tocan)
+// marcando como Pagadas todas las cuotas regulares menos la ultima.
+const LOAN_HERO = '1782151590658w66y';
+const paysHero = JSON.parse(JSON.stringify(pays));
+(function () {
+  const reg = paysHero.filter(p => p.prestamoId === LOAN_HERO && p.id.indexOf('-ab-') === -1)
+                      .sort((a, b) => a.cuotaN - b.cuotaN);
+  if (reg.length < 2) {
+    abortar(`El prestamo ${LOAN_HERO} ya no tiene 2+ cuotas regulares para armar el caso HERO.`);
+  }
+  const ultima = reg[reg.length - 1];
+  reg.slice(0, -1).forEach(p => {
+    p.estadoPago = 'Pagado';
+    p.partialPaid = p.cuotaTotal;
+    p.fechaRecaudo = p.fechaPago;
+    p.montoCOPRecibido = p.cuotaTotal;
+    p.recibos = JSON.stringify([{ fecha: p.fechaPago, cop: Math.round(p.cuotaTotal) }]);
+  });
+  // El parcial tiene que SUPERAR el interes del periodo: por debajo, `imputarCobros` no
+  // llega a capital, el saldo no se mueve y la identidad que dispara el hero no se cumple.
+  const abono = Math.round(ultima.interesPeriodo * 1.4);
+  ultima.estadoPago = 'Pendiente';
+  ultima.partialPaid = abono;
+  ultima.montoCOPRecibido = abono;
+  ultima.fechaRecaudo = null;
+  ultima.recibos = JSON.stringify([{ fecha: '2026-07-28', cop: abono }]);
+})();
+
 const CASOS = [
   // ── generateCronogramaPDF — 4 modalidades, COP y USD, mora, abono, parcial ────────────
   { nombre: 'crono-capint-cop-abono', gen: 'generateCronogramaPDF', tema: 'light', celdas: 7,
@@ -447,9 +476,14 @@ const CASOS = [
     entrada: () => ({ loanId: '1782151590658w66y', cascada: true, tema: 'dark', dark: true }),
     ejecutar: () => S.generateReciboCobro(L('1782151590658w66y'), pays,
       cobroDe(L('1782151590658w66y'), pays)),
+    // Con mora viva el rotulo de la cuota NO puede prometer un proximo pago: hay plata
+    // vencida que se debe ANTES de esa fecha. Se degrada a "Proxima cuota" y el pie rojo
+    // sigue anunciando lo vencido.
     contiene: ['Recibo de Cobro', 'Como se aplico tu pago', 'rc-paso', 'Total aplicado',
                'Caja registrada en pesos', 'USD $', 'RC-', '#0d1117',
-               'Total por pagar', 'capital + intereses'] },
+               'Total por pagar', 'capital + intereses',
+               'Proxima cuota', 'A PAGAR', 'cuotas vencidas'],
+    noContiene: ['A pagar el'] },
 
   // v2.9.6 — el override `incluirInteresMes`. Lo que este caso fija, y que fallaba:
   //   - el paso se rotula "Interes del mes", NO "Cuota #N vencida";
@@ -473,8 +507,14 @@ const CASOS = [
     entrada: () => ({ loanId: '1773655076017', propuesta: true, tema: 'light', dark: false }),
     ejecutar: () => S.generatePropuestaAbono(L('1773655076017'), pays,
       propuestaDe(L('1773655076017'), pays)),
-    contiene: ['Propuesta de Abono', 'Si abonas', 'Total por pagar', 'no un comprobante'],
-    noContiene: ['TOTAL RECIBIDO', 'certifica el dinero'] },
+    // En `Intereses` la Propuesta ya no titula un total: sus cuotas son de puro interes y
+    // el capital vence fuera del cronograma. Este caso llego a emitir "Quedaria un solo
+    // pago de 2.310.000" sobre un capital de 3.000.000, el mismo defecto que el recibo
+    // cierra con su gate. Es inalcanzable desde la UI (el preview solo existe en C+I) pero
+    // este arnes SI lo alcanza, asi que el gate vive en el generador y se fija aqui.
+    contiene: ['Propuesta de Abono', 'Si abonas', 'A pagar el', 'no un comprobante'],
+    noContiene: ['TOTAL RECIBIDO', 'certifica el dinero', 'Total por pagar',
+                 'Quedaria un solo pago'] },
 
   { nombre: 'cobro-con-interes-del-mes', gen: 'generateReciboCobro', tema: 'dark', celdas: 5,
     entrada: () => ({ loanId: '1782151590658w66y', cascada: 'interesMes', tema: 'dark', dark: true }),
@@ -509,7 +549,26 @@ const CASOS = [
     entrada: () => ({ loanId: '17795544041379obc', cascada: true, unPaso: true, tema: 'light', dark: false }),
     ejecutar: () => S.generateReciboCobro(L('17795544041379obc'), pays,
       cobroDe(L('17795544041379obc'), pays)),
-    contiene: ['Abono extraordinario a capital', 'Saldo de capital', 'Total por pagar'] },
+    // Sin mora, el rotulo si puede comprometer la fecha del proximo giro.
+    contiene: ['Abono extraordinario a capital', 'Saldo de capital', 'Total por pagar',
+               'A pagar el', 'A PAGAR'],
+    noContiene: ['Proxima cuota'] },
+
+  // El colapso a UNA sola tarjeta. Con una cuota viva y un parcial que ya cubrio su
+  // interes, el total por pagar, el saldo de capital y el proximo pago son EL MISMO
+  // numero. No es casualidad, es una identidad:
+  //   total        = cuota - abonado
+  //   saldoConCaja = capital - (abonado - interes) = capital + interes - abonado = total
+  // Tres tarjetas repitiendo la cifra se leen como un error del documento, asi que se
+  // reemplazan por una sola que dice lo unico que el cliente necesita: cuanto gira y
+  // cuando. El fixture no tiene un credito en ese estado; se construye en memoria.
+  { nombre: 'cobro-hero-un-solo-pago', gen: 'generateReciboCobro', tema: 'light', celdas: 5,
+    entrada: () => ({ loanId: LOAN_HERO, hero: true, tema: 'light', dark: false }),
+    ejecutar: () => S.generateReciboCobro(L(LOAN_HERO), paysHero, cobroDe(L(LOAN_HERO), paysHero)),
+    // `rc-hero` es el aserto que de verdad importa: si la identidad dejara de cumplirse,
+    // el documento volveria a las tres tarjetas y este caso se pondria rojo sin ambiguedad.
+    contiene: ['rc-hero', 'Tu proximo pago', 'ya abonado', 'A PAGAR', '&minus;'],
+    noContiene: ['Total por pagar', 'Saldo de capital', 'Cuotas pendientes'] },
 
   // Variante PAZ Y SALVO. Es la unica que se alimenta de un paso sintetico: pdf-render no
   // escribe en la BD, asi que ningun cobro sobre un prestamo activo puede dejarlo en cero

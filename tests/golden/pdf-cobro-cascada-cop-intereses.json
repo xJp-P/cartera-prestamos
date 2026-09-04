@@ -12,7 +12,7 @@
       "VENCE",
       "VALOR CUOTA",
       "YA ABONADO",
-      "FALTA"
+      "A PAGAR"
     ],
     "etiquetas": [
       "Intereses vencidos",
@@ -21,7 +21,7 @@
     ]
   },
   "valores": {
-    "bytes": 11356,
+    "bytes": 11408,
     "nFilas": 11,
     "nCeldas": 55,
     "celdasPorTr": [
@@ -38,9 +38,9 @@
       5
     ],
     "nMontos": 38,
-    "hashMontos": "0d7844a399c840824d542b68204f0973db945d8f",
+    "hashMontos": "cc6c301574b21994a92fe4f9d525a1309d22b0b3",
     "hashFname": "c1a54917584fef33a547c629cac5d312337d5ece",
-    "hashTexto": "9c9478dad4cd28ae6b49b2526fff62f38e70a24f",
+    "hashTexto": "c11a28de6e17678919ceece640c5046dc07af6f1",
     "clases": [
       "",
       "l",
@@ -50,6 +50,7 @@
       "rc-chip rc-chip-g",
       "rc-chipf",
       "rc-cl",
+      "rc-cnota",
       "rc-date",
       "rc-foot",
       "rc-head",

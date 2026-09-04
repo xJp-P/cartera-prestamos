@@ -155,6 +155,22 @@ export function generateReciboCobro(loan, allPays, cobro, opts) {
       '<div class="rc-new">' + newTxt + '</div>' +
       (nota ? '<div class="rc-cnota">' + nota + '</div>' : '') + '</div>';
   }
+  // Tarjeta unica a ancho completo. `.rc-imp` es un flex, asi que un solo hijo con
+  // `flex:1` ocupa toda la fila sin tocar el layout.
+  function cardHero(label, valor, nota){
+    return '<div class="rc-card rc-hero"><div class="rc-cl">' + label + '</div>' +
+      '<div class="rc-new rc-hnew">' + valor + '</div>' +
+      (nota ? '<div class="rc-cnota">' + nota + '</div>' : '') + '</div>';
+  }
+  // Fecha compacta para los ROTULOS de tarjeta ("A pagar el 19 sept"): el formato largo
+  // de `fmtD` parte el rotulo en tres lineas dentro de una tarjeta de ~150px. Mismo
+  // anclaje a mediodia que `fmtD`, por la misma razon de huso horario.
+  function fechaCorta(s){
+    if (!s) return '';
+    // es-CO devuelve "19 de ago" incluso con month:'short'; el rotulo necesita "19 ago".
+    return new Date(s + 'T12:00:00').toLocaleDateString('es-CO', {day:'2-digit', month:'short'})
+      .replace(/ de /g, ' ').replace(/\.$/, '');
+  }
 
   // ── BLOQUE 3 — "Como se aplico tu pago" ────────────────────────────────────
   // Es el mismo desglose que el modal muestra ANTES de cobrar, para que lo que el
@@ -252,27 +268,74 @@ export function generateReciboCobro(loan, allPays, cobro, opts) {
     // total de las filas que se estan listando —con "Plazo: Indefinido" a la vista— y no
     // un titular sobre la deuda entera.
     var totalTxt = money(totalFalta);
-    var cards = (porPagar.length && !esIndef && totalTxt !== money(saldoDespues))
-      ? card('Total por pagar',
-          (pre.totalPorPagar > totalFalta) ? money(pre.totalPorPagar) : '', totalTxt,
-          'capital + intereses')
-      : '';
-    cards += card('Saldo de capital',
-      (saldoAntes > saldoDespues) ? money(saldoAntes) : '', money(saldoDespues));
-    if (cuotaDespues > 0) {
-      // "Valor de la cuota" es el importe CONTRACTUAL que rige de aqui en adelante, y no
-      // tiene por que coincidir con lo que falta de la PROXIMA: si el cliente adelanto el
-      // interes del mes, esa cuota ya trae abono encima. Sin decirlo, el documento
-      // mostraba 157.79 arriba y 117.65 en la tabla de abajo, de la misma cuota, sin nada
-      // que los uniera — parecian contradecirse. La nota es el puente, y solo aparece
-      // cuando de verdad hay diferencia que explicar.
-      var abonadoProx = pend.length ? Math.round(pend[0].partialPaid || 0) : 0;
-      cards += card('Valor de la cuota',
-        (pre.cuota && Math.round(pre.cuota) !== cuotaDespues) ? money(pre.cuota) : '', money(cuotaDespues),
-        abonadoProx > 0 ? ('de la proxima ya abonaste ' + money(abonadoProx)) : '');
+    var saldoTxt = money(saldoDespues);
+
+    // ── LO QUE HAY QUE GIRAR EN LA PROXIMA FECHA ──
+    // NO es `cuotaTotal`: esa es la obligacion CONTRACTUAL, y si esa cuota ya trae abono
+    // encima (p.ej. el cliente adelanto el interes del mes en este mismo cobro) el cliente
+    // gira menos. Hasta aqui la tarjeta gritaba el valor contractual —157.79 medido en una
+    // prueba real— cuando lo que iba a transferir eran 117.65, y la diferencia solo se
+    // explicaba en la letra chica. Se invierte: el titular es la CAJA y el contrato pasa a
+    // ser la explicacion.
+    var abonadoProx = pend.length ? Math.round(pend[0].partialPaid || 0) : 0;
+    var aPagarProx  = pend.length ? pendCuota(pend[0]) : 0;
+    // Se deriva igual que la columna A PAGAR de la tabla (`money(pendCuota(p))`, una sola
+    // conversion) para que la tarjeta y la fila no puedan diferir un centavo en USD.
+    var aPagarTxt   = money(aPagarProx);
+
+    // ── HERO UNICO: cuando toda la deuda ES el proximo pago ──
+    // Con una sola cuota viva y un parcial que ya cubrio su interes, las tres cifras
+    // COLAPSAN — y no por casualidad, es una identidad: total = cuota - abonado, y
+    // saldoConCaja = capital - (abonado - interes) = capital + interes - abonado. Tres
+    // tarjetas con el mismo numero se leen como un error del documento, asi que se
+    // reemplazan por una sola que dice lo unico que el cliente necesita saber.
+    // Se exige ADEMAS `porPagar.length === 1`: el rotulo promete "tu proximo pago", y eso
+    // solo es toda la verdad cuando no queda nada mas. Y se excluye `Intereses`, donde el
+    // capital vence fuera del cronograma y un "unico pago" seria falso.
+    var heroUnico = porPagar.length === 1 && pend.length === 1 && !esIndef &&
+                    aPagarProx > 0 && totalTxt === saldoTxt && aPagarTxt === totalTxt;
+
+    var cards;
+    if (heroUnico) {
+      cards = cardHero('Tu proximo pago', aPagarTxt,
+        (proxVence ? 'el ' + fmtD(proxVence) : '') +
+        (abonadoProx > 0 ? ' &nbsp;&middot;&nbsp; cuota ' + money(cuotaDespues) +
+                           ' menos ' + money(abonadoProx) + ' ya abonado' : ''));
+    } else {
+      // "Total por pagar" se calla tambien cuando coincide con "A pagar": con una sola
+      // cuota viva las dos son el mismo numero aunque el saldo de capital difiera —
+      // medido en un Pago Unico, 535.000 y 535.000 bajo un saldo de 500.000. La regla
+      // de fondo es una sola: NINGUNA tarjeta repite una cifra que otra ya muestra.
+      var muestraTotal = porPagar.length && !esIndef && totalTxt !== saldoTxt &&
+                         !(aPagarProx > 0 && totalTxt === aPagarTxt);
+      cards = muestraTotal
+        ? card('Total por pagar',
+            (pre.totalPorPagar > totalFalta) ? money(pre.totalPorPagar) : '', totalTxt,
+            'capital + intereses')
+        : '';
+      if (aPagarProx > 0) {
+        // Con mora viva el rotulo NO puede prometer un proximo pago: hay plata vencida
+        // que se debe ANTES de esa fecha (el pie la anuncia en rojo). Se degrada a
+        // "Proxima cuota", que sigue siendo cierto, y la fecha baja a la nota.
+        var conMora = moraViva > 0;
+        // El tachado del valor anterior solo tiene sentido cuando el titular ES la cuota
+        // (sin abono encima): comparar el neto de hoy contra la cuota vieja mezclaria dos
+        // cosas distintas — el recalculo del cronograma y el descuento del parcial.
+        var notaCuota = abonadoProx > 0
+          ? ('cuota ' + money(cuotaDespues) + ' menos ' + money(abonadoProx) + ' ya abonado')
+          : '';
+        if (conMora && proxVence) notaCuota = 'vence el ' + fmtD(proxVence) +
+          (notaCuota ? ' &middot; ' + notaCuota : '');
+        cards += card(conMora ? 'Proxima cuota' : ('A pagar el ' + fechaCorta(proxVence)),
+          (abonadoProx === 0 && pre.cuota && Math.round(pre.cuota) !== cuotaDespues)
+            ? money(pre.cuota) : '',
+          aPagarTxt, notaCuota);
+      }
+      cards += card('Saldo de capital',
+        (saldoAntes > saldoDespues) ? money(saldoAntes) : '', saldoTxt);
+      if (esCapInt && pend.length) cards += card('Cuotas pendientes', '', String(pend.length));
+      else if (esIndef)            cards += card('Plazo', '', 'Indefinido');
     }
-    if (esCapInt && pend.length) cards += card('Cuotas pendientes', '', String(pend.length));
-    else if (esIndef)            cards += card('Plazo', '', 'Indefinido');
 
     var pie = [];
     if (proxVence) pie.push('Proximo vencimiento: <b>' + fmtD(proxVence) + '</b>');
@@ -290,12 +353,13 @@ export function generateReciboCobro(loan, allPays, cobro, opts) {
           '<td class="l">' + p.cuotaN + (p.estadoPago === 'En Mora' ? ' &middot; vencida' : '') + '</td>' +
           '<td class="l">' + fmtD(p.fechaPago) + '</td>' +
           '<td>' + money(p.cuotaTotal) + '</td>' +
-          '<td>' + (abonado > 0 ? money(abonado) : '&mdash;') + '</td>' +
+          // Con signo: la fila tiene que leerse como una RESTA, no como tres cifras sueltas.
+          '<td>' + (abonado > 0 ? '&minus; ' + money(abonado) : '&mdash;') + '</td>' +
           '<td><b>' + money(pendCuota(p)) + '</b></td></tr>';
       }).join('');
       quedaHTML = '<div class="rc-st">Lo que queda por pagar</div>' +
         '<table class="rc-qt"><thead><tr>' +
-        '<th class="l">CUOTA</th><th class="l">VENCE</th><th>VALOR CUOTA</th><th>YA ABONADO</th><th>FALTA</th>' +
+        '<th class="l">CUOTA</th><th class="l">VENCE</th><th>VALOR CUOTA</th><th>YA ABONADO</th><th>A PAGAR</th>' +
         '</tr></thead><tbody>' + filasQ + '</tbody>' +
         '<tfoot><tr><td class="l" colspan="4">TOTAL POR PAGAR</td><td>' + money(totalFalta) + '</td></tr></tfoot>' +
         '</table>';
@@ -312,6 +376,11 @@ export function generateReciboCobro(loan, allPays, cobro, opts) {
   var cssExtra = []
     .concat(pasos.some(function(p){ return p.esInteresMes; })
       ? ['.rc-chip-b{background:' + C.blueBg + ';color:' + C.blue + ';border:1px solid ' + C.blueBd + '}'] : [])
+    .concat(despuesHTML.indexOf('rc-hero') !== -1
+      ? ['.rc-hero{background:' + C.greenBg + ';border-color:' + C.greenBd + ';padding:13px 12px}',
+         '.rc-hero .rc-cl{color:' + C.green + '}',
+         '.rc-hero .rc-cnota{color:' + C.green + ';font-size:10px;margin-top:5px}',
+         '.rc-hnew{font-size:26px;margin-top:3px}'] : [])
     .concat(quedaHTML
       ? ['.rc-qt{width:100%;border-collapse:collapse;margin-top:5px;font-size:10.5px}',
          '.rc-qt th{text-align:right;font-size:8.5px;letter-spacing:.4px;color:' + C.muted + ';font-weight:700;padding:3px 5px;border-bottom:1px solid ' + C.bd + ';white-space:nowrap}',

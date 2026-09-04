@@ -1,9 +1,9 @@
 {
   "version": 2,
-  "caso": "cobro-un-solo-paso",
+  "caso": "cobro-hero-un-solo-pago",
   "generador": "generateReciboCobro",
   "tema": "light",
-  "entradaHash": "20712bc901e5d320ad24cec3bd6aad7588169624",
+  "entradaHash": "219cd7d6afd60c4081ed5a5193d962f521db67cd",
   "estructura": {
     "docTitle": "Recibo de Cobro",
     "h1": [],
@@ -16,34 +16,28 @@
     ],
     "etiquetas": [
       "Abono extraordinario a capital",
-      "Total aplicado"
+      "Total aplicado",
+      "Caja registrada en pesos"
     ]
   },
   "valores": {
-    "bytes": 9031,
-    "nFilas": 10,
-    "nCeldas": 50,
+    "bytes": 8399,
+    "nFilas": 3,
+    "nCeldas": 15,
     "celdasPorTr": [
-      5,
-      5,
-      5,
-      5,
-      5,
-      5,
-      5,
       5,
       5,
       5
     ],
-    "nMontos": 25,
-    "hashMontos": "7919c28c4aebcd18d257f48d9fb43423b227db05",
-    "hashFname": "43d0da45abcc78c038251914663bcde6744f0d53",
-    "hashTexto": "cf01fc661d30aa58ba4ef22c81a8af1f8b8c3bef",
+    "nMontos": 16,
+    "hashMontos": "7d74a37fd2713fd897c01461c87cd7948efd8f07",
+    "hashFname": "ead9d7d36d8131deb73b323dfb739455b56be663",
+    "hashTexto": "0ef28f126d4655ce46d3c3038ea5edf6643cb8f1",
     "clases": [
       "",
       "l",
       "rc-brand",
-      "rc-card",
+      "rc-card rc-hero",
       "rc-cc",
       "rc-chipf",
       "rc-cl",
@@ -56,7 +50,7 @@
       "rc-meta",
       "rc-n",
       "rc-name",
-      "rc-new",
+      "rc-new rc-hnew",
       "rc-num",
       "rc-obs",
       "rc-panel",
@@ -74,6 +68,7 @@
       "rc-ta",
       "rc-tl",
       "rc-total",
+      "rc-ts",
       "rc-type",
       "rc-val",
       "rc-wm"

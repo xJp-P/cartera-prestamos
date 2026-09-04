@@ -208,6 +208,29 @@ export function CobroModal(props){
     ? proyeccionCobro(loan, allPays, plan, (cronoPreview&&cronoPreview.filas)||null, pendOrden)
     : {totalAntes:0,totalDespues:null,abonadoProxima:0};
 
+  // ── Lo que el cliente va a GIRAR en la proxima fecha ────────────────────────
+  // La tabla de abajo es la vista CONTRACTUAL y no se toca: sus columnas universales
+  // sostienen la identidad INTERES + ABONO A CAPITAL = VALOR CUOTA, asi que VALOR CUOTA
+  // tiene que seguir siendo `cuotaTotal` aunque esa cuota ya traiga abono encima. El
+  // problema es que entonces la pantalla nunca dice cuanto se transfiere de verdad
+  // — medido: la tabla mostraba 157.79 cuando el cliente iba a girar 117.65.
+  // La caja va aparte, arriba, en su propia franja: es tesoreria, no contabilidad.
+  //
+  // OJO CON EL ORDEN (Bug #63): esto lee `cronoPreview` y `proy`, asi que va DESPUES de
+  // los dos. Leerlo mas arriba no daria error por el hoisting de `var` — daria
+  // `undefined` y la franja desapareceria en silencio.
+  //
+  // La resta se hace en COP y se convierte UNA vez, igual que `money(pendCuota(p))` en el
+  // recibo, para que la pantalla y el papel no difieran un centavo en USD.
+  var proxPago=(function(){
+    if(!cronoPreview||cronoPreview.saldado||!cronoPreview.filas||!cronoPreview.filas.length) return null;
+    var f=cronoPreview.filas[0];
+    var cuota=Math.round(f.cuota||0);
+    if(cuota<=0) return null;
+    var ab=Math.max(0, Math.round(proy.abonadoProxima||0));
+    return {cuota:cuota, abonado:ab, neto:Math.max(0, cuota-ab), fecha:f.fecha};
+  })();
+
   function submit(){
     if(!plan||!plan.ok||!plan.pasos.length) return;
     setFallo(null);
@@ -397,6 +420,16 @@ export function CobroModal(props){
 
     // ── PREVIEW DEL CRONOGRAMA ──
     cronoPreview&&h('div',{style:{marginTop:4}},
+      // Resumen ejecutivo de caja: se lee sin abrir la tabla y se le puede leer al
+      // cliente tal cual. Va siempre que haya cuota proyectada, tenga abono encima o no.
+      proxPago&&h('div',{style:{background:'var(--green-bg)',border:'1px solid var(--green-bd)',
+        borderRadius:10,padding:'9px 12px',marginBottom:9,fontSize:12,color:'var(--green)',lineHeight:1.5}},
+        h('div',null,'Tu cliente pagará ',
+          h('b',{className:'mono',style:{fontSize:13.5}},money(proxPago.neto)),
+          proxPago.fecha?' el '+fmtD(proxPago.fecha):''),
+        proxPago.abonado>0&&h('div',{style:{opacity:.85,fontSize:11,marginTop:2}},
+          'cuota de ',money(proxPago.cuota),' menos ',money(proxPago.abonado),
+          ' que abona hoy por adelantado')),
       h('button',{onClick:function(){ setVerCron(!verCron); },
         style:{background:'transparent',border:'none',padding:0,cursor:'pointer',display:'flex',alignItems:'center',gap:6,marginBottom:7}},
         h(Ico,{name:verCron?'chevdown':'chevright',size:13,color:'var(--text2)',sw:2.5}),

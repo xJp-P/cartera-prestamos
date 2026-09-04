@@ -118,6 +118,19 @@ export function generatePropuestaAbono(loan, allPays, propuesta, opts) {
       '<div class="pa-new">' + newTxt + '</div>' +
       (nota ? '<div class="pa-cnota">' + nota + '</div>' : '') + '</div>';
   }
+  function cardHero(label, valor, nota){
+    return '<div class="pa-card pa-hero"><div class="pa-cl">' + label + '</div>' +
+      '<div class="pa-new pa-hnew">' + valor + '</div>' +
+      (nota ? '<div class="pa-cnota">' + nota + '</div>' : '') + '</div>';
+  }
+  // Ver la nota de `fechaCorta` en recibo-cobro.js: el formato largo parte el rotulo
+  // de la tarjeta en tres lineas. Mismo anclaje a mediodia que `fmtD`.
+  function fechaCorta(s){
+    if (!s) return '';
+    // es-CO devuelve "19 de ago" incluso con month:'short'; el rotulo necesita "19 ago".
+    return new Date(s + 'T12:00:00').toLocaleDateString('es-CO', {day:'2-digit', month:'short'})
+      .replace(/ de /g, ' ').replace(/\.$/, '');
+  }
 
   // ── Los pasos, en CONDICIONAL: nada de esto ha ocurrido ────────────────────
   var pasosHTML = pasos.map(function(p, i){
@@ -157,18 +170,63 @@ export function generatePropuestaAbono(loan, allPays, propuesta, opts) {
     '</div>';
 
   // ── Como quedaria ──────────────────────────────────────────────────────────
-  var cards = (totalDespues !== null)
-    ? card('Total por pagar', (totalAntes > totalDespues) ? money(totalAntes) : '', money(totalDespues))
-    : '';
-  if (cuotaDespues > 0) {
-    // Mismo puente que el recibo: el valor de la cuota es CONTRACTUAL y no tiene por
-    // que coincidir con lo que faltaria de la proxima si esa cuota ya trae abono.
-    var abonadoProx = Math.max(0, Math.round(proy.abonadoProxima || 0));
-    cards += card('Valor de la cuota',
-      (cuotaAntes && cuotaAntes !== cuotaDespues) ? money(cuotaAntes) : '', money(cuotaDespues),
-      abonadoProx > 0 ? ('de la proxima ya abonaste ' + money(abonadoProx)) : '');
+  // Mismo tratamiento que el Recibo de Cobro, y por la misma razon: el titular de la
+  // tarjeta de la cuota es LO QUE HABRIA QUE GIRAR, no el valor contractual. Si esa
+  // cuota queda con abono encima (el interes del mes que se cobra por adelantado), las
+  // dos cifras difieren y la que le importa al cliente es la primera.
+  var abonadoProx = Math.max(0, Math.round(proy.abonadoProxima || 0));
+  var aPagarProx  = Math.max(0, cuotaDespues - abonadoProx);
+  var fechaProx   = filas.length ? filas[0].fecha : null;
+  var totalTxt    = (totalDespues !== null) ? money(totalDespues) : '';
+  var aPagarTxt   = money(aPagarProx);
+
+  // Colapso a tarjeta unica: con una sola cuota proyectada y sin mora que sobreviva,
+  // el total y el proximo pago son EL MISMO numero. La condicion se evalua sobre los
+  // valores ya formateados —"el lector ve dos veces lo mismo"— y `totalDespues` incluye
+  // la mora que el cobro no salda, asi que si queda mora las dos cifras difieren y no
+  // colapsa: correcto, porque entonces el proximo pago NO es toda la deuda.
+  // `Intereses` queda fuera por la MISMA razon que en el recibo: sus cuotas son de puro
+  // interes y el capital vence al final, fuera del cronograma, asi que ni el total ni un
+  // "unico pago" describen la deuda. Hoy es inalcanzable desde la UI —el preview solo
+  // existe en Capital + Intereses— pero el arnes de `pdf-render` SI lo alcanza, y llego a
+  // emitir "Quedaria un solo pago de 2.310.000" sobre un capital de 3.000.000.
+  var esIndef   = loan.modalidad === 'Intereses';
+  var heroUnico = filas.length === 1 && aPagarProx > 0 && !esIndef &&
+                  Math.round(proy.moraTras || 0) === 0 &&
+                  totalDespues !== null && totalTxt === aPagarTxt;
+
+  var cards;
+  if (heroUnico) {
+    cards = cardHero('Quedaria un solo pago', aPagarTxt,
+      (fechaProx ? 'el ' + fmtD(fechaProx) : '') +
+      (abonadoProx > 0 ? ' &nbsp;&middot;&nbsp; cuota ' + money(cuotaDespues) +
+                         ' menos ' + money(abonadoProx) + ' ya abonado' : ''));
+  } else {
+    // Ninguna tarjeta repite una cifra que otra ya muestra: con una sola cuota
+    // proyectada el total y el proximo pago coinciden aunque no colapsen al hero.
+    // El gate de Intereses de aqui es DEFENSA EN PROFUNDIDAD y hoy ningun caso lo alcanza:
+    // en esa modalidad la regla de redundancia de al lado ya suprime la tarjeta (verificado
+    // inyectando la regresion, la suite sigue verde). Se conserva porque un call site futuro
+    // que proyectara 2+ filas ahi imprimiria un total que MIENTE por debajo de la deuda.
+    // El gate del hero, que si es alcanzable, si esta fijado por pdf-render.
+    cards = (totalDespues !== null && !esIndef && !(aPagarProx > 0 && totalTxt === aPagarTxt))
+      ? card('Total por pagar', (totalAntes > totalDespues) ? money(totalAntes) : '', totalTxt)
+      : '';
+    if (aPagarProx > 0) {
+      // Mismo criterio que el recibo: si quedaria mora sin saldar, el rotulo no puede
+      // prometer un proximo pago — hay deuda vencida que va antes.
+      var conMora = Math.round(proy.moraTras || 0) > 0;
+      var notaCuota = abonadoProx > 0
+        ? ('cuota ' + money(cuotaDespues) + ' menos ' + money(abonadoProx) + ' ya abonado')
+        : '';
+      if (conMora && fechaProx) notaCuota = 'vence el ' + fmtD(fechaProx) +
+        (notaCuota ? ' &middot; ' + notaCuota : '');
+      cards += card(conMora ? 'Proxima cuota' : ('A pagar el ' + fechaCorta(fechaProx)),
+        (abonadoProx === 0 && cuotaAntes && cuotaAntes !== cuotaDespues) ? money(cuotaAntes) : '',
+        aPagarTxt, notaCuota);
+    }
+    if (filas.length) cards += card('Cuotas restantes', '', String(filas.length));
   }
-  if (filas.length) cards += card('Cuotas restantes', '', String(filas.length));
 
   var saldadoHTML = (proy.saldado || totalDespues === 0)
     ? '<div class="pa-saldado">Con ese abono el credito quedaria <b>totalmente cancelado</b>.</div>' : '';
@@ -239,6 +297,10 @@ export function generatePropuestaAbono(loan, allPays, propuesta, opts) {
     '.pa-old{font-size:11px;color:' + C.muted + ';text-decoration:line-through;margin-top:3px}',
     '.pa-new{font-size:15px;font-weight:700;color:' + C.blue + ';margin-top:1px}',
     '.pa-cnota{font-size:9px;color:' + C.muted + ';margin-top:3px;line-height:1.35}',
+    '.pa-hero{background:' + C.blueBg + ';border-color:' + C.blueBd + ';padding:13px 12px}',
+    '.pa-hero .pa-cl{color:' + C.blue + '}',
+    '.pa-hero .pa-cnota{color:' + C.blue + ';font-size:10px;margin-top:5px}',
+    '.pa-hnew{font-size:26px;margin-top:3px}',
     '.pa-tb{width:100%;border-collapse:collapse;margin-top:5px;font-size:10.5px}',
     '.pa-tb th{text-align:right;font-size:8.5px;letter-spacing:.4px;color:' + C.muted + ';font-weight:700;padding:3px 5px;border-bottom:1px solid ' + C.bd + ';white-space:nowrap}',
     '.pa-tb th.l,.pa-tb td.l{text-align:left}',

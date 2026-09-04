@@ -387,5 +387,9 @@ export function proyeccionCobro(loan, allPays, plan, filas, pendOrden){
   return {
     totalAntes:totalAntes, totalDespues:totalDespues,
     abonadoProxima:pend.length?partialProy(pend[0]):0,
+    // La mora que el cobro NO salda. Se expone porque los documentos la necesitan para
+    // ROTULAR bien la tarjeta de la cuota: con plata vencida encima, llamar "tu proximo
+    // pago" a una cuota que vence dentro de un mes es falso — lo proximo es lo vencido.
+    moraTras:moraTras,
   };
 }

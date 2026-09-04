@@ -18,7 +18,7 @@
     "etiquetas": []
   },
   "valores": {
-    "bytes": 8465,
+    "bytes": 8668,
     "nFilas": 4,
     "nCeldas": 24,
     "celdasPorTr": [
@@ -30,7 +30,7 @@
     "nMontos": 28,
     "hashMontos": "aebd53481d5ad31230bd06f3c77dd90ee710060c",
     "hashFname": "b1759f825f0d560fc6f20a4d228070e1987b32d4",
-    "hashTexto": "f9a60ee74fb17c8bfafc625c1a44933cd1b4ee1b",
+    "hashTexto": "6cef22495345c0f6c7a2e06fb63bbb55b8649bb7",
     "clases": [
       "l",
       "pa-aviso",

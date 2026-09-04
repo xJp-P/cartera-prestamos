@@ -637,6 +637,11 @@ export const CHANGELOGS = {
     'El recibo de cobro trae ahora "Lo que queda por pagar": la lista de cuotas pendientes con su valor, lo ya abonado en cada una y lo que falta.',
     'En ese mismo recibo, la tarjeta "Valor de la cuota" aclara cuanto llevas abonado de la proxima, para que no parezca que contradice el total pendiente.',
     'El recibo de cobro ahora encabeza con "Total por pagar", la misma cifra con la que abre la propuesta que le mandas al cliente antes de cobrar. Los dos papeles del mismo cobro lideraban con numeros distintos en el mismo lugar (uno el total, otro el saldo de capital) y parecian contradecirse aunque los dos estuvieran bien.',
-    'Esa tarjeta no aparece en los prestamos de solo intereses: ahi las cuotas son de puro interes y el capital vence al final, asi que sumarlas habria anunciado menos deuda de la que hay.'
+    'Esa tarjeta no aparece en los prestamos de solo intereses: ahi las cuotas son de puro interes y el capital vence al final, asi que sumarlas habria anunciado menos deuda de la que hay.',
+    'Los recibos y la propuesta ahora encabezan con lo que el cliente tiene que girar en su proxima fecha, no con el valor de la cuota. Cuando el cliente adelanta intereses, la cuota que figura en el contrato y el dinero que efectivamente transfiere dejan de coincidir, y el numero grande del papel era el que no iba a pagar.',
+    'Si toda la deuda cabe en un solo pago, el papel deja de mostrar tres tarjetas con la misma cifra y muestra una sola: cuanto y cuando.',
+    'Si el credito tiene cuotas vencidas, esa tarjeta ya no promete una fecha futura: hay dinero que se debe antes, y el papel lo dice.',
+    'La ultima columna del detalle pasa a llamarse "A pagar" y lo ya abonado aparece restando, para que la fila se lea como una cuenta.',
+    'Al registrar un cobro, arriba del cronograma aparece una franja con lo que el cliente va a pagar y en que fecha. La tabla sigue mostrando el valor contractual de la cuota; la franja muestra el dinero.'
   ]
 };
