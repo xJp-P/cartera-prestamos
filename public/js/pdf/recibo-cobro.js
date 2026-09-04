@@ -326,7 +326,7 @@ export function generateReciboCobro(loan, allPays, cobro, opts) {
           : '';
         if (conMora && proxVence) notaCuota = 'vence el ' + fmtD(proxVence) +
           (notaCuota ? ' &middot; ' + notaCuota : '');
-        cards += card(conMora ? 'Proxima cuota' : ('A pagar el ' + fechaCorta(proxVence)),
+        cards += card(conMora ? 'Proxima cuota' : (proxVence ? ('A pagar el ' + fechaCorta(proxVence)) : 'A pagar'),
           (abonadoProx === 0 && pre.cuota && Math.round(pre.cuota) !== cuotaDespues)
             ? money(pre.cuota) : '',
           aPagarTxt, notaCuota);

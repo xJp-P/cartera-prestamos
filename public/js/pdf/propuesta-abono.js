@@ -221,7 +221,7 @@ export function generatePropuestaAbono(loan, allPays, propuesta, opts) {
         : '';
       if (conMora && fechaProx) notaCuota = 'vence el ' + fmtD(fechaProx) +
         (notaCuota ? ' &middot; ' + notaCuota : '');
-      cards += card(conMora ? 'Proxima cuota' : ('A pagar el ' + fechaCorta(fechaProx)),
+      cards += card(conMora ? 'Proxima cuota' : (fechaProx ? ('A pagar el ' + fechaCorta(fechaProx)) : 'A pagar'),
         (abonadoProx === 0 && cuotaAntes && cuotaAntes !== cuotaDespues) ? money(cuotaAntes) : '',
         aPagarTxt, notaCuota);
     }
