@@ -21,7 +21,7 @@
     ]
   },
   "valores": {
-    "bytes": 8399,
+    "bytes": 8332,
     "nFilas": 3,
     "nCeldas": 15,
     "celdasPorTr": [
@@ -29,10 +29,10 @@
       5,
       5
     ],
-    "nMontos": 16,
-    "hashMontos": "7d74a37fd2713fd897c01461c87cd7948efd8f07",
+    "nMontos": 14,
+    "hashMontos": "d753dd7bd91af233566a5480eb7835c5ab22fb7a",
     "hashFname": "ead9d7d36d8131deb73b323dfb739455b56be663",
-    "hashTexto": "0ef28f126d4655ce46d3c3038ea5edf6643cb8f1",
+    "hashTexto": "8d61f8a67ab2438386c113ae546cadc4ca69a39d",
     "clases": [
       "",
       "l",

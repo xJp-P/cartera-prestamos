@@ -645,6 +645,8 @@ export const CHANGELOGS = {
     'Si el credito tiene cuotas vencidas, esa tarjeta ya no promete una fecha futura: hay dinero que se debe antes, y el papel lo dice.',
     'La ultima columna del detalle pasa a llamarse "A pagar" y lo ya abonado aparece restando, para que la fila se lea como una cuenta.',
     'Al registrar un cobro, arriba del cronograma aparece una franja con lo que el cliente va a pagar y en que fecha. La tabla sigue mostrando el valor contractual de la cuota; la franja muestra el dinero.',
+    'La cuota que ya tiene dinero adentro ahora lo dice en su propia fila, tanto en la app como en la propuesta: "esta cuota quedaria con X abonado, a pagar Y". Antes el encabezado anunciaba una cifra y la fila de esa misma fecha mostraba otra, sin nada que las uniera.',
+    'Y como la tabla ya explica la resta, el titular dejo de repetirla en los dos documentos: queda solo el monto y la fecha. En el recibo lo explican sus columnas "Ya abonado" y "A pagar"; en la propuesta, la sub-linea de la fila.',
     'Registrar cobro es ahora la unica puerta para el dinero que entra. Absorbio todo lo que hacia "Abono directo a capital", que desaparece: ya no hay que elegir entre dos ventanas que repartian el dinero con criterios distintos.',
     'Desde la misma ventana puedes decidir que pasa con el cronograma despues de abonar a capital: mantener el plazo y bajar la cuota, cambiar el numero de cuotas, o fijar cuanto quieres que valga la cuota. Antes esto solo existia en la ventana vieja.',
     'Esas opciones aparecen solo cuando el dinero alcanza para abonar a capital. Si el cobro apenas cubre intereses o cuotas vencidas, el cronograma no cambia y el bloque no se muestra.',

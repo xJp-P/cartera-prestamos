@@ -197,10 +197,12 @@ export function generatePropuestaAbono(loan, allPays, propuesta, opts) {
 
   var cards;
   if (heroUnico) {
+    // El titular NO explica la resta: la sub-linea de la fila lo hace, con la cuota y el
+    // saldo al lado. Decirlo dos veces obligaba al lector a comparar dos redacciones de lo
+    // mismo, que es el ruido que este rediseno vino a quitar. Aqui solo queda la fecha,
+    // porque el rotulo del hero no la lleva.
     cards = cardHero('Quedaria un solo pago', aPagarTxt,
-      (fechaProx ? 'el ' + fmtD(fechaProx) : '') +
-      (abonadoProx > 0 ? ' &nbsp;&middot;&nbsp; cuota ' + money(cuotaDespues) +
-                         ' menos ' + money(abonadoProx) + ' ya abonado' : ''));
+      fechaProx ? 'el ' + fmtD(fechaProx) : '');
   } else {
     // Ninguna tarjeta repite una cifra que otra ya muestra: con una sola cuota
     // proyectada el total y el proximo pago coinciden aunque no colapsen al hero.
@@ -216,11 +218,9 @@ export function generatePropuestaAbono(loan, allPays, propuesta, opts) {
       // Mismo criterio que el recibo: si quedaria mora sin saldar, el rotulo no puede
       // prometer un proximo pago — hay deuda vencida que va antes.
       var conMora = Math.round(proy.moraTras || 0) > 0;
-      var notaCuota = abonadoProx > 0
-        ? ('cuota ' + money(cuotaDespues) + ' menos ' + money(abonadoProx) + ' ya abonado')
-        : '';
-      if (conMora && fechaProx) notaCuota = 'vence el ' + fmtD(fechaProx) +
-        (notaCuota ? ' &middot; ' + notaCuota : '');
+      // Idem: la resta vive en la tabla. La nota solo carga la fecha cuando el rotulo la
+      // perdio por la degradacion a "Proxima cuota".
+      var notaCuota = (conMora && fechaProx) ? ('vence el ' + fmtD(fechaProx)) : '';
       cards += card(conMora ? 'Proxima cuota' : (fechaProx ? ('A pagar el ' + fechaCorta(fechaProx)) : 'A pagar'),
         (abonadoProx === 0 && cuotaAntes && cuotaAntes !== cuotaDespues) ? money(cuotaAntes) : '',
         aPagarTxt, notaCuota);
@@ -239,12 +239,26 @@ export function generatePropuestaAbono(loan, allPays, propuesta, opts) {
       '<table class="pa-tb"><thead><tr>' +
       '<th class="l">#</th><th class="l">VENCE</th><th>INTERES</th><th>ABONO A CAPITAL</th>' +
       '<th>VALOR CUOTA</th><th>SALDO</th></tr></thead><tbody>' +
-      filas.map(function(f){
+      filas.map(function(f, ix){
         var q = uni(f.cuota), i2 = uni(f.interes), c2 = Math.max(0, q - i2);
-        return '<tr><td class="l">' + (f.cuotaN || '') + '</td>' +
+        var tr = '<tr><td class="l">' + (f.cuotaN || '') + '</td>' +
           '<td class="l">' + (f.fecha ? fmtD(f.fecha) : '&mdash;') + '</td>' +
           '<td>' + fmtUni(i2) + '</td><td>' + fmtUni(c2) + '</td>' +
           '<td><b>' + fmtUni(q) + '</b></td><td>' + money(f.saldo) + '</td></tr>';
+        // ── LA FILA QUE YA TRAE DINERO ADENTRO LO DICE ──
+        // `VALOR CUOTA` es la obligacion CONTRACTUAL y tiene que seguir siendo la cuota
+        // entera: es lo que sostiene la identidad INTERES + ABONO A CAPITAL = VALOR CUOTA.
+        // Pero sin decir nada mas, el encabezado anunciaba "a pagar 144.59" y esta misma
+        // fila mostraba 500.00 para la MISMA fecha: dos cifras sin nada que las una, y el
+        // lector concluye que el papel se contradice. La sub-linea es el puente, y es el
+        // patron que la doctrina del proyecto ya fija para los pagos parciales.
+        //
+        // Solo puede ocurrir en la PRIMERA fila: `abonadoProxima` se refiere a `pend[0]`.
+        // En condicional, como todo este documento: aqui no se ha pagado nada todavia.
+        if (ix !== 0 || abonadoProx <= 0) return tr;
+        return tr + '<tr class="ab"><td class="l" colspan="6"><span class="pa-ab">' +
+          'esta cuota quedaria con ' + money(abonadoProx) + ' abonado &rarr; a pagar <b>' +
+          aPagarTxt + '</b></span></td></tr>';
       }).join('') + '</tbody></table>';
   }
 
@@ -300,7 +314,15 @@ export function generatePropuestaAbono(loan, allPays, propuesta, opts) {
     '.pa-hero{background:' + C.blueBg + ';border-color:' + C.blueBd + ';padding:13px 12px}',
     '.pa-hero .pa-cl{color:' + C.blue + '}',
     '.pa-hero .pa-cnota{color:' + C.blue + ';font-size:10px;margin-top:5px}',
-    '.pa-hnew{font-size:26px;margin-top:3px}',
+    // El CSS de la sub-linea SOLO se emite si el documento la lleva (misma doctrina que el
+    // `cssExtra` del recibo). Va colgado de la regla de arriba y no como elemento propio
+    // del array: un elemento vacio deja igual su separador, y ese byte movia los golden de
+    // documentos que no cambiaron.
+    '.pa-hnew{font-size:26px;margin-top:3px}' + (abonadoProx > 0
+      ? '.pa-tb tr.ab td{border-bottom:none;padding:0 5px 5px}' +
+        '.pa-ab{display:inline-block;background:' + C.blueBg + ';border:1px solid ' + C.blueBd +
+        ';color:' + C.blue + ';border-radius:5px;padding:2px 7px;font-size:8.5px}'
+      : ''),
     '.pa-tb{width:100%;border-collapse:collapse;margin-top:5px;font-size:10.5px}',
     '.pa-tb th{text-align:right;font-size:8.5px;letter-spacing:.4px;color:' + C.muted + ';font-weight:700;padding:3px 5px;border-bottom:1px solid ' + C.bd + ';white-space:nowrap}',
     '.pa-tb th.l,.pa-tb td.l{text-align:left}',

@@ -449,13 +449,28 @@ export function CobroModal(props){
                   // Columnas universales (v1.18.0): ABONO A CAPITAL = VALOR CUOTA - INTERES,
                   // reconciliado en la moneda visible para que la identidad cuadre a la vista.
                   var qU=uni(f.cuota), iU=uni(f.interes), cU=Math.max(0, qU-iU);
-                  return h('tr',{key:i,style:{borderTop:'1px solid var(--border)'}},
+                  var tr=h('tr',{key:i,style:{borderTop:'1px solid var(--border)'}},
                     h('td',{style:{padding:'5px 7px',color:'var(--text2)',fontWeight:700}},f.cuotaN),
                     h('td',{style:{padding:'5px 7px',color:'var(--text3)',whiteSpace:'nowrap'}},f.fecha?fmtD(f.fecha):'—'),
                     h('td',{className:'mono',style:{padding:'5px 7px',textAlign:'right',color:'var(--text3)',whiteSpace:'nowrap'}},fmtUni(iU)),
                     h('td',{className:'mono',style:{padding:'5px 7px',textAlign:'right',color:'var(--text3)',whiteSpace:'nowrap'}},fmtUni(cU)),
                     h('td',{className:'mono',style:{padding:'5px 7px',textAlign:'right',color:'var(--text)',fontWeight:700,whiteSpace:'nowrap'}},fmtUni(qU)),
                     h('td',{className:'mono',style:{padding:'5px 7px',textAlign:'right',color:'var(--text2)',whiteSpace:'nowrap'}},money(f.saldo)));
+                  // ── LA FILA QUE YA TRAE DINERO ADENTRO LO DICE ──
+                  // `VALOR CUOTA` sigue siendo la cuota entera —es lo que sostiene la
+                  // identidad INTERES + ABONO A CAPITAL = VALOR CUOTA— pero sin esta linea
+                  // la franja de arriba anunciaba "pagara 144.59" y esta misma fila mostraba
+                  // 500.00 para la MISMA fecha, sin nada que las uniera. Es el patron que la
+                  // doctrina ya fija para los pagos parciales: el neto va como sub-linea.
+                  // Solo la PRIMERA fila puede traerlo: el abono apunta a `pend[0]`.
+                  if(i!==0||!proxPago||proxPago.abonado<=0) return tr;
+                  return [tr, h('tr',{key:'ab',style:{borderTop:'1px solid var(--border)'}},
+                    h('td',{colSpan:6,style:{padding:'0 7px 6px'}},
+                      h('span',{style:{display:'inline-block',background:'var(--green-bg)',
+                        border:'1px solid var(--green-bd)',color:'var(--green)',borderRadius:6,
+                        padding:'2px 8px',fontSize:10}},
+                        'esta cuota quedaria con ',money(proxPago.abonado),' abonado → a pagar ',
+                        h('b',null,money(proxPago.neto)))))];
                 })))),
             cronoPreview.filas.length>0&&cronoPreview.filas[0].antes>0&&
               h('div',{style:{padding:'7px 10px',borderTop:'1px solid var(--border)',fontSize:11,color:'var(--text3)',background:'var(--bg3)'}},

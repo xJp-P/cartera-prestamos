@@ -1099,6 +1099,46 @@ async function ejecutarPlan(loanId, plan, fecha, obs, port) {
         const vMal = correrFusion(grande, 1500000, false, false, 'fijarCuota', '1');
         R.check('H (fusion) una cuota fija imposible se rechaza con un aviso',
           hayTexto(vMal.txts, /nunca se saldaria/i), vMal.txts.filter(t => /cuota/i.test(t)).slice(0, 3).join(' | '));
+
+        // ── 4b-bis. LA FILA QUE YA TRAE DINERO ADENTRO LO DICE ──────────────────
+        // La franja anuncia el NETO y la tabla, por doctrina, sigue mostrando la cuota
+        // ENTERA en VALOR CUOTA (es lo que sostiene INTERES + ABONO A CAPITAL = VALOR
+        // CUOTA). Sin la sub-linea el modal daba dos cifras para la misma fecha y nada
+        // que las uniera — el defecto que el Product Owner reporto sobre el papel y que
+        // vivia igual en la pantalla. Aqui se comprueba sobre el componente REAL que las
+        // tres cifras aparecen y que la resta cierra.
+        {
+          const v = correrFusion(grande, Math.round(+grande * trmH), true, false, 'mantener', '');
+          // OJO: `textos()` aplana los fragmentos SUELTOS del arbol, y el monto vive en su
+          // propio nodo (`h('b',...)`), separado del rotulo. Hay que juntar por NODO.
+          const juntar = (tag, re) => {
+            const n = nodos(v.arbol, tag).filter(x => re.test(textos(x).join('')));
+            return n.length ? textos(n[n.length - 1]).join('') : '';
+          };
+          const linea  = juntar('tr',  /esta cuota quedaria con/);
+          const franja = juntar('div', /Tu cliente pagará/);
+          R.check('H (4b-bis) la primera fila declara lo que ya lleva abonado',
+            !!linea, v.txts.filter(t => /quedaria|abonado/.test(t)).slice(0, 3).join(' | '));
+
+          // Las tres cifras de la sub-linea salen del MISMO `proxPago` que alimenta la
+          // franja, asi que tienen que cerrar: cuota - abonado = neto.
+          const num = t => { const m = /(?:USD\s*)?\$\s*([\d.,]+)/.exec(String(t)); if (!m) return NaN;
+            return /USD/.test(String(t)) ? parseFloat(m[1].replace(/,/g, ''))
+                                         : parseInt(m[1].replace(/[^0-9]/g, ''), 10); };
+          // Sin recortar el prefijo: quitarlo se llevaba el "USD" y la cifra se leia
+          // como pesos (29173 en vez de 291.73). `num` ya toma el primer importe.
+          const netoFranja = num(franja);
+          const netoLinea  = num((linea.split('a pagar')[1] || ''));
+          R.check('H (4b-bis) el neto de la sub-linea es el MISMO que el de la franja',
+            !isNaN(netoFranja) && !isNaN(netoLinea) && Math.abs(netoFranja - netoLinea) < 0.005,
+            'franja=' + netoFranja + '  sub-linea=' + netoLinea);
+
+          // ANTI-TRIVIAL: sin interes adelantado no hay abono encima de la cuota, y la
+          // sub-linea NO debe dibujarse. Si apareciera siempre seria ruido en cada cobro.
+          const sinMes = correrFusion(grande, Math.round(+grande * trmH), false, false, 'mantener', '');
+          R.check('H (4b-bis) ANTI-TRIVIAL: sin adelanto la sub-linea no aparece',
+            !sinMes.txts.some(t => /esta cuota quedaria con/.test(t)));
+        }
       }
 
       // ── 4c. LA PROPUESTA QUE SALE DEL MODAL DE VERDAD ───────────────────────

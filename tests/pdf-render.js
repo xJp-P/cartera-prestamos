@@ -272,6 +272,51 @@ function propuestaDe(loan, arrPays) {
   };
 }
 
+// Variante con el interes del mes adelantado: es la UNICA forma de que la cuota proyectada
+// quede con dinero encima, que es lo que dispara la sub-linea de la tabla. Sin este caso, esa
+// rama no la ejercitaba nadie (verificado: la suite quedaba verde con la sub-linea intacta).
+function propuestaConInteresMes(loan, arrPays, modo, valor) {
+  const cob = S.cobrableTotal(loan, arrPays);
+  if (!(cob.interesMes > 0 && cob.abonable > 0)) {
+    abortar('propuestaConInteresMes(' + loan.id + '): el credito no tiene interes del mes y ' +
+            'capital amortizable a la vez. Sin las dos cosas no hay abono NI sub-linea.');
+  }
+  const esUSD = loan.moneda === 'USD';
+  const objetivo = Math.round(cob.mora + cob.interesMes + Math.max(100000, cob.abonable * 0.25));
+  const plan = S.planCascada(loan, arrPays, esUSD
+    ? { obligacionUSD: Math.round(objetivo / loan.trmAcordada * 100) / 100,
+        cajaCOP: Math.round(objetivo * 0.97), obligacionCOP: 0 }
+    : { obligacionCOP: objetivo, cajaCOP: objetivo, obligacionUSD: 0 },
+    { incluirInteresMes: true });
+  if (!plan.ok || !plan.pasos.some(p => p.esInteresMes) || !plan.pasos.some(p => p.tipo === 'abono')) {
+    abortar('propuestaConInteresMes(' + loan.id + '): el plan necesita el paso del interes del ' +
+            'mes Y un abono (' + (plan.error || 'sin error') + ').');
+  }
+  const lp = arrPays.filter(p => p.prestamoId === loan.id);
+  const pend = lp.filter(p => p.id.indexOf('-ab-') === -1 && p.estadoPago === 'Pendiente')
+                 .sort((a, b) => a.cuotaN - b.cuotaN);
+  const nAct = Math.max(0, (+loan.plazoMeses || 0) - plan.ctx.regularConsumed);
+  const r = S._tasaPeriodo((+loan.tasaMensual || 0) / 100, loan.frecuencia || 'Mensual');
+  const pv = S.previewRecalculo(plan.saldoTrasCascada, r, nAct, modo || 'mantener',
+                                (modo === 'modificarPlazo' || modo === 'fijarCuota') ? valor : null);
+  const filas = S.filasPreview(plan.saldoTrasCascada, r, pv.nCuotas, false, pv.cuota);
+  filas.forEach((f, i) => { f.cuotaN = plan.ctx.regularConsumed + 1 + i;
+                            f.fecha = pend[i] ? pend[i].fechaPago : null; });
+  const proy = S.proyeccionCobro(loan, arrPays, plan, filas, pend);
+  if (!(Math.round(proy.abonadoProxima || 0) > 0)) {
+    abortar('propuestaConInteresMes(' + loan.id + '): la proxima cuota no quedo con abono ' +
+            'encima, que es justo lo que este caso viene a fijar.');
+  }
+  return {
+    fecha: '2026-07-20', plan,
+    cajaCOP: esUSD ? Math.round(objetivo * 0.97) : objetivo,
+    proyeccion: { filas, n: pv.nCuotas, saldado: false,
+                  totalAntes: proy.totalAntes, totalDespues: proy.totalDespues,
+                  abonadoProxima: proy.abonadoProxima, moraTras: proy.moraTras,
+                  cuotaAntes: pend.length ? Math.round(pend[0].cuotaTotal) : 0 },
+  };
+}
+
 function cobroDe(loan, arrPays) {
   const esUSD = loan.moneda === 'USD';
   const cob = S.cobrableTotal(loan, arrPays);
@@ -516,6 +561,33 @@ const CASOS = [
     noContiene: ['TOTAL RECIBIDO', 'certifica el dinero', 'Total por pagar',
                  'Quedaria un solo pago'] },
 
+  // La fila que YA TRAE DINERO ADENTRO lo dice en una sub-linea. Sin ella, el encabezado
+  // anunciaba "a pagar 144.59" y la primera fila mostraba "500.00" para la MISMA fecha, sin
+  // nada que las uniera: el lector concluia que el papel se contradice. `VALOR CUOTA` sigue
+  // siendo la cuota entera porque es lo que sostiene la identidad con INTERES y ABONO A
+  // CAPITAL; el neto va aparte. Y el titular ya no repite la resta: la explica la tabla.
+  { nombre: 'propuesta-con-interes-adelantado', gen: 'generatePropuestaAbono', tema: 'light', celdas: 6,
+    entrada: () => ({ loanId: '1782151590658w66y', propuesta: true, interesMes: true, tema: 'light', dark: false }),
+    ejecutar: () => S.generatePropuestaAbono(L('1782151590658w66y'), pays,
+      propuestaConInteresMes(L('1782151590658w66y'), pays)),
+    contiene: ['pa-ab', 'esta cuota quedaria con', 'a pagar', 'Cronograma que quedaria',
+               'POR ADELANTADO', 'no un comprobante'],
+    // El titular no vuelve a explicar la resta que la sub-linea ya explico.
+    // 'ya abonado' es la frase exacta que llevaba el titular; 'menos' a secas seria un
+    // aserto fragil, esa palabra puede aparecer en cualquier copy futuro sin ser el defecto.
+    noContiene: ['ya abonado'] },
+
+  // El HERO de la Propuesta: con UNA sola cuota proyectada el total y el proximo pago son
+  // el mismo numero y las tarjetas colapsan en una. Su titular NO repite la resta —la
+  // explica la sub-linea de la fila, que aqui tambien esta— y solo lleva la fecha.
+  { nombre: 'propuesta-hero-un-solo-pago', gen: 'generatePropuestaAbono', tema: 'light', celdas: 6,
+    entrada: () => ({ loanId: '1782151590658w66y', propuesta: true, hero: true, tema: 'light', dark: false }),
+    ejecutar: () => S.generatePropuestaAbono(L('1782151590658w66y'), pays,
+      propuestaConInteresMes(L('1782151590658w66y'), pays, 'modificarPlazo', 1)),
+    contiene: ['pa-hero', 'Quedaria un solo pago', 'esta cuota quedaria con', 'a pagar'],
+    // Lo que el titular dejo de decir, porque la tabla ya lo dice.
+    noContiene: ['ya abonado', 'Total por pagar', 'Cuotas restantes'] },
+
   { nombre: 'cobro-con-interes-del-mes', gen: 'generateReciboCobro', tema: 'dark', celdas: 5,
     entrada: () => ({ loanId: '1782151590658w66y', cascada: 'interesMes', tema: 'dark', dark: true }),
     ejecutar: () => S.generateReciboCobro(L('1782151590658w66y'), pays,
@@ -567,8 +639,10 @@ const CASOS = [
     ejecutar: () => S.generateReciboCobro(L(LOAN_HERO), paysHero, cobroDe(L(LOAN_HERO), paysHero)),
     // `rc-hero` es el aserto que de verdad importa: si la identidad dejara de cumplirse,
     // el documento volveria a las tres tarjetas y este caso se pondria rojo sin ambiguedad.
-    contiene: ['rc-hero', 'Tu proximo pago', 'ya abonado', 'A PAGAR', '&minus;'],
-    noContiene: ['Total por pagar', 'Saldo de capital', 'Cuotas pendientes'] },
+    contiene: ['rc-hero', 'Tu proximo pago', 'A PAGAR', '&minus;'],
+    // El titular quedo con el monto y la fecha: la resta la desglosa la tabla en sus
+    // columnas VALOR CUOTA / YA ABONADO / A PAGAR. Mismo criterio que en la Propuesta.
+    noContiene: ['Total por pagar', 'Saldo de capital', 'Cuotas pendientes', 'ya abonado'] },
 
   // Variante PAZ Y SALVO. Es la unica que se alimenta de un paso sintetico: pdf-render no
   // escribe en la BD, asi que ningun cobro sobre un prestamo activo puede dejarlo en cero

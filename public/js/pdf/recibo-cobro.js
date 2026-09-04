@@ -297,10 +297,12 @@ export function generateReciboCobro(loan, allPays, cobro, opts) {
 
     var cards;
     if (heroUnico) {
+      // El titular NO explica la resta: la tabla "Lo que queda por pagar" ya la desglosa en
+      // sus columnas VALOR CUOTA / YA ABONADO / A PAGAR. Decirlo dos veces obligaba a
+      // comparar dos redacciones de lo mismo. Simetrico con la Propuesta, que delega la
+      // explicacion en la sub-linea de su fila.
       cards = cardHero('Tu proximo pago', aPagarTxt,
-        (proxVence ? 'el ' + fmtD(proxVence) : '') +
-        (abonadoProx > 0 ? ' &nbsp;&middot;&nbsp; cuota ' + money(cuotaDespues) +
-                           ' menos ' + money(abonadoProx) + ' ya abonado' : ''));
+        proxVence ? 'el ' + fmtD(proxVence) : '');
     } else {
       // "Total por pagar" se calla tambien cuando coincide con "A pagar": con una sola
       // cuota viva las dos son el mismo numero aunque el saldo de capital difiera —
@@ -321,11 +323,9 @@ export function generateReciboCobro(loan, allPays, cobro, opts) {
         // El tachado del valor anterior solo tiene sentido cuando el titular ES la cuota
         // (sin abono encima): comparar el neto de hoy contra la cuota vieja mezclaria dos
         // cosas distintas — el recalculo del cronograma y el descuento del parcial.
-        var notaCuota = abonadoProx > 0
-          ? ('cuota ' + money(cuotaDespues) + ' menos ' + money(abonadoProx) + ' ya abonado')
-          : '';
-        if (conMora && proxVence) notaCuota = 'vence el ' + fmtD(proxVence) +
-          (notaCuota ? ' &middot; ' + notaCuota : '');
+        // Idem que el hero: la resta vive en la tabla. La nota solo carga la fecha cuando
+        // el rotulo la perdio por la degradacion a "Proxima cuota".
+        var notaCuota = (conMora && proxVence) ? ('vence el ' + fmtD(proxVence)) : '';
         cards += card(conMora ? 'Proxima cuota' : (proxVence ? ('A pagar el ' + fechaCorta(proxVence)) : 'A pagar'),
           (abonadoProx === 0 && pre.cuota && Math.round(pre.cuota) !== cuotaDespues)
             ? money(pre.cuota) : '',
