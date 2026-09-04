@@ -637,11 +637,27 @@ export const CHANGELOGS = {
     'El recibo de cobro trae ahora "Lo que queda por pagar": la lista de cuotas pendientes con su valor, lo ya abonado en cada una y lo que falta.',
     'En ese mismo recibo, la tarjeta "Valor de la cuota" aclara cuanto llevas abonado de la proxima, para que no parezca que contradice el total pendiente.',
     'El recibo de cobro ahora encabeza con "Total por pagar", la misma cifra con la que abre la propuesta que le mandas al cliente antes de cobrar. Los dos papeles del mismo cobro lideraban con numeros distintos en el mismo lugar (uno el total, otro el saldo de capital) y parecian contradecirse aunque los dos estuvieran bien.',
-    'Esa tarjeta no aparece en los prestamos de solo intereses: ahi las cuotas son de puro interes y el capital vence al final, asi que sumarlas habria anunciado menos deuda de la que hay.',
+    'Esa tarjeta no aparece en los prestamos de solo intereses: ahi las cuotas son de puro interes y el capital vence al final, asi que sumarlas habria anunciado menos deuda de la que hay.'
+  ],
+  '2.9.7': [
     'Los recibos y la propuesta ahora encabezan con lo que el cliente tiene que girar en su proxima fecha, no con el valor de la cuota. Cuando el cliente adelanta intereses, la cuota que figura en el contrato y el dinero que efectivamente transfiere dejan de coincidir, y el numero grande del papel era el que no iba a pagar.',
     'Si toda la deuda cabe en un solo pago, el papel deja de mostrar tres tarjetas con la misma cifra y muestra una sola: cuanto y cuando.',
     'Si el credito tiene cuotas vencidas, esa tarjeta ya no promete una fecha futura: hay dinero que se debe antes, y el papel lo dice.',
     'La ultima columna del detalle pasa a llamarse "A pagar" y lo ya abonado aparece restando, para que la fila se lea como una cuenta.',
-    'Al registrar un cobro, arriba del cronograma aparece una franja con lo que el cliente va a pagar y en que fecha. La tabla sigue mostrando el valor contractual de la cuota; la franja muestra el dinero.'
+    'Al registrar un cobro, arriba del cronograma aparece una franja con lo que el cliente va a pagar y en que fecha. La tabla sigue mostrando el valor contractual de la cuota; la franja muestra el dinero.',
+    'Registrar cobro es ahora la unica puerta para el dinero que entra. Absorbio todo lo que hacia "Abono directo a capital", que desaparece: ya no hay que elegir entre dos ventanas que repartian el dinero con criterios distintos.',
+    'Desde la misma ventana puedes decidir que pasa con el cronograma despues de abonar a capital: mantener el plazo y bajar la cuota, cambiar el numero de cuotas, o fijar cuanto quieres que valga la cuota. Antes esto solo existia en la ventana vieja.',
+    'Esas opciones aparecen solo cuando el dinero alcanza para abonar a capital. Si el cobro apenas cubre intereses o cuotas vencidas, el cronograma no cambia y el bloque no se muestra.',
+    'Nuevo: "Incluir intereses del mes actual". Cobra por adelantado el interes del periodo en curso antes de destinar el resto a capital. Aparece como un movimiento aparte, marcado "por adelantado", para que el recibo no lo confunda con una cuota vencida.',
+    'Nuevo: "No cobrar las cuotas vencidas — destinar todo a capital". Para cuando pactas con el cliente que ese dinero va integro a capital. Las cuotas vencidas siguen debiendose con sus intereses.',
+    'Si el cobro cambia el plazo o la cuota y hay cuotas a punto de vencer, la app vuelve a avisarte antes de regenerar el cronograma, como hacia el abono directo. Si eliges marcarlas vencidas, el reparto del dinero se recalcula solo.',
+    'En el detalle de un prestamo, "Abonos a capital recibidos" mostraba el monto en pesos pintado de azul. El azul esta reservado a la linea en dolares, asi que en un prestamo en pesos no significaba nada. Ahora el peso va en el color normal. Se corrigio tambien en el resumen de los prestamos cerrados.',
+    'La "Proyeccion de ganancias" y el bloque "Recaudado a la fecha" ya muestran siempre la misma cifra de intereses cobrados. Si habia un pago parcial en curso, la proyeccion no lo contaba y los dos bloques del mismo prestamo se contradecian.',
+    'Nuevo boton "Enviar propuesta al cliente" dentro de Registrar cobro. Genera un PDF que muestra como quedaria el prestamo si el cliente abona X, con el cronograma resultante, SIN registrar nada. Para cuando te preguntan "si te abono 400, como quedamos?".',
+    'El recibo de cobro ya no llama "vencida" a una cuota que todavia no vence cuando cobras el interes del mes por adelantado, ni la suma a los intereses vencidos.',
+    'El recibo de cobro trae ahora "Lo que queda por pagar": la lista de cuotas pendientes con su valor, lo ya abonado en cada una y lo que falta.',
+    'En ese mismo recibo, la tarjeta "Valor de la cuota" aclara cuanto llevas abonado de la proxima, para que no parezca que contradice el total pendiente.',
+    'El recibo de cobro ahora encabeza con "Total por pagar", la misma cifra con la que abre la propuesta que le mandas al cliente antes de cobrar. Los dos papeles del mismo cobro lideraban con numeros distintos en el mismo lugar (uno el total, otro el saldo de capital) y parecian contradecirse aunque los dos estuvieran bien.',
+    'Esa tarjeta no aparece en los prestamos de solo intereses: ahi las cuotas son de puro interes y el capital vence al final, asi que sumarlas habria anunciado menos deuda de la que hay.'
   ]
 };
